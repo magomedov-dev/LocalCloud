@@ -1,0 +1,23 @@
+# Python кэширует / создает артефакты
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Локальный virtualenvs (образ создает свой собственный .venv с помощью uv-синхронизации)
+.venv/
+venv/
+
+# Локальный env / secrets — предоставляется вместо этого с помощью compose env_file/environment
+.env
+.env.*
+!.env.example
+
+# Инструменты / документы, которые не нужны на изображении
+graphify-out/
+infra.txt
+*.md
+.git/
+.gitignore
