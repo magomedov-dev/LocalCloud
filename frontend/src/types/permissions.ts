@@ -1,0 +1,122 @@
+import type { NodeType, NodeVisibility } from "./nodes";
+
+/**
+ * Уровень доступа к node.
+ */
+export type PermissionLevel = "read" | "download" | "write" | "delete" | "owner";
+
+/**
+ * Тип субъекта, которому выдано разрешение.
+ */
+export type PermissionSubjectType = "user" | "role" | "public_link";
+
+/**
+ * Данные для выдачи доступа к node.
+ */
+export interface PermissionGrantRequest {
+  node_id: string;
+  user_id: string;
+  can_read?: boolean;
+  can_download?: boolean;
+  can_write?: boolean;
+  can_delete?: boolean;
+  can_share?: boolean;
+  permission_level?: PermissionLevel;
+  expires_at?: string | null;
+}
+
+/**
+ * Полное представление разрешения на node.
+ */
+export interface NodePermissionRead {
+  id: string;
+  node_id: string;
+  user_id: string;
+  subject_type: PermissionSubjectType;
+  permission_level: PermissionLevel;
+  granted_by: string | null;
+  can_read: boolean;
+  can_download: boolean;
+  can_write: boolean;
+  can_delete: boolean;
+  can_share: boolean;
+  expires_at: string | null;
+  revoked_at: string | null;
+  revoke_reason: string | null;
+  created_at: string;
+}
+
+/**
+ * Краткое представление разрешения на node для списков.
+ */
+export interface NodePermissionListItem {
+  id: string;
+  node_id: string;
+  user_id: string;
+  subject_type: PermissionSubjectType;
+  permission_level: PermissionLevel;
+  can_read: boolean;
+  can_download: boolean;
+  can_write: boolean;
+  can_delete: boolean;
+  can_share: boolean;
+  expires_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+}
+
+/**
+ * Данные для отзыва доступа к node.
+ */
+export interface PermissionRevokeRequest {
+  permission_id?: string;
+  node_id?: string;
+  user_id?: string;
+  revoke_reason?: string | null;
+}
+
+/**
+ * Данные для обновления выданного доступа (смена уровня/флагов).
+ */
+export interface PermissionUpdateRequest {
+  node_id?: string;
+  user_id?: string;
+  permission_level?: PermissionLevel;
+  can_read?: boolean;
+  can_download?: boolean;
+  can_write?: boolean;
+  can_delete?: boolean;
+  can_share?: boolean;
+  expires_at?: string | null;
+}
+
+/**
+ * Узел, к которому текущему пользователю выдан доступ («Доступно мне»).
+ *
+ * Совмещает метаданные узла с параметрами выданного права, чтобы отрисовать
+ * карточку с бейджем уровня доступа без дополнительных запросов.
+ */
+export interface SharedNodeItem {
+  id: string;
+  owner_id: string;
+  parent_id: string | null;
+  name: string;
+  node_type: NodeType;
+  visibility: NodeVisibility;
+  path: string;
+  created_at: string;
+  updated_at: string;
+  file_size_bytes?: number | null;
+  file_mime_type?: string | null;
+  permission_id: string;
+  permission_level: PermissionLevel;
+  can_read: boolean;
+  can_download: boolean;
+  can_write: boolean;
+  can_delete: boolean;
+  can_share: boolean;
+  expires_at: string | null;
+  granted_at: string;
+  granted_by: string | null;
+  granted_by_username: string | null;
+}
