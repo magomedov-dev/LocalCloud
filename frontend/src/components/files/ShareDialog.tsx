@@ -1,0 +1,317 @@
+import { useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Copy, Check, Link2, X, Loader2, Globe, Lock, Share2, Users } from "lucide-react";
+import { toast } from "sonner";
+import { publicLinksApi } from "@/api/public-links";
+import { UserShareTab } from "./UserShareTab";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ACTIVE_LINKS_QUERY_KEY } from "@/hooks/useShareBadges";
+import { cn } from "@/lib/utils";
+import type { PublicLinkUpdateRequest } from "@/types/public-links";
+
+/**
+ * Формирует публичный URL для шаринга по токену.
+ */
+function shareUrl(token: string) {
+  return `${window.location.origin}/share/${token}`;
+}
+
+/**
+ * Вкладка управления публичной ссылкой.
+ *
+ * Загружает активные ссылки для элемента, позволяет создать новую ссылку,
+ * скопировать URL в буфер обмена или отозвать существующую ссылку.
+ */
+function PublicLinkTab({ nodeId }: { nodeId: string }) {
+  const qc = useQueryClient();
+  const [copied, setCopied] = useState(false);
+  const [password, setPassword] = useState("");
+  const [editPassword, setEditPassword] = useState("");
+
+  const QUERY_KEY = ["public-links", "node", nodeId];
+
+  const { data, isLoading } = useQuery({
+    queryKey: QUERY_KEY,
+    queryFn: () => publicLinksApi.listForNode(nodeId),
+  });
+
+  const activeLink = (data?.items ?? []).find((l) => l.is_active) ?? null;
+
+  const create = useMutation({
+    mutationFn: () =>
+      publicLinksApi.create({
+        node_id: nodeId,
+        permission_type: "download",
+        password: password.trim() ? password.trim() : null,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: QUERY_KEY });
+      qc.invalidateQueries({ queryKey: ACTIVE_LINKS_QUERY_KEY });
+      setPassword("");
+      toast.success("Ссылка создана");
+    },
+    onError: () => toast.error("Не удалось создать ссылку"),
+  });
+
+  const revoke = useMutation({
+    mutationFn: (id: string) => publicLinksApi.revoke(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: QUERY_KEY });
+      qc.invalidateQueries({ queryKey: ACTIVE_LINKS_QUERY_KEY });
+      toast.success("Ссылка отозвана");
+    },
+    onError: () => toast.error("Не удалось отозвать ссылку"),
+  });
+
+  const update = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: PublicLinkUpdateRequest }) =>
+      publicLinksApi.update(id, data),
+    onSuccess: (_link, { data }) => {
+      qc.invalidateQueries({ queryKey: QUERY_KEY });
+      qc.invalidateQueries({ queryKey: ACTIVE_LINKS_QUERY_KEY });
+      setEditPassword("");
+      toast.success(data.clear_password ? "Пароль удалён" : "Пароль обновлён");
+    },
+    onError: () => toast.error("Не удалось обновить пароль ссылки"),
+  });
+
+  /**
+   * Копирует публичную ссылку в буфер обмена
+   * и временно показывает состояние успешного копирования.
+   */
+  function handleCopy(token: string) {
+    navigator.clipboard.writeText(shareUrl(token)).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex flex-col gap-3">
+        <Skeleton className="h-20 rounded-xl" />
+        <Skeleton className="h-9 rounded-lg" />
+      </div>
+    );
+  }
+
+  if (activeLink) {
+    const url = shareUrl(activeLink.token);
+    return (
+      <div className="flex flex-col gap-4">
+        {/* Карточка активной ссылки */}
+        <div className="bg-muted/30 flex flex-col gap-3 rounded-xl border p-4">
+          <div className="flex items-center gap-2">
+            <span className="h-2 w-2 rounded-full bg-green-500 shadow-sm shadow-green-500/50" />
+            <span className="text-sm font-medium">Ссылка активна</span>
+            {activeLink.has_password && (
+              <span
+                className="text-muted-foreground ml-auto flex items-center gap-1 text-xs"
+                title="Доступ защищён паролем"
+              >
+                <Lock className="h-3 w-3" />
+                Под паролем
+              </span>
+            )}
+          </div>
+
+          <div className="flex gap-2">
+            <Input
+              readOnly
+              value={url}
+              className="h-8 flex-1 font-mono text-xs"
+              onFocus={(e) => e.target.select()}
+            />
+            <Button
+              variant="outline"
+              size="icon"
+              className={cn(
+                "h-8 w-8 shrink-0 transition-colors",
+                copied && "border-green-500 text-green-600",
+              )}
+              onClick={() => handleCopy(activeLink.token)}
+              title="Скопировать ссылку"
+            >
+              {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+            </Button>
+          </div>
+
+          {/* Управление паролем */}
+          <div className="flex flex-col gap-2 border-t pt-3">
+            <div className="flex gap-2">
+              <Input
+                type="password"
+                autoComplete="new-password"
+                maxLength={128}
+                placeholder={activeLink.has_password ? "Новый пароль" : "Задать пароль"}
+                value={editPassword}
+                onChange={(e) => setEditPassword(e.target.value)}
+                className="h-8 flex-1 text-xs"
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 shrink-0"
+                disabled={!editPassword.trim() || update.isPending}
+                onClick={() =>
+                  update.mutate({
+                    id: activeLink.id,
+                    data: { password: editPassword.trim() },
+                  })
+                }
+              >
+                {update.isPending && !update.variables?.data.clear_password ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  "Сохранить"
+                )}
+              </Button>
+            </div>
+            {activeLink.has_password && (
+              <button
+                type="button"
+                disabled={update.isPending}
+                onClick={() =>
+                  update.mutate({ id: activeLink.id, data: { clear_password: true } })
+                }
+                className="text-muted-foreground hover:text-destructive self-start text-xs transition-colors disabled:opacity-50"
+              >
+                Убрать пароль
+              </button>
+            )}
+          </div>
+        </div>
+
+        <button
+          type="button"
+          disabled={revoke.isPending}
+          onClick={() => revoke.mutate(activeLink.id)}
+          className="text-muted-foreground hover:text-destructive flex items-center gap-1.5 self-start text-xs transition-colors disabled:opacity-50"
+        >
+          {revoke.isPending ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <X className="h-3 w-3" />
+          )}
+          Отозвать ссылку
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed py-6 text-center">
+        <Globe className="text-muted-foreground/50 h-8 w-8" />
+        <p className="text-muted-foreground text-sm">
+          Поделитесь файлом с любым человеком по ссылке
+        </p>
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="share-password" className="text-muted-foreground text-xs">
+          Пароль (необязательно)
+        </Label>
+        <Input
+          id="share-password"
+          type="password"
+          autoComplete="new-password"
+          placeholder="Без пароля"
+          maxLength={128}
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          className="h-9"
+        />
+      </div>
+
+      <Button disabled={create.isPending} onClick={() => create.mutate()}>
+        {create.isPending ? (
+          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+        ) : (
+          <Link2 className="mr-2 h-4 w-4" />
+        )}
+        Создать ссылку
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * Свойства диалога публичной ссылки.
+ *
+ * `open` определяет, открыт ли диалог.
+ * `onOpenChange` вызывается при изменении состояния открытия.
+ * `nodeId` — идентификатор файла или папки.
+ * `nodeName` — отображаемое имя элемента.
+ */
+interface Props {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  nodeId: string;
+  nodeName: string;
+}
+
+/**
+ * Диалог шеринга: публичная ссылка либо доступ конкретным пользователям.
+ *
+ * Показывает имя выбранного файла или папки и переключает между вкладкой
+ * публичной ссылки и вкладкой выдачи доступа пользователям.
+ */
+export function ShareDialog({ open, onOpenChange, nodeId, nodeName }: Props) {
+  const [tab, setTab] = useState<"public" | "users">("users");
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader className="min-w-0 pr-6">
+          <DialogTitle className="flex items-center gap-2">
+            <Share2 className="text-muted-foreground h-4 w-4 shrink-0" />
+            Поделиться
+          </DialogTitle>
+          <p className="text-muted-foreground truncate text-sm" title={nodeName}>
+            {nodeName}
+          </p>
+        </DialogHeader>
+
+        {/* Переключатель вкладок */}
+        <div className="bg-muted/50 grid grid-cols-2 gap-1 rounded-lg p-1">
+          <button
+            type="button"
+            onClick={() => setTab("users")}
+            className={cn(
+              "flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors",
+              tab === "users"
+                ? "bg-background shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <Users className="h-3.5 w-3.5" />
+            Пользователи
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab("public")}
+            className={cn(
+              "flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors",
+              tab === "public"
+                ? "bg-background shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <Link2 className="h-3.5 w-3.5" />
+            Публичная ссылка
+          </button>
+        </div>
+
+        {tab === "users" ? (
+          <UserShareTab nodeId={nodeId} />
+        ) : (
+          <PublicLinkTab nodeId={nodeId} />
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
