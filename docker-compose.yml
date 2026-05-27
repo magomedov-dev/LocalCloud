@@ -1,0 +1,221 @@
+# ── LocalCloud — полный стек ─────────────────────────────────────────────────
+# Сервисы: postgres, minio, api (uvicorn), worker, frontend (static), nginx.
+#
+#   cp .env.example .env        # затем отредактируйте секреты
+#   docker compose up -d --build
+#
+# Compose автоматически читает корневой .env:
+# и для подстановки ${VAR}, и как env_file для api/worker.
+# Откройте http://localhost
+# Логин администратора: см. ADMIN_* в .env.
+#
+# Postgres и MinIO НЕ публикуются на host,
+# они доступны только во внутренней сети.
+# Поэтому стек не конфликтует с локальными dev Postgres/MinIO.
+# Консоль MinIO привязана к 127.0.0.1:9090 — доступна только с самого хоста
+# (для отладки через SSH-туннель), но не из внешней сети.
+
+name: localcloud
+
+# ── Ротация логов ────────────────────────────────────────────────────────────
+# Без ограничения драйвер json-file пишет логи контейнеров без предела и на
+# долгоживущем хосте забивает диск (особенно болтливые postgres/minio), что
+# валит весь стек. Кэп: 10 МБ × 5 файлов на сервис = максимум ~50 МБ логов
+# каждый. Якорь подключается к каждому сервису ниже.
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+# ── Бюджет ресурсов ──────────────────────────────────────────────────────────
+# Все лимиты вынесены в .env (см. .env.example, секция «Resource limits»).
+# Значения по умолчанию здесь рассчитаны на маленький хост (1 CPU / 1 ГБ ОЗУ,
+# ~3 пользователя) — это безопасный минимум, при котором стек не уронит машину.
+# На более мощном сервере просто поднимите *_MEM_LIMIT / POSTGRES_* в .env.
+#
+# `mem_limit` — жёсткий потолок памяти контейнера: при превышении ядро убивает
+# именно этот контейнер (а не случайный процесс хоста), и он перезапускается.
+# `memswap_limit == mem_limit` отключает swap (нет своп-тормозов на крошечной
+# машине). `cpu_shares` — относительный вес CPU при конкуренции за ядро (жёсткий
+# CPU-лимит не ставим, чтобы избежать CFS-throttling: worker получает низкий
+# приоритет, чтобы рендеры превью не вытесняли API/Postgres).
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-localcloud}
+      # Без fallback: пустой/незаданный POSTGRES_PASSWORD должен ронять запуск,
+      # а не молча поднимать БД со слабым паролем «localcloud».
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD не задан в .env}
+      POSTGRES_DB: ${POSTGRES_DB:-localcloud}
+    # Тюнинг под малую RAM: ограниченное число подключений (пул приложения мал),
+    # умеренный shared_buffers, минимальный параллелизм.
+    command:
+      [
+        "postgres",
+        "-c",
+        "max_connections=${POSTGRES_MAX_CONNECTIONS:-50}",
+        "-c",
+        "shared_buffers=${POSTGRES_SHARED_BUFFERS:-64MB}",
+        "-c",
+        "effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-160MB}",
+        "-c",
+        "work_mem=${POSTGRES_WORK_MEM:-4MB}",
+        "-c",
+        "maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-32MB}",
+        "-c",
+        "max_worker_processes=${POSTGRES_MAX_WORKER_PROCESSES:-2}",
+        "-c",
+        "max_parallel_workers=${POSTGRES_MAX_PARALLEL_WORKERS:-1}",
+        "-c",
+        "max_parallel_workers_per_gather=${POSTGRES_MAX_PARALLEL_WORKERS_PER_GATHER:-0}",
+      ]
+    mem_limit: ${POSTGRES_MEM_LIMIT:-220m}
+    memswap_limit: ${POSTGRES_MEM_LIMIT:-220m}
+    cpu_shares: ${POSTGRES_CPU_SHARES:-1024}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-localcloud} -d ${POSTGRES_DB:-localcloud}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+    logging: *default-logging
+
+  minio:
+    image: minio/minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-localcloud}
+      # Без fallback: незаданный MINIO_SECRET_KEY ронит запуск, а не поднимает
+      # хранилище со слабым секретом по умолчанию.
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY не задан в .env}
+    mem_limit: ${MINIO_MEM_LIMIT:-256m}
+    memswap_limit: ${MINIO_MEM_LIMIT:-256m}
+    cpu_shares: ${MINIO_CPU_SHARES:-768}
+    volumes:
+      - minio_data:/data
+    ports:
+      # Привязка к loopback: консоль доступна только с хоста (SSH-туннель),
+      # а не из внешней сети. Раньше "9090:9001" слушал на всех интерфейсах.
+      - "127.0.0.1:9090:9001"
+    restart: unless-stopped
+    logging: *default-logging
+
+  api:
+    build: ./backend
+    # Число uvicorn workers берётся из .env (UVICORN_WORKERS). На 1 ядре держите
+    # 1 — каждый worker это отдельный процесс Python (~120–180 МБ) и свой пул БД.
+    command:
+      [
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--workers",
+        "${UVICORN_WORKERS:-1}",
+      ]
+    mem_limit: ${API_MEM_LIMIT:-220m}
+    memswap_limit: ${API_MEM_LIMIT:-220m}
+    cpu_shares: ${API_CPU_SHARES:-1024}
+    env_file: .env
+    environment:
+      RUN_MIGRATIONS: "true" # этот сервис отвечает за миграции и seed администратора
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      MINIO_HOST: minio # внутренний endpoint, который SDK использует для подписи URL
+      MINIO_PORT: "9000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:8000/'', timeout=5)"',
+        ]
+      interval: 10s
+      timeout: 6s
+      retries: 12
+      start_period: 45s
+    restart: unless-stopped
+    logging: *default-logging
+
+  worker:
+    build: ./backend
+    command: ["python", "-m", "workers.app"]
+    # Низкий cpu_shares: рендеры превью (PDF/видео) не должны вытеснять API/БД.
+    # Память ограничена — большой видео-рендер будет убит cgroup'ом (а не хост),
+    # worker перезапустится. Параметры превью/архивов берутся из .env (PREVIEW_*,
+    # ARCHIVE_*); на совсем слабом хосте генерацию можно выключить целиком через
+    # PREVIEW_GENERATION_ENABLED=false.
+    mem_limit: ${WORKER_MEM_LIMIT:-220m}
+    memswap_limit: ${WORKER_MEM_LIMIT:-220m}
+    cpu_shares: ${WORKER_CPU_SHARES:-256}
+    env_file: .env
+    environment:
+      RUN_MIGRATIONS: "false"
+      # Ограничение арен glibc malloc: рендеры превью идут в нескольких потоках
+      # (render-executor + storage-io), а glibc держит отдельную арену на поток и
+      # почти не возвращает память ОС. Замерено: пик anon worker при PDF-батче
+      # падает с 261 до 220 МиБ (−16%) при MALLOC_ARENA_MAX=2. TRIM_THRESHOLD
+      # заставляет чаще возвращать освобождённые блоки.
+      MALLOC_ARENA_MAX: "2"
+      MALLOC_TRIM_THRESHOLD_: "131072"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      MINIO_HOST: minio
+      MINIO_PORT: "9000"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: *default-logging
+
+  frontend:
+    build: ./frontend
+    mem_limit: ${FRONTEND_MEM_LIMIT:-32m}
+    memswap_limit: ${FRONTEND_MEM_LIMIT:-32m}
+    cpu_shares: ${FRONTEND_CPU_SHARES:-256}
+    depends_on:
+      - api
+    # Раздаётся nginx'ом (busybox wget в alpine-образе): если статика не
+    # отдаётся, контейнер помечается unhealthy и перезапускается, а не молча
+    # «здоров, но 5xx».
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    logging: *default-logging
+
+  nginx:
+    build: ./nginx
+    mem_limit: ${NGINX_MEM_LIMIT:-40m}
+    memswap_limit: ${NGINX_MEM_LIMIT:-40m}
+    cpu_shares: ${NGINX_CPU_SHARES:-512}
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+      - frontend
+      - minio
+    restart: unless-stopped
+    logging: *default-logging
+
+volumes:
+  pg_data:
+  minio_data:
