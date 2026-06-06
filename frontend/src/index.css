@@ -1,0 +1,140 @@
+@import "tailwindcss";
+
+@theme {
+  /* ── Palette ─────────────────────────────────────────── */
+  --color-background: #1f1f1e;
+  --color-foreground: #f0f0f0;
+
+  --color-card: #252523;
+  --color-card-foreground: #f0f0f0;
+
+  --color-popover: #252523;
+  --color-popover-foreground: #f0f0f0;
+
+  --color-primary: #d97757;
+  --color-primary-foreground: #ffffff;
+
+  --color-secondary: #2c2c2a;
+  --color-secondary-foreground: #c3c2b7;
+
+  --color-muted: #2c2c2a;
+  --color-muted-foreground: #c3c2b7;
+
+  --color-accent: #2e2e2c;
+  --color-accent-foreground: #f0f0f0;
+
+  --color-destructive: #d95f5f;
+  --color-destructive-foreground: #fff;
+
+  --color-border: #3b3b37;
+  --color-input: #3b3b37;
+  --color-ring: #d97757;
+
+  /* Panel — sidebar, topbar background */
+  --color-panel: #2c2c2a;
+
+  /* ── Radius ──────────────────────────────────────────── */
+  --radius-sm: 0.3125rem; /* 5px  */
+  --radius: 0.4375rem; /* 7px  */
+  --radius-md: 0.5rem; /* 8px  */
+  --radius-lg: 0.75rem; /* 12px */
+  --radius-xl: 1rem; /* 16px */
+  --radius-2xl: 1.25rem; /* 20px */
+  --radius-3xl: 1.5rem; /* 24px */
+  --radius-full: 9999px;
+
+  /* ── Font ────────────────────────────────────────────── */
+  --font-sans:
+    "DM Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
+
+  /* ── Breakpoints ─────────────────────────────────────── */
+  --breakpoint-xs: 30rem; /* 480px — extra-small phones */
+}
+
+/* ── Light theme ─────────────────────────────────────────── */
+html.light {
+  --color-background: #f8f8f6;
+  --color-foreground: #373734;
+
+  --color-card: #ffffff;
+  --color-card-foreground: #373734;
+
+  --color-popover: #ffffff;
+  --color-popover-foreground: #373734;
+
+  --color-secondary: #ecebe8;
+  --color-secondary-foreground: #373734;
+
+  --color-muted: #ecebe8;
+  --color-muted-foreground: #7b7974;
+
+  --color-accent: #ecebe8;
+  --color-accent-foreground: #373734;
+
+  --color-border: #d7d7d4;
+  --color-input: #d7d7d4;
+
+  --color-panel: #ffffff;
+}
+
+/* ── Global border color default ─────────────────────────── */
+*,
+*::before,
+*::after {
+  border-color: var(--color-border);
+}
+
+/* ── Scrollbar ───────────────────────────────────────────── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #3b3b37 transparent;
+}
+*::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: #3b3b37;
+  border-radius: 99px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #4a4a47;
+}
+
+html.light * {
+  scrollbar-color: #d7d7d4 transparent;
+}
+html.light *::-webkit-scrollbar-thumb {
+  background: #d7d7d4;
+}
+html.light *::-webkit-scrollbar-thumb:hover {
+  background: #c5c4c0;
+}
+
+/* ── Base ────────────────────────────────────────────────── */
+html,
+body {
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background-color: rgba(217, 119, 87, 0.28);
+  color: var(--color-foreground);
+}
+
+/* ── Indeterminate top loading bar (TopLoadingBar) ────────── */
+@keyframes lc-indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
