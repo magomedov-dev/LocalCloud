@@ -97,7 +97,7 @@ LocalCloud/
 поднимите стек:
 
 ```bash
-git clone <URL-репозитория> && cd LocalCloud
+git clone https://github.com/magomedov-dev/LocalCloud && cd LocalCloud
 cp .env.example .env        # при необходимости поправьте секреты
 docker compose up -d --build
 ```
