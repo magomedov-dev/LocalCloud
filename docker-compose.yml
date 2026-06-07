@@ -1,0 +1,126 @@
+# ── LocalCloud — полный стек ─────────────────────────────────────────────────
+# Сервисы: postgres, minio, api (uvicorn), worker, frontend (static), nginx.
+#
+#   cp .env.example .env        # затем отредактируйте секреты
+#   docker compose up -d --build
+#
+# Compose автоматически читает корневой .env:
+# и для подстановки ${VAR}, и как env_file для api/worker.
+# Откройте http://localhost
+# Логин администратора: см. ADMIN_* в .env.
+#
+# Postgres и MinIO НЕ публикуются на host,
+# они доступны только во внутренней сети.
+# Поэтому стек не конфликтует с локальными dev Postgres/MinIO.
+# Консоль MinIO доступна на :9090 для отладки.
+
+name: localcloud
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-localcloud}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-localcloud}
+      POSTGRES_DB: ${POSTGRES_DB:-localcloud}
+      # Запас по подключениям:
+      # (api_workers + worker) * (pool_size + max_overflow) + дополнительные соединения.
+    command: ["postgres", "-c", "max_connections=200"]
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-localcloud} -d ${POSTGRES_DB:-localcloud}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-localcloud}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-localcloud}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9090:9001" # web-консоль: host 9090 → container 9001
+    restart: unless-stopped
+
+  api:
+    build: ./backend
+    # Количество uvicorn workers берётся из .env (UVICORN_WORKERS),
+    # значение по умолчанию — 4.
+    command:
+      [
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--workers",
+        "${UVICORN_WORKERS:-4}",
+      ]
+    env_file: .env
+    environment:
+      RUN_MIGRATIONS: "true" # этот сервис отвечает за миграции и seed администратора
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      MINIO_HOST: minio # внутренний endpoint, который SDK использует для подписи URL
+      MINIO_PORT: "9000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:8000/'', timeout=5)"',
+        ]
+      interval: 10s
+      timeout: 6s
+      retries: 12
+      start_period: 45s
+    restart: unless-stopped
+
+  worker:
+    build: ./backend
+    command: ["python", "-m", "workers.app"]
+    env_file: .env
+    environment:
+      RUN_MIGRATIONS: "false"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      MINIO_HOST: minio
+      MINIO_PORT: "9000"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  nginx:
+    build: ./nginx
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+      - frontend
+      - minio
+    restart: unless-stopped
+
+volumes:
+  pg_data:
+  minio_data:
