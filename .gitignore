@@ -1,0 +1,117 @@
+# ── OS  ─────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ── Editor  ─────────────────────────────────────────────────────────────────
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+
+# ── Logs ────────────────────────────────────────────────────────────────────
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ── Environment variables ───────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+!.env.template
+
+# ── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ── Virtual environments ────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+ENV/
+
+# ── Python packaging ────────────────────────────────────────────────────────
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+pip-wheel-metadata/
+
+# ── Python test / coverage ──────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.cache/
+hypothesis/
+.pytest_cache/
+
+# ── Type checking / linters ─────────────────────────────────────────────────
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+.ruff_cache/
+
+# ── Jupyter ─────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+
+# ── Django / Flask ──────────────────────────────────────────────────────────
+*.sqlite3
+db.sqlite3
+instance/
+
+# ── Node / TypeScript / React / Vite ────────────────────────────────────────
+node_modules/
+
+# ── Package manager files ───────────────────────────────────────────────────
+.pnpm-store/
+.yarn/
+!.yarn/releases
+!.yarn/plugins
+!.yarn/sdks
+!.yarn/versions
+
+# ── Build outputs ───────────────────────────────────────────────────────────
+dist/
+build/
+out/
+
+# ── Vite ────────────────────────────────────────────────────────────────────
+.vite/
+vite.config.*.timestamp-*
+vite.config.*.mjs.timestamp-*
+
+# ── TypeScript ──────────────────────────────────────────────────────────────
+*.tsbuildinfo
+
+# ── React / frontend tooling ────────────────────────────────────────────────
+.eslintcache
+.stylelintcache
+
+# ── Test coverage ───────────────────────────────────────────────────────────
+coverage/
+
+# ── Framework / tooling caches ──────────────────────────────────────────────
+.next/
+.nuxt/
+.svelte-kit/
+.turbo/
+.parcel-cache/
+.cache/
+.tmp/
+temp/
+
+# ── Misc ────────────────────────────────────────────────────────────────────
+*.local
