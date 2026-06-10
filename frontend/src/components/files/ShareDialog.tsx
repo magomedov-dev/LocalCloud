@@ -1,14 +1,16 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Copy, Check, Link2, X, Loader2, Globe } from "lucide-react";
+import { Copy, Check, Link2, X, Loader2, Globe, Lock } from "lucide-react";
 import { toast } from "sonner";
 import { publicLinksApi } from "@/api/public-links";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ACTIVE_LINKS_QUERY_KEY } from "@/hooks/useShareBadges";
 import { cn } from "@/lib/utils";
+import type { PublicLinkUpdateRequest } from "@/types/public-links";
 
 /**
  * Формирует публичный URL для шаринга по токену.
@@ -26,6 +28,8 @@ function shareUrl(token: string) {
 function PublicLinkTab({ nodeId }: { nodeId: string }) {
   const qc = useQueryClient();
   const [copied, setCopied] = useState(false);
+  const [password, setPassword] = useState("");
+  const [editPassword, setEditPassword] = useState("");
 
   const QUERY_KEY = ["public-links", "node", nodeId];
 
@@ -37,10 +41,16 @@ function PublicLinkTab({ nodeId }: { nodeId: string }) {
   const activeLink = (data?.items ?? []).find((l) => l.is_active) ?? null;
 
   const create = useMutation({
-    mutationFn: () => publicLinksApi.create({ node_id: nodeId, permission_type: "download" }),
+    mutationFn: () =>
+      publicLinksApi.create({
+        node_id: nodeId,
+        permission_type: "download",
+        password: password.trim() ? password.trim() : null,
+      }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: QUERY_KEY });
       qc.invalidateQueries({ queryKey: ACTIVE_LINKS_QUERY_KEY });
+      setPassword("");
       toast.success("Ссылка создана");
     },
     onError: () => toast.error("Не удалось создать ссылку"),
@@ -54,6 +64,18 @@ function PublicLinkTab({ nodeId }: { nodeId: string }) {
       toast.success("Ссылка отозвана");
     },
     onError: () => toast.error("Не удалось отозвать ссылку"),
+  });
+
+  const update = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: PublicLinkUpdateRequest }) =>
+      publicLinksApi.update(id, data),
+    onSuccess: (_link, { data }) => {
+      qc.invalidateQueries({ queryKey: QUERY_KEY });
+      qc.invalidateQueries({ queryKey: ACTIVE_LINKS_QUERY_KEY });
+      setEditPassword("");
+      toast.success(data.clear_password ? "Пароль удалён" : "Пароль обновлён");
+    },
+    onError: () => toast.error("Не удалось обновить пароль ссылки"),
   });
 
   /**
@@ -84,6 +106,15 @@ function PublicLinkTab({ nodeId }: { nodeId: string }) {
           <div className="flex items-center gap-2">
             <span className="h-2 w-2 rounded-full bg-green-500 shadow-sm shadow-green-500/50" />
             <span className="text-sm font-medium">Ссылка активна</span>
+            {activeLink.has_password && (
+              <span
+                className="text-muted-foreground ml-auto flex items-center gap-1 text-xs"
+                title="Доступ защищён паролем"
+              >
+                <Lock className="h-3 w-3" />
+                Под паролем
+              </span>
+            )}
           </div>
 
           <div className="flex gap-2">
@@ -105,6 +136,51 @@ function PublicLinkTab({ nodeId }: { nodeId: string }) {
             >
               {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
             </Button>
+          </div>
+
+          {/* Управление паролем */}
+          <div className="flex flex-col gap-2 border-t pt-3">
+            <div className="flex gap-2">
+              <Input
+                type="password"
+                autoComplete="new-password"
+                maxLength={128}
+                placeholder={activeLink.has_password ? "Новый пароль" : "Задать пароль"}
+                value={editPassword}
+                onChange={(e) => setEditPassword(e.target.value)}
+                className="h-8 flex-1 text-xs"
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 shrink-0"
+                disabled={!editPassword.trim() || update.isPending}
+                onClick={() =>
+                  update.mutate({
+                    id: activeLink.id,
+                    data: { password: editPassword.trim() },
+                  })
+                }
+              >
+                {update.isPending && !update.variables?.data.clear_password ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  "Сохранить"
+                )}
+              </Button>
+            </div>
+            {activeLink.has_password && (
+              <button
+                type="button"
+                disabled={update.isPending}
+                onClick={() =>
+                  update.mutate({ id: activeLink.id, data: { clear_password: true } })
+                }
+                className="text-muted-foreground hover:text-destructive self-start text-xs transition-colors disabled:opacity-50"
+              >
+                Убрать пароль
+              </button>
+            )}
           </div>
         </div>
 
@@ -132,6 +208,22 @@ function PublicLinkTab({ nodeId }: { nodeId: string }) {
         <p className="text-muted-foreground text-sm">
           Поделитесь файлом с любым человеком по ссылке
         </p>
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="share-password" className="text-muted-foreground text-xs">
+          Пароль (необязательно)
+        </Label>
+        <Input
+          id="share-password"
+          type="password"
+          autoComplete="new-password"
+          placeholder="Без пароля"
+          maxLength={128}
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          className="h-9"
+        />
       </div>
 
       <Button disabled={create.isPending} onClick={() => create.mutate()}>

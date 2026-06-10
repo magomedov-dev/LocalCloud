@@ -2,10 +2,12 @@ import api from "@/lib/api";
 import type { PageResponse } from "@/types/common";
 import type {
   PublicLinkCreateRequest,
+  PublicLinkUpdateRequest,
   PublicLinkRead,
   PublicLinkListItem,
   PublicLinkRevokeRequest,
   PublicLinkPublicRead,
+  PublicLinkAccessResponse,
   PublicLinkDownloadResponse,
   PublicLinkFolderArchiveResponse,
 } from "@/types/public-links";
@@ -66,6 +68,20 @@ export const publicLinksApi = {
   get: (id: string) => api.get<PublicLinkRead>(`/public-links/${id}`).then((r) => r.data),
 
   /**
+   * Обновляет параметры публичной ссылки (в т.ч. пароль).
+   *
+   * Args:
+   *   id: Идентификатор публичной ссылки.
+   *   data: Изменяемые поля. Нужно передать хотя бы одно; нельзя одновременно
+   *     задавать `password` и `clear_password`.
+   *
+   * Returns:
+   *   Promise с обновлённой публичной ссылкой.
+   */
+  update: (id: string, data: PublicLinkUpdateRequest) =>
+    api.patch<PublicLinkRead>(`/public-links/${id}`, data).then((r) => r.data),
+
+  /**
    * Возвращает публичное представление ссылки по token.
    *
    * Args:
@@ -78,17 +94,39 @@ export const publicLinksApi = {
     api.get<PublicLinkPublicRead>(`/public-links/public/${token}`).then((r) => r.data),
 
   /**
+   * Проверяет доступ к публичной ссылке (и пароль, если он задан).
+   *
+   * Args:
+   *   token: Token публичной ссылки.
+   *   password: Пароль ссылки, если она защищена.
+   *
+   * Returns:
+   *   Promise с результатом проверки доступа.
+   */
+  validateAccess: (token: string, password?: string | null) =>
+    api
+      .post<PublicLinkAccessResponse>(`/public-links/public/${token}/access`, {
+        token,
+        password: password ?? null,
+      })
+      .then((r) => r.data),
+
+  /**
    * Возвращает presigned URL для скачивания файла по публичной ссылке.
    *
    * Args:
    *   token: Token публичной ссылки.
+   *   password: Пароль ссылки, если она защищена.
    *
    * Returns:
    *   Promise с presigned URL и metadata для скачивания.
    */
-  download: (token: string) =>
+  download: (token: string, password?: string | null) =>
     api
-      .post<PublicLinkDownloadResponse>(`/public-links/public/${token}/download`)
+      .post<PublicLinkDownloadResponse>(`/public-links/public/${token}/download`, {
+        token,
+        password: password ?? null,
+      })
       .then((r) => r.data),
 
   /**
@@ -109,14 +147,16 @@ export const publicLinksApi = {
    *
    * Args:
    *   token: Token публичной ссылки на папку.
+   *   password: Пароль ссылки, если она защищена.
    *
    * Returns:
    *   Promise с состоянием задачи создания архива.
    */
-  startFolderArchive: (token: string) =>
+  startFolderArchive: (token: string, password?: string | null) =>
     api
       .post<PublicLinkFolderArchiveResponse>(`/public-links/public/${token}/folder-download`, {
         token,
+        password: password ?? null,
       })
       .then((r) => r.data),
 

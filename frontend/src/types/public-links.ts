@@ -23,6 +23,23 @@ export interface PublicLinkCreateRequest {
 }
 
 /**
+ * Данные для обновления публичной ссылки.
+ *
+ * Все поля необязательны; нужно передать хотя бы одно. Нельзя одновременно
+ * задавать `password` и `clear_password`.
+ */
+export interface PublicLinkUpdateRequest {
+  permission_type?: PublicLinkPermissionType;
+  status?: PublicLinkStatus;
+  expires_at?: string | null;
+  max_downloads?: number | null;
+  password?: string | null;
+  clear_password?: boolean;
+  description?: string | null;
+  is_active?: boolean;
+}
+
+/**
  * Полное представление публичной ссылки.
  */
 export interface PublicLinkRead {
@@ -87,6 +104,19 @@ export interface PublicLinkPublicRead {
   has_password: boolean;
   description: string | null;
   node: import("./nodes").NodeListItem | null;
+}
+
+/**
+ * Ответ API после проверки доступа к публичной ссылке.
+ *
+ * Используется страницей открытия ссылки: по `requires_password` решается,
+ * показывать ли запрос пароля, а `allowed` подтверждает успешную проверку.
+ */
+export interface PublicLinkAccessResponse {
+  allowed: boolean;
+  link: PublicLinkPublicRead | null;
+  requires_password: boolean;
+  message: string | null;
 }
 
 /**

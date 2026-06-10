@@ -533,9 +533,8 @@ async def test_update_link_clear_password():
 
 
 @pytest.mark.asyncio
-async def test_update_link_no_password_change_keeps_unset():
+async def test_update_link_unset_fields_are_omitted():
     actor_id = uuid.uuid4()
-    from services.public_links import _UNSET
 
     link = make_link_mock()
     links_repo = AsyncMock()
@@ -547,10 +546,14 @@ async def test_update_link_no_password_change_keeps_unset():
     data = PublicLinkUpdateRequest(status=PublicLinkStatus.DISABLED)
     await service.update_link(link.id, data, actor_id=actor_id)
 
-    # пароль не тронут -> сентинел _UNSET пробрасывается насквозь
-    assert links_repo.update_link.await_args.kwargs["password_hash"] is _UNSET
-    # expires_at/max_downloads/description нет в fields_set -> _UNSET
-    assert links_repo.update_link.await_args.kwargs["expires_at"] is _UNSET
+    kwargs = links_repo.update_link.await_args.kwargs
+    # Неустановленные поля НЕ пробрасываются в репозиторий: иначе чужой sentinel
+    # _UNSET сервиса ломал бы частичное обновление. Репозиторий применит свой.
+    assert "password_hash" not in kwargs
+    assert "expires_at" not in kwargs
+    assert "max_downloads" not in kwargs
+    assert "description" not in kwargs
+    assert kwargs["status"] == PublicLinkStatus.DISABLED
 
 
 @pytest.mark.asyncio
