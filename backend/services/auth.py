@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, TypeVar
+from datetime import UTC, datetime
+from typing import Any, TypeVar
 from uuid import UUID
-
-if TYPE_CHECKING:
-    from services.users import UsersService
 
 from fastapi import Response
 
@@ -19,7 +16,6 @@ from database.models.enums import (
     AuditResult,
     UserStatus,
 )
-from database.models.roles import Role
 from database.models.tokens import RefreshToken
 from database.models.users import User
 from schemas.auth import (
@@ -27,25 +23,17 @@ from schemas.auth import (
     LoginRequest,
     LoginResponse,
     LogoutResponse,
-    PasswordResetConfirmRequest,
-    PasswordResetConfirmResponse,
-    PasswordResetRequest,
-    PasswordResetRequestResponse,
     RefreshTokenResponse,
     TokenPair,
 )
-from schemas.roles import RoleListItem
 from schemas.users import CurrentUserRead
 from security.cookies import clear_auth_cookies, set_auth_cookies
 from security.jwt import (
-    JwtExpiredError,
     JwtTokenError,
     create_access_token,
     create_refresh_token,
-    create_token,
     decode_access_token,
     decode_refresh_token,
-    decode_token,
     hash_token,
 )
 from security.password import verify_and_update_password_hash
@@ -177,7 +165,6 @@ class AuthService:
 
         operation = "login"
         user_snapshot: dict[str, Any] = {}
-        roles: list[Role] = []
         token_pair: TokenPair | None = None
         session_id: UUID | None = None
 
@@ -260,11 +247,6 @@ class AuthService:
                     flush=True,
                     refresh=True,
                 )
-                roles = await uow.roles.get_user_roles(
-                    user.id,
-                    only_active_roles=True,
-                    order_by_name=True,
-                )
                 user_snapshot = _user_snapshot(user)
                 await uow.commit()
 
@@ -288,7 +270,7 @@ class AuthService:
                 },
             )
             return (
-                LoginResponse(user=_current_user_read(user_snapshot, roles)),
+                LoginResponse(user=_current_user_read(user_snapshot)),
                 issued_tokens,
             )
 
@@ -382,7 +364,6 @@ class AuthService:
         operation = "refresh_session"
         token_pair: TokenPair | None = None
         user_snapshot: dict[str, Any] = {}
-        roles: list[Role] = []
         new_session_id: UUID | None = None
         old_session_id: UUID | None = None
 
@@ -476,11 +457,6 @@ class AuthService:
                     check_duplicate=True,
                 )
                 new_session_id = new_token.id
-                roles = await uow.roles.get_user_roles(
-                    user.id,
-                    only_active_roles=True,
-                    order_by_name=True,
-                )
                 user_snapshot = _user_snapshot(user)
                 await uow.commit()
 
@@ -504,7 +480,7 @@ class AuthService:
                 },
             )
             return (
-                RefreshTokenResponse(user=_current_user_read(user_snapshot, roles)),
+                RefreshTokenResponse(user=_current_user_read(user_snapshot)),
                 issued_tokens,
             )
 
@@ -702,12 +678,7 @@ class AuthService:
                         reason=user.status.value,
                         details={"service": SERVICE_NAME, "operation": operation},
                     )
-                roles = await uow.roles.get_user_roles(
-                    user.id,
-                    only_active_roles=True,
-                    order_by_name=True,
-                )
-                current_user = _current_user_read(_user_snapshot(user), roles)
+                current_user = _current_user_read(_user_snapshot(user))
 
         except JwtTokenError as exc:
             raise AuthenticationServiceError(
@@ -866,136 +837,6 @@ class AuthService:
                 operation=operation,
                 message="Непредвиденная ошибка при отзыве сессии.",
             ) from exc
-
-    async def request_password_reset(
-        self,
-        data: PasswordResetRequest,
-    ) -> PasswordResetRequestResponse:
-        """Инициирует сброс пароля пользователя.
-
-        Ищет пользователя по email. Если пользователь найден и активен,
-        создаёт JWT-токен сброса пароля. Ответ не раскрывает, зарегистрирован
-        ли указанный email.
-
-        Args:
-            data: Запрос на сброс пароля с email пользователя.
-
-        Returns:
-            Токен сброса пароля и срок его действия.
-
-        Raises:
-            ServiceError: Если произошла ошибка базы данных или непредвиденная
-                ошибка сервиса.
-        """
-
-        operation = "request_password_reset"
-        _RESET_TTL = timedelta(minutes=30)
-        _PLACEHOLDER_EXPIRES = datetime.now(UTC) + _RESET_TTL
-
-        found_user_id: UUID | None = None
-        is_active: bool = False
-
-        try:
-            async with self.uow_factory() as uow:
-                user = await uow.users.get_by_email(data.email, include_deleted=False)
-                if user is not None:
-                    found_user_id = user.id
-                    is_active = user.status == UserStatus.ACTIVE
-        except DatabaseError as exc:
-            raise self._database_error(
-                exc,
-                operation=operation,
-                message="Ошибка базы данных при запросе сброса пароля.",
-            ) from exc
-        except Exception as exc:
-            raise self._unexpected_error(
-                exc,
-                operation=operation,
-                message="Непредвиденная ошибка при запросе сброса пароля.",
-            ) from exc
-
-        if found_user_id is None or not is_active:
-            # Не раскрывайте, зарегистрирован ли email.
-            return PasswordResetRequestResponse(
-                reset_token="",
-                expires_at=_PLACEHOLDER_EXPIRES,
-                message="Если указанный email зарегистрирован, вы получите инструкции для сброса пароля.",
-            )
-
-        reset_token = create_token(
-            found_user_id,
-            token_type="password_reset",
-            expires_delta=_RESET_TTL,
-            settings=self.settings,
-        )
-        payload = decode_token(reset_token, settings=self.settings)
-
-        await self._safe_log_auth_event(
-            actor_id=found_user_id,
-            action=AuditAction.USER_UPDATED,
-            result=AuditResult.SUCCESS,
-            entity_id=found_user_id,
-            message="Был запрошен сброс пароля.",
-            metadata={"operation": operation},
-        )
-
-        return PasswordResetRequestResponse(
-            reset_token=reset_token,
-            expires_at=payload.expires_at,
-            message="Если указанный email зарегистрирован, вы получите инструкции для сброса пароля.",
-        )
-
-    async def confirm_password_reset(
-        self,
-        data: PasswordResetConfirmRequest,
-        *,
-        users_service: UsersService,
-    ) -> PasswordResetConfirmResponse:
-        """Подтверждает сброс пароля и устанавливает новый пароль.
-
-        Валидирует JWT-токен сброса пароля, извлекает идентификатор
-        пользователя и делегирует изменение пароля в UsersService.
-
-        Args:
-            data: Запрос подтверждения с токеном и новым паролем.
-            users_service: Сервис пользователей для изменения пароля.
-
-        Returns:
-            Сообщение об успешном изменении пароля.
-
-        Raises:
-            AuthenticationServiceError: Если токен недействителен или истёк.
-            ServiceError: Если изменение пароля не удалось выполнить.
-        """
-
-        operation = "confirm_password_reset"
-
-        try:
-            payload = decode_token(
-                data.token,
-                expected_type="password_reset",
-                settings=self.settings,
-            )
-        except JwtExpiredError as exc:
-            raise AuthenticationServiceError(
-                "Токен сброса пароля истёк.",
-                reason="token_expired",
-                details={"service": SERVICE_NAME, "operation": operation},
-            ) from exc
-        except JwtTokenError as exc:
-            raise AuthenticationServiceError(
-                "Недействительный токен сброса пароля.",
-                reason="invalid_token",
-                details={"service": SERVICE_NAME, "operation": operation},
-            ) from exc
-
-        await users_service.change_password(
-            payload.user_id,
-            data.new_password,
-            actor_id=payload.user_id,
-        )
-
-        return PasswordResetConfirmResponse(message="Пароль успешно изменён.")
 
     def _create_token_pair(self, user_id: UUID) -> TokenPair:
         """Создаёт access и refresh token для пользователя.
@@ -1352,61 +1193,22 @@ def _user_snapshot(user: User) -> dict[str, Any]:
         "email": user.email,
         "username": user.username,
         "status": user.status,
-        "is_email_verified": user.is_email_verified,
+        "role": user.role,
         "last_login_at": user.last_login_at,
     }
 
 
-def _role_snapshot(role: Role) -> dict[str, Any]:
-    """Создаёт словарный снимок роли для DTO.
-
-    Args:
-        role: ORM-модель роли.
-
-    Returns:
-        Словарь с основными полями роли.
-    """
-
-    return {
-        "id": role.id,
-        "name": role.name,
-        "code": role.code,
-        "display_name": role.display_name,
-        "is_system": role.is_system,
-        "is_active": role.is_active,
-    }
-
-
-def _role_list_item(role: Role) -> RoleListItem:
-    """Создаёт DTO элемента списка ролей.
-
-    Args:
-        role: ORM-модель роли.
-
-    Returns:
-        DTO `RoleListItem`.
-    """
-
-    return RoleListItem.model_validate(_role_snapshot(role))
-
-
-def _current_user_read(
-    snapshot: Mapping[str, Any],
-    roles: list[Role],
-) -> CurrentUserRead:
+def _current_user_read(snapshot: Mapping[str, Any]) -> CurrentUserRead:
     """Создаёт DTO текущего пользователя.
 
     Args:
-        snapshot: Словарный снимок пользователя.
-        roles: Активные роли пользователя.
+        snapshot: Словарный снимок пользователя, содержащий системную роль.
 
     Returns:
-        DTO `CurrentUserRead` с вложенным списком ролей.
+        DTO `CurrentUserRead` с системной ролью.
     """
 
-    payload = dict(snapshot)
-    payload["roles"] = [_role_list_item(role) for role in roles]
-    return CurrentUserRead.model_validate(payload)
+    return CurrentUserRead.model_validate(dict(snapshot))
 
 
 def _auth_session_read(token: RefreshToken) -> AuthSessionRead:

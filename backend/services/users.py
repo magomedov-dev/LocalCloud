@@ -8,16 +8,15 @@ from uuid import UUID
 from core.logging import get_logger
 from database import DatabaseError, UnitOfWorkFactory, create_unit_of_work_factory
 from database.models.enums import AuditAction, AuditResourceType, UserStatus
-from database.models.roles import Role
 from database.models.users import User
 from schemas.common import PageMeta, PageResponse
-from schemas.roles import RoleListItem
 from schemas.users import (
     CurrentUserRead,
     UserAdminUpdate,
     UserBlockRequest,
     UserCreate,
     UserListItem,
+    UserLookupItem,
     UserQueryParams,
     UserRead,
     UserRejectRequest,
@@ -40,6 +39,9 @@ logger = get_logger("services.users")
 SERVICE_NAME = "users"
 MAX_PAGE_LIMIT = 1000
 REPOSITORY_PAGE_LIMIT = 1000
+# Параметры автопоиска пользователей при шеринге (доступен всем авторизованным).
+LOOKUP_MIN_QUERY_LENGTH = 2
+LOOKUP_MAX_LIMIT = 10
 USER_SORT_FIELDS = {
     "created_at",
     "updated_at",
@@ -124,24 +126,10 @@ class UsersService:
                     username=data.username,
                     password_hash=password_hash,
                     status=data.status,
-                    is_email_verified=data.is_email_verified,
                     flush=True,
                     refresh=True,
                     check_duplicates=True,
                 )
-
-                if assign_default_role:
-                    role = await uow.roles.get_required_user_role_model()
-                    await uow.roles.assign_role(
-                        user_id=user.id,
-                        role_id=role.id,
-                        assigned_by=actor_id,
-                        flush=True,
-                        refresh=False,
-                        check_user_exists=False,
-                        check_role_exists=False,
-                        ignore_existing=True,
-                    )
 
                 snapshot = _user_snapshot(user)
                 await uow.commit()
@@ -232,15 +220,12 @@ class UsersService:
         try:
             async with self.uow_factory() as uow:
                 user = await uow.users.get_required_user_by_id(user_id)
-                roles = await uow.roles.get_user_roles(
-                    user.id, only_active_roles=False, order_by_name=True
-                )
-                first_admin_id = await uow.roles.get_first_admin_user_id()
+                first_admin_id = await uow.users.get_first_admin_user_id()
                 snapshot = _user_snapshot(user)
                 snapshot["is_primary_admin"] = (
                     first_admin_id is not None and user.id == first_admin_id
                 )
-                result = _user_with_roles_read(snapshot, roles)
+                result = _user_with_roles_read(snapshot)
             return self._require_result(result, operation=operation)
         except DatabaseError as exc:
             raise self._database_error(
@@ -276,10 +261,7 @@ class UsersService:
         try:
             async with self.uow_factory() as uow:
                 user = await uow.users.get_required_user_by_id(user_id)
-                roles = await uow.roles.get_user_roles(
-                    user.id, only_active_roles=True, order_by_name=True
-                )
-                result = _current_user_read(_user_snapshot(user), roles)
+                result = _current_user_read(_user_snapshot(user))
             return self._require_result(result, operation=operation)
         except DatabaseError as exc:
             raise self._database_error(
@@ -442,7 +424,7 @@ class UsersService:
         try:
             async with self.uow_factory() as uow:
                 snapshots = await self._collect_user_snapshots(uow=uow, params=params)
-                first_admin_id = await uow.roles.get_first_admin_user_id()
+                first_admin_id = await uow.users.get_first_admin_user_id()
 
             snapshots = self._sort_snapshots(
                 snapshots, sort_by=params.sort_by, sort_desc=params.sort_desc
@@ -477,6 +459,71 @@ class UsersService:
                 exc,
                 operation=operation,
                 message="Непредвиденная ошибка при получении списка пользователей.",
+            ) from exc
+
+    async def lookup_users(
+        self,
+        query: str,
+        *,
+        exclude_user_id: UUID | None = None,
+        limit: int = 10,
+    ) -> list[UserLookupItem]:
+        """Ищет активных пользователей для автопоиска при выдаче доступа.
+
+        Доступен любому авторизованному пользователю, поэтому отдаёт минимум
+        полей и только активных пользователей. Запрос короче двух непробельных
+        символов возвращает пустой список — чтобы нельзя было выкачать всех
+        пользователей пустым/однобуквенным запросом.
+
+        Args:
+            query: Поисковая строка по email или username.
+            exclude_user_id: Идентификатор пользователя, которого нужно
+                исключить из результатов (обычно — сам инициатор).
+            limit: Максимальное количество результатов (жёстко ограничено 10).
+
+        Returns:
+            Список минимальных представлений найденных пользователей.
+
+        Raises:
+            ServiceError: Если произошла ошибка базы данных или непредвиденная
+                ошибка сервиса.
+        """
+
+        operation = "lookup_users"
+        normalized = (query or "").strip()
+        if len(normalized) < LOOKUP_MIN_QUERY_LENGTH:
+            return []
+        capped_limit = max(1, min(limit, LOOKUP_MAX_LIMIT))
+
+        try:
+            async with self.uow_factory() as uow:
+                users = await uow.users.search_users(
+                    normalized,
+                    limit=capped_limit + (1 if exclude_user_id is not None else 0),
+                    statuses=[UserStatus.ACTIVE],
+                )
+                # Сериализуем внутри сессии: после её закрытия ORM-инстансы
+                # отвязываются и доступ к атрибутам падает DetachedInstanceError.
+                items = [
+                    UserLookupItem.model_validate(user)
+                    for user in users
+                    if exclude_user_id is None or user.id != exclude_user_id
+                ]
+            return items[:capped_limit]
+
+        except DatabaseError as exc:
+            raise self._database_error(
+                exc,
+                operation=operation,
+                message="Не удалось выполнить поиск пользователей.",
+            ) from exc
+        except ServiceError:
+            raise
+        except Exception as exc:
+            raise self._unexpected_error(
+                exc,
+                operation=operation,
+                message="Непредвиденная ошибка при поиске пользователей.",
             ) from exc
 
     async def update_user(
@@ -617,14 +664,6 @@ class UsersService:
                         refresh=True,
                     )
 
-                if "is_email_verified" in values:
-                    user = await uow.users.set_email_verified(
-                        user,
-                        is_verified=bool(values["is_email_verified"]),
-                        flush=True,
-                        refresh=True,
-                    )
-
                 snapshot = _user_snapshot(user)
                 await uow.commit()
 
@@ -686,9 +725,7 @@ class UsersService:
         """
 
         if data.status == UserStatus.ACTIVE:
-            return await self.approve_user(
-                user_id, actor_id=actor_id, is_email_verified=True
-            )
+            return await self.approve_user(user_id, actor_id=actor_id)
         if data.status == UserStatus.BLOCKED:
             if not data.reason:
                 raise ValidationServiceError(
@@ -724,14 +761,12 @@ class UsersService:
         user_id: UUID,
         *,
         actor_id: UUID | None = None,
-        is_email_verified: bool = True,
     ) -> UserRead:
         """Одобряет пользователя и переводит его в активный статус.
 
         Args:
             user_id: Идентификатор пользователя.
             actor_id: Идентификатор пользователя, выполняющего операцию.
-            is_email_verified: Нужно ли установить email как подтвержденный.
 
         Returns:
             Данные одобренного пользователя.
@@ -750,7 +785,6 @@ class UsersService:
             mutator=lambda uow, user: uow.users.mark_active(
                 user, flush=True, refresh=False
             ),
-            after=lambda user: setattr(user, "is_email_verified", is_email_verified),
         )
         return _user_read(snapshot)
 
@@ -869,7 +903,7 @@ class UsersService:
 
         try:
             async with self.uow_factory() as uow:
-                return await uow.roles.get_first_admin_user_id()
+                return await uow.users.get_first_admin_user_id()
         except DatabaseError as exc:
             raise self._database_error(
                 exc,
@@ -932,70 +966,6 @@ class UsersService:
             ),
         )
         return _user_read(snapshot)
-
-    async def set_email_verified(
-        self,
-        user_id: UUID,
-        *,
-        is_verified: bool = True,
-        actor_id: UUID | None = None,
-    ) -> UserRead:
-        """Обновляет признак подтверждения email пользователя.
-
-        Args:
-            user_id: Идентификатор пользователя.
-            is_verified: Новое значение признака подтверждения email.
-            actor_id: Идентификатор пользователя, выполняющего операцию. Если None,
-                в аудит записывается событие от имени самого пользователя.
-
-        Returns:
-            Данные пользователя после обновления признака подтверждения email.
-
-        Raises:
-            ServiceError: Если пользователь не найден, произошла ошибка базы данных
-                или непредвиденная ошибка сервиса.
-        """
-
-        operation = "set_email_verified"
-        snapshot: dict[str, Any] = {}
-        try:
-            async with self.uow_factory() as uow:
-                user = await uow.users.set_email_verified_by_id(
-                    user_id,
-                    is_verified=is_verified,
-                    flush=True,
-                    refresh=True,
-                )
-                snapshot = _user_snapshot(user)
-                await uow.commit()
-
-            await self._safe_log_user_or_system_event(
-                actor_id=actor_id or user_id,
-                action=AuditAction.USER_UPDATED,
-                entity_id=user_id,
-                message="Признак подтверждения email пользователя был обновлен.",
-                metadata={
-                    "operation": operation,
-                    "user": _audit_user(snapshot),
-                    "is_email_verified": is_verified,
-                },
-            )
-            return _user_read(snapshot)
-
-        except DatabaseError as exc:
-            raise self._database_error(
-                exc,
-                operation=operation,
-                message="Не удалось обновить признак подтверждения email.",
-            ) from exc
-        except ServiceError:
-            raise
-        except Exception as exc:
-            raise self._unexpected_error(
-                exc,
-                operation=operation,
-                message="Непредвиденная ошибка при обновлении признака email.",
-            ) from exc
 
     async def change_password(
         self,
@@ -1231,7 +1201,6 @@ class UsersService:
                     limit=REPOSITORY_PAGE_LIMIT,
                     statuses=statuses,
                     include_deleted=False,
-                    only_email_verified=params.is_email_verified,
                 )
             else:
                 users = await uow.users.list_users(
@@ -1239,7 +1208,6 @@ class UsersService:
                     limit=REPOSITORY_PAGE_LIMIT,
                     statuses=statuses,
                     include_deleted=False,
-                    only_email_verified=params.is_email_verified,
                     order_by_created_desc=True,
                 )
 
@@ -1537,7 +1505,7 @@ def _user_snapshot(user: User) -> dict[str, Any]:
         "email": user.email,
         "username": user.username,
         "status": user.status,
-        "is_email_verified": user.is_email_verified,
+        "role": user.role,
         "last_login_at": user.last_login_at,
         "approved_at": user.approved_at,
         "blocked_at": user.blocked_at,
@@ -1547,27 +1515,6 @@ def _user_snapshot(user: User) -> dict[str, Any]:
         "rejection_reason": user.rejection_reason,
         "created_at": user.created_at,
         "updated_at": user.updated_at,
-    }
-
-
-def _role_snapshot(role: Role) -> dict[str, Any]:
-    """Создает снимок роли.
-
-    Args:
-        role: ORM-модель роли.
-
-    Returns:
-        Словарь с идентификатором, именем, кодом, отображаемым названием,
-        системным признаком и активностью роли.
-    """
-
-    return {
-        "id": role.id,
-        "name": role.name,
-        "code": role.code,
-        "display_name": role.display_name,
-        "is_system": role.is_system,
-        "is_active": role.is_active,
     }
 
 
@@ -1597,53 +1544,30 @@ def _user_list_item(snapshot: Mapping[str, Any]) -> UserListItem:
     return UserListItem.model_validate(dict(snapshot))
 
 
-def _user_with_roles_read(
-    snapshot: Mapping[str, Any], roles: list[Role]
-) -> UserWithRolesRead:
-    """Преобразует снимок пользователя и роли в расширенную схему.
+def _user_with_roles_read(snapshot: Mapping[str, Any]) -> UserWithRolesRead:
+    """Преобразует снимок пользователя в расширенную схему с ролью.
 
     Args:
-        snapshot: Снимок пользователя.
-        roles: Список ролей пользователя.
+        snapshot: Снимок пользователя, содержащий системную роль.
 
     Returns:
-        Схема пользователя со списком ролей.
+        Схема пользователя с системной ролью.
     """
 
-    payload = dict(snapshot)
-    payload["roles"] = [_role_list_item(role) for role in roles]
-    return UserWithRolesRead.model_validate(payload)
+    return UserWithRolesRead.model_validate(dict(snapshot))
 
 
-def _current_user_read(
-    snapshot: Mapping[str, Any], roles: list[Role]
-) -> CurrentUserRead:
-    """Преобразует снимок пользователя и активные роли в схему текущего пользователя.
+def _current_user_read(snapshot: Mapping[str, Any]) -> CurrentUserRead:
+    """Преобразует снимок пользователя в схему текущего пользователя.
 
     Args:
-        snapshot: Снимок пользователя.
-        roles: Список активных ролей пользователя.
+        snapshot: Снимок пользователя, содержащий системную роль.
 
     Returns:
         Схема текущего пользователя.
     """
 
-    payload = dict(snapshot)
-    payload["roles"] = [_role_list_item(role) for role in roles]
-    return CurrentUserRead.model_validate(payload)
-
-
-def _role_list_item(role: Role) -> RoleListItem:
-    """Преобразует роль в элемент списка ролей.
-
-    Args:
-        role: ORM-модель роли.
-
-    Returns:
-        Элемент списка ролей.
-    """
-
-    return RoleListItem.model_validate(_role_snapshot(role))
+    return CurrentUserRead.model_validate(dict(snapshot))
 
 
 def _audit_user(snapshot: Mapping[str, Any]) -> dict[str, Any]:

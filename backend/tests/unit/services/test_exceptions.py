@@ -5,9 +5,7 @@ import uuid
 from datetime import datetime
 from enum import Enum
 from http import HTTPStatus
-from typing import Any
 
-import pytest
 
 from database.exceptions import (
     ConstraintViolationError,

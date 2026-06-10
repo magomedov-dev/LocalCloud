@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
@@ -110,7 +109,6 @@ class TestRegistrationApproveRequest:
     def test_defaults(self):
         r = RegistrationApproveRequest()
         assert r.comment is None
-        assert r.is_email_verified is True
 
     def test_comment_normalization(self):
         r = RegistrationApproveRequest(comment="  approved  ")
@@ -123,10 +121,6 @@ class TestRegistrationApproveRequest:
     def test_comment_too_long_raises(self):
         with pytest.raises(ValidationError):
             RegistrationApproveRequest(comment="a" * 513)
-
-    def test_can_set_email_not_verified(self):
-        r = RegistrationApproveRequest(is_email_verified=False)
-        assert r.is_email_verified is False
 
 
 class TestRegistrationRejectRequest:

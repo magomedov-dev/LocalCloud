@@ -4,10 +4,6 @@ import type {
   LoginResponse,
   LogoutResponse,
   PasswordChangeRequest,
-  PasswordResetRequest,
-  PasswordResetRequestResponse,
-  PasswordResetConfirmRequest,
-  PasswordResetConfirmResponse,
   CurrentUser,
 } from "@/types";
 
@@ -53,32 +49,4 @@ export const authApi = {
    */
   changePassword: (data: PasswordChangeRequest) =>
     api.post("/auth/password/change", data).then((r) => r.data),
-
-  /**
-   * Запрашивает сброс пароля.
-   *
-   * Args:
-   *   data: Email пользователя, для которого нужно запросить сброс пароля.
-   *
-   * Returns:
-   *   Promise с reset token, временем истечения и сообщением API.
-   */
-  requestPasswordReset: (data: PasswordResetRequest) =>
-    api
-      .post<PasswordResetRequestResponse>("/auth/password/reset/request", data)
-      .then((r) => r.data),
-
-  /**
-   * Подтверждает сброс пароля.
-   *
-   * Args:
-   *   data: Reset token и новый пароль.
-   *
-   * Returns:
-   *   Promise с сообщением API.
-   */
-  confirmPasswordReset: (data: PasswordResetConfirmRequest) =>
-    api
-      .post<PasswordResetConfirmResponse>("/auth/password/reset/confirm", data)
-      .then((r) => r.data),
 };

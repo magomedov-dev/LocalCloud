@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from database.models.enums import UserStatus
+from database.models.enums import SystemRole, UserStatus
 from security.dependencies.auth import SecurityDependencyError
 from security.dependencies.users import (
     get_current_active_user,
@@ -30,22 +30,19 @@ from security.dependencies.users import (
 
 def make_user(
     status: UserStatus = UserStatus.ACTIVE,
-    roles: list | None = None,
+    role: SystemRole = SystemRole.USER,
 ) -> MagicMock:
     """Создать mock ORM-объекта User."""
     user = MagicMock()
     user.id = uuid.uuid4()
     user.status = status
-    user.roles = roles if roles is not None else []
+    user.role = role
     return user
 
 
 def make_admin_user() -> MagicMock:
     """Создать mock пользователя с ролью администратора."""
-    role = MagicMock()
-    role.code = "admin"
-    role.name = "admin"
-    return make_user(roles=[role])
+    return make_user(role=SystemRole.ADMIN)
 
 
 def make_payload(user_id: uuid.UUID | None = None) -> MagicMock:
@@ -286,11 +283,8 @@ class TestGetCurrentAdminUser:
 
     @pytest.mark.asyncio
     async def test_inactive_admin_user_raises_403(self) -> None:
-        # даже если в списке ролей есть admin, при status=BLOCKED должна быть ошибка
-        role = MagicMock()
-        role.code = "admin"
-        role.name = "admin"
-        user = make_user(status=UserStatus.BLOCKED, roles=[role])
+        # даже если у пользователя роль admin, при status=BLOCKED должна быть ошибка
+        user = make_user(status=UserStatus.BLOCKED, role=SystemRole.ADMIN)
 
         with pytest.raises(SecurityDependencyError) as exc_info:
             await get_current_admin_user(user)

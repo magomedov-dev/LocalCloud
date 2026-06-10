@@ -17,13 +17,11 @@ from database.repositories.parts import UploadPartsRepository
 from database.repositories.permissions import NodePermissionsRepository
 from database.repositories.quotas import UserQuotaRepository
 from database.repositories.registration import RegistrationRequestsRepository
-from database.repositories.roles import RolesRepository
 from database.repositories.sessions import UploadSessionsRepository
 from database.repositories.tasks import BackgroundTasksRepository
 from database.repositories.tokens import RefreshTokensRepository
 from database.repositories.trash import TrashItemRepository
 from database.repositories.users import UsersRepository
-from database.repositories.versions import FileVersionRepository
 from database.transactions import (
     ensure_transaction_closed,
     safe_commit,
@@ -98,14 +96,12 @@ class UnitOfWork:
         self._closed = False
 
         self._users: UsersRepository | None = None
-        self._roles: RolesRepository | None = None
         self._registration_requests: RegistrationRequestsRepository | None = None
         self._refresh_tokens: RefreshTokensRepository | None = None
 
         self._nodes: FileSystemNodeRepository | None = None
         self._files: FileRepository | None = None
         self._folders: FolderRepository | None = None
-        self._versions: FileVersionRepository | None = None
         self._trash: TrashItemRepository | None = None
 
         self._permissions: NodePermissionsRepository | None = None
@@ -261,22 +257,6 @@ class UnitOfWork:
         return self._users
 
     @property
-    def roles(self) -> RolesRepository:
-        """Возвращает репозиторий ролей.
-
-        Returns:
-            Экземпляр RolesRepository.
-
-        Raises:
-            UnitOfWorkError: Если UnitOfWork используется вне активного
-                контекста.
-        """
-
-        if self._roles is None:
-            self._roles = RolesRepository(self.session)
-        return self._roles
-
-    @property
     def registration_requests(self) -> RegistrationRequestsRepository:
         """Возвращает репозиторий заявок на регистрацию.
 
@@ -357,22 +337,6 @@ class UnitOfWork:
         if self._folders is None:
             self._folders = FolderRepository(self.session)
         return self._folders
-
-    @property
-    def versions(self) -> FileVersionRepository:
-        """Возвращает репозиторий версий файлов.
-
-        Returns:
-            Экземпляр FileVersionRepository.
-
-        Raises:
-            UnitOfWorkError: Если UnitOfWork используется вне активного
-                контекста.
-        """
-
-        if self._versions is None:
-            self._versions = FileVersionRepository(self.session)
-        return self._versions
 
     @property
     def trash(self) -> TrashItemRepository:
@@ -735,14 +699,12 @@ class UnitOfWork:
         """
 
         self._users = None
-        self._roles = None
         self._registration_requests = None
         self._refresh_tokens = None
 
         self._nodes = None
         self._files = None
         self._folders = None
-        self._versions = None
         self._trash = None
 
         self._permissions = None

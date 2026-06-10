@@ -204,18 +204,12 @@ class RegistrationApproveRequest(BaseSchema):
 
     Attributes:
         comment: Комментарий администратора к одобрению заявки.
-        is_email_verified: Считать ли email пользователя подтверждённым после
-            одобрения.
     """
 
     comment: str | None = Field(
         default=None,
         max_length=512,
         description="Комментарий администратора к одобрению заявки.",
-    )
-    is_email_verified: bool = Field(
-        default=True,
-        description="Считать ли email пользователя подтверждённым после одобрения.",
     )
 
     @field_validator("comment")

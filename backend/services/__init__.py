@@ -3,7 +3,6 @@ from __future__ import annotations
 from services.access import (
     AccessNode,
     AccessPermission,
-    AccessRole,
     AccessService,
     AccessUser,
     get_access_service,
@@ -14,7 +13,6 @@ from services.downloads import DownloadsService, get_downloads_service
 from services.files import (
     FileMetadataCreate,
     FilesService,
-    FileVersionCreate,
     get_files_service,
 )
 from services.folders import FoldersService, get_folders_service
@@ -34,7 +32,6 @@ from services.uploads import UploadsService, get_uploads_service
 from services.users import UsersService, get_users_service
 
 __all__ = [
-    "AccessRole",
     "AccessUser",
     "AccessNode",
     "AccessPermission",
@@ -59,7 +56,6 @@ __all__ = [
     "get_folders_service",
     "FilesService",
     "FileMetadataCreate",
-    "FileVersionCreate",
     "get_files_service",
     "UploadsService",
     "get_uploads_service",

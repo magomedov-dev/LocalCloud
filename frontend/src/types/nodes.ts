@@ -54,3 +54,14 @@ export interface NodeListItem {
 export interface NodeMoveRequest {
   target_parent_id: string | null;
 }
+
+/**
+ * Данные для копирования node.
+ *
+ * `target_parent_id` — целевая родительская папка (`null` — корень).
+ * `new_name` — имя копии; при отсутствии backend сам добавляет суффикс «(копия)».
+ */
+export interface NodeCopyRequest {
+  target_parent_id: string | null;
+  new_name?: string | null;
+}

@@ -130,6 +130,27 @@ export const publicLinksApi = {
       .then((r) => r.data),
 
   /**
+   * Возвращает presigned URL для preview-миниатюры файла по публичной ссылке.
+   *
+   * Отдаёт сгенерированный preview-объект (webp), а не исходный файл. Если
+   * preview ещё не готов или не поддерживается, сервер возвращает 404.
+   *
+   * Args:
+   *   token: Token публичной ссылки.
+   *   password: Пароль ссылки, если она защищена.
+   *
+   * Returns:
+   *   Promise с presigned URL для preview-миниатюры.
+   */
+  thumbnail: (token: string, password?: string | null) =>
+    api
+      .post<PublicLinkDownloadResponse>(`/public-links/public/${token}/thumbnail`, {
+        token,
+        password: password ?? null,
+      })
+      .then((r) => r.data),
+
+  /**
    * Отзывает публичную ссылку.
    *
    * Args:

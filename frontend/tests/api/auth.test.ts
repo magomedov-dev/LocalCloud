@@ -47,22 +47,4 @@ describe("authApi", () => {
     expect(mockApi.post).toHaveBeenCalledWith("/auth/password/change", data);
     expect(result).toEqual(expected);
   });
-
-  it("requestPasswordReset posts to /auth/password/reset/request", async () => {
-    const expected = { reset_token: "t", expires_at: "now" };
-    mockApi.post.mockResolvedValueOnce({ data: expected });
-    const data = { email: "u@e.com" } as never;
-    const result = await authApi.requestPasswordReset(data);
-    expect(mockApi.post).toHaveBeenCalledWith("/auth/password/reset/request", data);
-    expect(result).toEqual(expected);
-  });
-
-  it("confirmPasswordReset posts to /auth/password/reset/confirm", async () => {
-    const expected = { message: "done" };
-    mockApi.post.mockResolvedValueOnce({ data: expected });
-    const data = { reset_token: "t", new_password: "new" } as never;
-    const result = await authApi.confirmPasswordReset(data);
-    expect(mockApi.post).toHaveBeenCalledWith("/auth/password/reset/confirm", data);
-    expect(result).toEqual(expected);
-  });
 });

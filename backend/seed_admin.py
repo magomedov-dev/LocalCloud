@@ -21,11 +21,10 @@ ctx = CryptContext(schemes=["bcrypt"], bcrypt__rounds=12)
 
 
 async def main() -> None:
-    """Создаёт системные роли, администратора и квоту по умолчанию.
+    """Создаёт администратора и квоту по умолчанию.
 
-    Подключается к базе данных, создаёт роли `admin` и `user`, если они ещё
-    отсутствуют, создаёт администратора, назначает ему роль администратора и
-    добавляет запись квоты по умолчанию.
+    Подключается к базе данных, создаёт администратора с системной ролью
+    `admin` и добавляет запись квоты по умолчанию.
 
     Raises:
         asyncpg.PostgresError: Если запрос к PostgreSQL завершился ошибкой.
@@ -34,22 +33,6 @@ async def main() -> None:
 
     conn = await asyncpg.connect(DB_DSN)
     try:
-        # Вставка роли
-        for code, display in [("admin", "Администратор"), ("user", "Пользователь")]:
-            exists = await conn.fetchval("SELECT id FROM roles WHERE code=$1", code)
-            if not exists:
-                await conn.execute(
-                    """INSERT INTO roles (id, name, code, display_name, description, is_system, is_active, created_at)
-                       VALUES ($1, $2, $2, $3, $4, true, true, now())""",
-                    uuid.uuid4(),
-                    code,
-                    display,
-                    f"Системная роль {display}",
-                )
-                print(f"Created role: {code}")
-            else:
-                print(f"Role exists: {code}")
-
         # Проверка, существует ли пользователь с правами администратора
         admin_id = await conn.fetchval(
             "SELECT id FROM users WHERE email=$1", ADMIN_EMAIL
@@ -60,8 +43,8 @@ async def main() -> None:
             now = datetime.now(UTC)
             await conn.execute(
                 """INSERT INTO users (id, email, username, password_hash, status,
-                   is_email_verified, approved_at, created_at, updated_at)
-                   VALUES ($1, $2, $3, $4, 'active', true, $5, $5, $5)""",
+                   role, approved_at, created_at, updated_at)
+                   VALUES ($1, $2, $3, $4, 'active', 'admin', $5, $5, $5)""",
                 admin_id,
                 ADMIN_EMAIL,
                 ADMIN_USERNAME,
@@ -71,22 +54,6 @@ async def main() -> None:
             print(f"Created admin user: {ADMIN_EMAIL} / {ADMIN_PASSWORD}")
         else:
             print(f"Admin user exists: {ADMIN_EMAIL}")
-
-        # Назначение роли администратору
-        role_id = await conn.fetchval("SELECT id FROM roles WHERE code='admin'")
-        assigned = await conn.fetchval(
-            "SELECT 1 FROM user_roles WHERE user_id=$1 AND role_id=$2",
-            admin_id,
-            role_id,
-        )
-        if not assigned:
-            await conn.execute(
-                """INSERT INTO user_roles (user_id, role_id, assigned_at, assigned_by)
-                   VALUES ($1, $2, now(), NULL)""",
-                admin_id,
-                role_id,
-            )
-            print("Assigned admin role")
 
         # Создание квоты по умолчанию для администратора
         quota_exists = await conn.fetchval(

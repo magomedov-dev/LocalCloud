@@ -4,24 +4,32 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any, cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy.exc import InvalidRequestError as _SAInvalidRequestError
 
+from core.config import get_settings
 from core.logging import get_logger
+from core.preview_mime import preview_required
 from database import DatabaseError, UnitOfWorkFactory, create_unit_of_work_factory
 from database.models.enums import (
     AuditAction,
     AuditResourceType,
     AuditResult,
+    BackgroundTaskStatus,
+    BackgroundTaskType,
+    FilePreviewStatus,
+    FileProcessingStatus,
     NodeType,
     NodeVisibility,
+    StorageObjectStatus,
 )
 from database.models.filesystem import FileSystemNode
 from database.repositories.nodes import NodeSortDirection, NodeSortField
 from schemas.common import PageMeta, PageResponse
 from schemas.nodes import (
     NodeBreadcrumbItem,
+    NodeCopyRequest,
     NodeCreate,
     NodeListItem,
     NodeMoveRequest,
@@ -38,11 +46,14 @@ from services.access import AccessService, get_access_service
 from services.audit import AuditService, get_audit_service
 from services.exceptions import (
     PermissionServiceError,
+    QuotaExceededServiceError,
     ServiceError,
     ValidationServiceError,
     service_error_from_database,
     service_error_from_exception,
 )
+from storage import StorageService, get_storage_service
+from storage.keys import build_file_object_key
 
 logger = get_logger("services.nodes")
 
@@ -78,6 +89,7 @@ class NodesService:
         uow_factory: UnitOfWorkFactory | None = None,
         access_service: AccessService | None = None,
         audit_service: AuditService | None = None,
+        storage_service: StorageService | None = None,
     ) -> None:
         """Инициализирует сервис узлов файловой системы.
 
@@ -91,6 +103,8 @@ class NodesService:
                 стандартный сервис доступа.
             audit_service: Сервис аудита. Если None, создается стандартный сервис
                 аудита.
+            storage_service: Сервис объектного хранилища. Если None, создается
+                стандартный сервис хранилища.
         """
 
         self.uow_factory = uow_factory or create_unit_of_work_factory()
@@ -99,6 +113,9 @@ class NodesService:
         )
         self.audit_service = audit_service or get_audit_service(
             uow_factory=self.uow_factory
+        )
+        self.storage_service = storage_service or get_storage_service(
+            settings=get_settings().storage
         )
 
     async def create_node(
@@ -772,6 +789,279 @@ class NodesService:
                 operation=operation,
                 message="Не удалось переместить узел файловой системы.",
             ) from exc
+
+    async def copy_node(
+        self,
+        node_id: UUID,
+        data: NodeCopyRequest,
+        *,
+        actor_id: UUID,
+    ) -> NodeOperationResponse:
+        """Копирует (дублирует) узел файловой системы.
+
+        Создаёт независимую копию файла или папки. Для папки копирование
+        выполняется рекурсивно: создаётся новая иерархия узлов, а для каждого
+        файла содержимое физически копируется в объектном хранилище под новым
+        ключом. Перед копированием проверяется доступ к исходному узлу и целевой
+        папке, а также квоты пользователя по объёму и количеству файлов.
+
+        Args:
+            node_id: Идентификатор копируемого узла.
+            data: Данные копирования с целевой папкой и необязательным новым
+                именем.
+            actor_id: Идентификатор пользователя, выполняющего копирование.
+
+        Returns:
+            Ответ операции с корневым узлом созданной копии.
+
+        Raises:
+            PermissionServiceError: Если у пользователя нет права чтения исходного
+                узла или права записи в целевую папку.
+            QuotaExceededServiceError: Если копирование превышает квоту по объёму
+                хранилища или количеству файлов.
+            ServiceError: Если произошла ошибка базы данных или непредвиденная
+                ошибка сервиса.
+        """
+
+        operation = "copy_node"
+        snapshot: dict[str, Any] | None = None
+
+        try:
+            async with self.uow_factory() as uow:
+                await self.access_service.require_access(
+                    node_id=node_id,
+                    user_id=actor_id,
+                    action=PermissionAction.READ,
+                    uow=uow,
+                )
+                if data.target_parent_id is not None:
+                    await self.access_service.require_access(
+                        node_id=data.target_parent_id,
+                        user_id=actor_id,
+                        action=PermissionAction.WRITE,
+                        uow=uow,
+                    )
+
+                nodes = await uow.nodes.get_descendants(
+                    node_id=node_id,
+                    include_self=True,
+                    include_deleted=False,
+                    order_by_depth=True,
+                )
+                if not nodes:
+                    raise _empty_result_error(operation)
+                root = nodes[0]
+
+                file_rows: dict[UUID, Any] = {}
+                total_bytes = 0
+                file_count = 0
+                for current in nodes:
+                    if current.node_type == NodeType.FILE:
+                        file = await uow.files.get_required_by_node_id(current.id)
+                        file_rows[current.id] = file
+                        total_bytes += file.size_bytes or 0
+                        file_count += 1
+
+                quota = await uow.quotas.get_required_by_user_id(actor_id)
+                files_over_limit = (
+                    quota.files_limit is not None
+                    and quota.files_used + file_count > quota.files_limit
+                )
+                if quota.available_storage_bytes < total_bytes or files_over_limit:
+                    raise QuotaExceededServiceError(
+                        "Копирование превышает доступную квоту пользователя.",
+                        user_id=actor_id,
+                        requested=total_bytes,
+                        used=quota.storage_used_bytes,
+                        limit=quota.storage_limit_bytes,
+                        available=quota.available_storage_bytes,
+                        details={"service": SERVICE_NAME, "operation": operation},
+                    )
+
+                existing_children = await uow.nodes.get_children(
+                    parent_id=data.target_parent_id,
+                    include_deleted=False,
+                    limit=REPOSITORY_PAGE_LIMIT,
+                ) if data.target_parent_id is not None else await uow.nodes.get_root_nodes(
+                    owner_id=actor_id,
+                    include_deleted=False,
+                    limit=REPOSITORY_PAGE_LIMIT,
+                )
+                existing_names = {child.name for child in existing_children}
+                desired_name = data.new_name or root.name
+                new_root_name = _unique_copy_name(
+                    existing_names,
+                    desired_name,
+                    is_file=root.node_type == NodeType.FILE,
+                )
+
+                id_map: dict[UUID, UUID] = {}
+                copied: list[tuple[str, str]] = []
+                try:
+                    for current in nodes:
+                        if current.id == root.id:
+                            new_parent = data.target_parent_id
+                            name = new_root_name
+                        else:
+                            new_parent = id_map[current.parent_id]
+                            name = current.name
+
+                        if current.node_type == NodeType.FOLDER:
+                            # Создаём узел И запись `folders` (иначе загрузка
+                            # содержимого скопированной папки падает с
+                            # EntityNotFoundError). Заодно переносим описание и
+                            # цвет исходной папки.
+                            src_folder = await uow.folders.get_required_by_node_id(
+                                current.id,
+                            )
+                            new_folder = await uow.folders.create_folder(
+                                owner_id=actor_id,
+                                name=name,
+                                parent_id=new_parent,
+                                description=src_folder.description,
+                                color=src_folder.color,
+                                created_by=actor_id,
+                                check_conflict=False,
+                                check_owner_exists=False,
+                                flush=True,
+                                refresh=True,
+                            )
+                            id_map[current.id] = new_folder.node_id
+                            continue
+
+                        src = file_rows[current.id]
+                        new_key = build_file_object_key(
+                            user_id=actor_id,
+                            file_id=uuid4(),
+                            version_id=uuid4(),
+                        )
+                        await self.storage_service.copy_file_object(
+                            source_object_key=src.storage_key,
+                            destination_object_key=new_key,
+                            source_bucket=src.storage_bucket,
+                            destination_bucket=src.storage_bucket,
+                        )
+                        copied.append((src.storage_bucket, new_key))
+                        preview_status = (
+                            FilePreviewStatus.PENDING
+                            if preview_required(src.mime_type)
+                            else FilePreviewStatus.NOT_REQUIRED
+                        )
+                        new_file = await uow.files.create_file_with_node(
+                            owner_id=actor_id,
+                            parent_id=new_parent,
+                            name=name,
+                            storage_bucket=src.storage_bucket,
+                            storage_key=new_key,
+                            size_bytes=src.size_bytes,
+                            mime_type=src.mime_type,
+                            extension=src.extension,
+                            checksum=src.checksum,
+                            checksum_algorithm=src.checksum_algorithm,
+                            storage_status=StorageObjectStatus.AVAILABLE,
+                            processing_status=FileProcessingStatus.READY,
+                            preview_status=preview_status,
+                            created_by=actor_id,
+                            check_owner_exists=False,
+                            check_conflict=False,
+                            flush=True,
+                            refresh=True,
+                        )
+                        if preview_status == FilePreviewStatus.PENDING:
+                            preview_task = await uow.tasks.create_task(
+                                task_type=BackgroundTaskType.GENERATE_FILE_PREVIEW,
+                                created_by=actor_id,
+                                related_entity_type="file",
+                                related_entity_id=new_file.id,
+                                status=BackgroundTaskStatus.PENDING,
+                                flush=True,
+                                refresh=False,
+                            )
+                            preview_task.payload = {"file_id": str(new_file.id)}
+                        id_map[current.id] = new_file.node_id
+                except Exception:
+                    for bucket, object_key in copied:
+                        await self._delete_copied_object_safely(
+                            bucket=bucket,
+                            object_key=object_key,
+                        )
+                    raise
+
+                if file_count:
+                    await uow.quotas.increase_used_space(
+                        user_id=actor_id,
+                        size_bytes=total_bytes,
+                        flush=True,
+                    )
+                    await uow.quotas.increase_files_used(
+                        user_id=actor_id,
+                        count=file_count,
+                        flush=True,
+                    )
+
+                new_root_node = await uow.nodes.get_required_by_id(id_map[root.id])
+                snapshot = _node_snapshot(new_root_node)
+                await uow.commit()
+
+            if snapshot is None:
+                raise _empty_result_error(operation)
+
+            await self._safe_log_node_event(
+                user_id=actor_id,
+                action=AuditAction.NODE_CREATED,
+                snapshot=snapshot,
+                message="Узел файловой системы скопирован.",
+            )
+            return _operation_response(snapshot, "Узел файловой системы скопирован.")
+
+        except DatabaseError as exc:
+            raise self._database_error(
+                exc,
+                operation=operation,
+                message="Не удалось скопировать узел файловой системы.",
+            ) from exc
+        except ServiceError:
+            raise
+        except Exception as exc:
+            raise self._unexpected_error(
+                exc,
+                operation=operation,
+                message="Не удалось скопировать узел файловой системы.",
+            ) from exc
+
+    async def _delete_copied_object_safely(
+        self,
+        *,
+        bucket: str,
+        object_key: str,
+    ) -> None:
+        """Безопасно удаляет скопированный объект при откате копирования.
+
+        Используется для best-effort очистки объектов, уже скопированных в
+        хранилище, когда копирование завершилось ошибкой. Ошибки удаления не
+        пробрасываются выше и только логируются.
+
+        Args:
+            bucket: Bucket объектного хранилища.
+            object_key: Ключ скопированного объекта.
+        """
+
+        try:
+            await self.storage_service.delete_file_object(
+                bucket=bucket,
+                object_key=object_key,
+                missing_ok=True,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Не удалось удалить скопированный объект при откате копирования.",
+                extra={
+                    "service": SERVICE_NAME,
+                    "bucket": bucket,
+                    "object_key": object_key,
+                    "error_type": exc.__class__.__name__,
+                },
+            )
 
     async def update_visibility(
         self,
@@ -1560,6 +1850,46 @@ def _operation_response(
     )
 
 
+def _unique_copy_name(existing: set[str], desired: str, *, is_file: bool) -> str:
+    """Подбирает уникальное имя копии узла среди существующих имён.
+
+    Если ``desired`` не конфликтует с именами в ``existing``, возвращает его без
+    изменений. Иначе добавляет суффикс ``(копия)``, затем ``(копия 2)`` и т.д.,
+    пока имя не станет уникальным. Для файлов суффикс вставляется перед
+    расширением (последний сегмент после точки), чтобы сохранить расширение.
+
+    Args:
+        existing: Множество имён, уже занятых в целевой папке.
+        desired: Желаемое имя копии.
+        is_file: Является ли узел файлом. Для файлов сохраняется расширение.
+
+    Returns:
+        Уникальное имя копии узла.
+    """
+
+    if desired not in existing:
+        return desired
+
+    stem = desired
+    suffix = ""
+    if is_file and "." in desired:
+        dot_index = desired.rfind(".")
+        if dot_index > 0:
+            stem = desired[:dot_index]
+            suffix = desired[dot_index:]
+
+    candidate = f"{stem} (копия){suffix}"
+    if candidate not in existing:
+        return candidate
+
+    counter = 2
+    while True:
+        candidate = f"{stem} (копия {counter}){suffix}"
+        if candidate not in existing:
+            return candidate
+        counter += 1
+
+
 def _nodes_page(
     nodes: list[FileSystemNode],
     *,
@@ -1922,6 +2252,7 @@ def get_nodes_service(
     uow_factory: UnitOfWorkFactory | None = None,
     access_service: AccessService | None = None,
     audit_service: AuditService | None = None,
+    storage_service: StorageService | None = None,
 ) -> NodesService:
     """Возвращает экземпляр сервиса узлов файловой системы.
 
@@ -1933,6 +2264,7 @@ def get_nodes_service(
         uow_factory: Фабрика Unit of Work для нового экземпляра сервиса.
         access_service: Сервис доступа для нового экземпляра сервиса.
         audit_service: Сервис аудита для нового экземпляра сервиса.
+        storage_service: Сервис хранилища для нового экземпляра сервиса.
 
     Returns:
         Экземпляр NodesService.
@@ -1942,11 +2274,13 @@ def get_nodes_service(
         uow_factory is not None
         or access_service is not None
         or audit_service is not None
+        or storage_service is not None
     ):
         return NodesService(
             uow_factory=uow_factory,
             access_service=access_service,
             audit_service=audit_service,
+            storage_service=storage_service,
         )
 
     global _nodes_service

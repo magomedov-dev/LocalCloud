@@ -114,7 +114,7 @@ class TestCleanExpiredPublicLinksHandlerWithLinks:
         uow.links.find_expired_links = AsyncMock(return_value=links)
         uow.links.mark_link_expired_by_id = AsyncMock(
             side_effect=[
-                MagicMock(id=l.id, node_id=l.node_id) for l in links
+                MagicMock(id=lnk.id, node_id=lnk.node_id) for lnk in links
             ]
         )
 

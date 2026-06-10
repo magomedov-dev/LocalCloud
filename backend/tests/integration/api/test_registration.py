@@ -7,12 +7,11 @@ from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock
 
-import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
 from api.dependencies import get_registration_service_dependency
-from security.dependencies.users import get_current_active_user, get_current_admin_user
+from security.dependencies.users import get_current_admin_user
 from tests.integration.conftest import API_V1, _make_mock_user
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -665,27 +665,6 @@ async def test_update_password_hash_calls_flush():
 
 
 # ---------------------------------------------------------------------------
-# set_email_verified
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_set_email_verified_true():
-    repo, session, _ = make_repo()
-    user = make_user()
-    result = await repo.set_email_verified(user, is_verified=True, flush=False)
-    assert result.is_email_verified is True
-
-
-@pytest.mark.asyncio
-async def test_set_email_verified_false():
-    repo, session, _ = make_repo()
-    user = make_user()
-    user.is_email_verified = True
-    result = await repo.set_email_verified(user, is_verified=False, flush=False)
-    assert result.is_email_verified is False
-
-
-# ---------------------------------------------------------------------------
 # update_identity
 # ---------------------------------------------------------------------------
 
@@ -861,14 +840,6 @@ async def test_update_password_hash_by_id_not_found():
     session.get = AsyncMock(return_value=None)
     with pytest.raises(EntityNotFoundError):
         await repo.update_password_hash_by_id(uuid.uuid4(), password_hash="hash")
-
-
-@pytest.mark.asyncio
-async def test_set_email_verified_by_id_not_found():
-    repo, session, _ = make_repo()
-    session.get = AsyncMock(return_value=None)
-    with pytest.raises(EntityNotFoundError):
-        await repo.set_email_verified_by_id(uuid.uuid4())
 
 
 # ---------------------------------------------------------------------------
@@ -1092,15 +1063,6 @@ async def test_create_user_integrity_error_non_unique():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_list_users_only_email_verified():
-    repo, session, result = make_repo()
-    result.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
-    session.execute = AsyncMock(return_value=result)
-    found = await repo.list_users(only_email_verified=True)
-    assert found == []
-
-
-@pytest.mark.asyncio
 async def test_list_users_order_asc():
     repo, session, result = make_repo()
     result.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
@@ -1118,7 +1080,6 @@ async def test_search_users_with_filters():
     found = await repo.search_users(
         "test",
         statuses=[UserStatus.ACTIVE],
-        only_email_verified=True,
     )
     assert found == users
 
@@ -1235,25 +1196,6 @@ async def test_update_last_login_refresh():
 
 
 @pytest.mark.asyncio
-async def test_set_email_verified_refresh_and_flush():
-    repo, session, _ = make_repo()
-    user = make_user()
-    await repo.set_email_verified(user, is_verified=True, flush=True, refresh=True)
-    session.flush.assert_called_once()
-    session.refresh.assert_called_once()
-    assert session.refresh.call_args.args[0] is user
-
-
-@pytest.mark.asyncio
-async def test_set_email_verified_false_flush():
-    repo, session, _ = make_repo()
-    user = make_user()
-    user.is_email_verified = True
-    await repo.set_email_verified(user, is_verified=False, flush=True)
-    session.flush.assert_called_once()
-
-
-@pytest.mark.asyncio
 async def test_update_password_hash_refresh():
     repo, session, _ = make_repo()
     user = make_user()
@@ -1338,15 +1280,6 @@ async def test_update_password_hash_by_id_found():
         uuid.uuid4(), password_hash="newhash", flush=False,
     )
     assert result.password_hash == "newhash"
-
-
-@pytest.mark.asyncio
-async def test_set_email_verified_by_id_found():
-    repo, session, _ = make_repo()
-    user = make_user()
-    session.get = AsyncMock(return_value=user)
-    result = await repo.set_email_verified_by_id(uuid.uuid4(), is_verified=True, flush=False)
-    assert result.is_email_verified is True
 
 
 # ---------------------------------------------------------------------------
@@ -1475,3 +1408,34 @@ async def test_create_user_password_hash_too_long():
             password_hash="h" * 256,
             check_duplicates=False,
         )
+
+
+# ---------------------------------------------------------------------------
+# get_first_admin_user_id
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_get_first_admin_user_id_returns_id():
+    repo, session, result = make_repo()
+    admin_id = uuid.uuid4()
+    result.scalar_one_or_none = MagicMock(return_value=admin_id)
+    session.execute = AsyncMock(return_value=result)
+    found = await repo.get_first_admin_user_id()
+    assert found == admin_id
+
+
+@pytest.mark.asyncio
+async def test_get_first_admin_user_id_returns_none_when_no_admins():
+    repo, session, result = make_repo()
+    result.scalar_one_or_none = MagicMock(return_value=None)
+    session.execute = AsyncMock(return_value=result)
+    found = await repo.get_first_admin_user_id()
+    assert found is None
+
+
+@pytest.mark.asyncio
+async def test_get_first_admin_user_id_wraps_db_error():
+    repo, session, _ = make_repo()
+    session.execute = AsyncMock(side_effect=SQLAlchemyError("db error"))
+    with pytest.raises(RepositoryError):
+        await repo.get_first_admin_user_id()

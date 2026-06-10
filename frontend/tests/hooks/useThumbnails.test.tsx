@@ -36,7 +36,16 @@ function imageNode(id: string): NodeListItem {
   return { id, name: id, node_type: "file", file_mime_type: "image/png" } as NodeListItem;
 }
 function fileNode(id: string): NodeListItem {
-  return { id, name: id, node_type: "file", file_mime_type: "text/plain" } as NodeListItem;
+  // Тип без поддержки превью — миниатюра не запрашивается.
+  return {
+    id,
+    name: id,
+    node_type: "file",
+    file_mime_type: "application/octet-stream",
+  } as NodeListItem;
+}
+function pdfNode(id: string): NodeListItem {
+  return { id, name: id, node_type: "file", file_mime_type: "application/pdf" } as NodeListItem;
 }
 function folderNode(id: string): NodeListItem {
   return { id, name: id, node_type: "folder" } as NodeListItem;
@@ -44,7 +53,13 @@ function folderNode(id: string): NodeListItem {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  getCache.mockReturnValue(undefined);
+  // Имитируем sessionStorage как in-memory store, чтобы set/get делали round-trip:
+  // отрицательные результаты теперь живут только здесь, не в React Query.
+  const store = new Map<string, string | null>();
+  getCache.mockImplementation((id: string) => (store.has(id) ? store.get(id) : undefined));
+  setCache.mockImplementation((id: string, value: string | null) => {
+    store.set(id, value);
+  });
 });
 
 describe("useThumbnails", () => {
@@ -67,9 +82,10 @@ describe("useThumbnails", () => {
     expect(batch).toHaveBeenCalledWith(["a", "b"], expect.anything());
     expect(result.current.get("a")).toBe("https://x/a.png");
     expect(result.current.get("b")).toBeNull();
-    // Записывает в sessionStorage кэш.
+    // Кэшируем только положительный результат; null не кэшируем, чтобы можно
+    // было опросить превью повторно, когда оно сгенерируется.
     expect(setCache).toHaveBeenCalledWith("a", "https://x/a.png");
-    expect(setCache).toHaveBeenCalledWith("b", null);
+    expect(setCache).not.toHaveBeenCalledWith("b", null);
   });
 
   it("serves values from sessionStorage cache without fetching", async () => {
@@ -85,21 +101,26 @@ describe("useThumbnails", () => {
     expect(batch).not.toHaveBeenCalled();
   });
 
-  it("only fetches ids missing from session cache", async () => {
-    getCache.mockImplementation((id: string) => (id === "have" ? null : undefined));
-    batch.mockResolvedValue({ need: "https://x/need.png" } as never);
+  it("skips ids with a cached URL but re-requests pending (null) ids", async () => {
+    // "have" уже имеет готовый URL в кэше → не запрашивается повторно.
+    // "pending" известен как null → перезапрашивается (превью могло появиться).
+    getCache.mockImplementation((id: string) =>
+      id === "have" ? "https://x/have.png" : undefined,
+    );
+    batch.mockResolvedValue({ pending: "https://x/pending.png" } as never);
 
-    const { result } = renderHook(() => useThumbnails([imageNode("have"), imageNode("need")]), {
-      wrapper: wrapper(),
-    });
+    const { result } = renderHook(
+      () => useThumbnails([imageNode("have"), imageNode("pending")]),
+      { wrapper: wrapper() },
+    );
 
-    await waitFor(() => expect(result.current.get("need")).toBe("https://x/need.png"));
-    expect(batch).toHaveBeenCalledWith(["need"], expect.anything());
-    // "have" известен как null из session cache.
-    expect(result.current.get("have")).toBeNull();
+    await waitFor(() => expect(result.current.get("pending")).toBe("https://x/pending.png"));
+    // Запрашивается только "pending"; "have" обслужен из кэша.
+    expect(batch).toHaveBeenCalledWith(["pending"], expect.anything());
+    expect(result.current.get("have")).toBe("https://x/have.png");
   });
 
-  it("filters out non-image files from the fetch set", async () => {
+  it("filters out unsupported files and folders from the fetch set", async () => {
     batch.mockResolvedValue({ img: "https://x/img.png" } as never);
     const { result } = renderHook(
       () => useThumbnails([imageNode("img"), fileNode("doc"), folderNode("dir")]),
@@ -109,5 +130,14 @@ describe("useThumbnails", () => {
     expect(batch).toHaveBeenCalledWith(["img"], expect.anything());
     expect(result.current.has("doc")).toBe(false);
     expect(result.current.has("dir")).toBe(false);
+  });
+
+  it("fetches thumbnails for preview-supported non-image files (PDF)", async () => {
+    batch.mockResolvedValue({ book: "https://x/book.webp" } as never);
+    const { result } = renderHook(() => useThumbnails([pdfNode("book")]), {
+      wrapper: wrapper(),
+    });
+    await waitFor(() => expect(result.current.get("book")).toBe("https://x/book.webp"));
+    expect(batch).toHaveBeenCalledWith(["book"], expect.anything());
   });
 });

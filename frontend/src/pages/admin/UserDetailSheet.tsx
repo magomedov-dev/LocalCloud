@@ -276,16 +276,6 @@ export function UserDetailSheet({ user, onClose }: Props) {
                 />
                 <InfoRow label="Зарегистрирован" value={fmtDate(detail.created_at)} />
                 <InfoRow label="Последний вход" value={fmtDate(detail.last_login_at, true)} />
-                <InfoRow
-                  label="Email подтверждён"
-                  value={
-                    detail.is_email_verified ? (
-                      <span className="text-green-600 dark:text-green-400">Да</span>
-                    ) : (
-                      <span className="text-muted-foreground">Нет</span>
-                    )
-                  }
-                />
                 {detail.approved_at && (
                   <InfoRow label="Одобрен" value={fmtDate(detail.approved_at)} />
                 )}

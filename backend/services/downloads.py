@@ -10,17 +10,17 @@ from uuid import UUID
 
 from core.config import Settings, get_settings
 from core.logging import get_logger
+from core.preview_mime import preview_content_type
 from database import DatabaseError, UnitOfWorkFactory, create_unit_of_work_factory
 from database.models.enums import (
     AuditAction,
     AuditResourceType,
     BackgroundTaskStatus,
     BackgroundTaskType,
-    FileVersionStatus,
     NodeType,
     StorageObjectStatus,
 )
-from database.models.filesystem import File, FileSystemNode, FileVersion, Folder
+from database.models.filesystem import File, FileSystemNode, Folder
 from database.models.tasks import BackgroundTask
 from schemas.files import FileDownloadRequest, FileDownloadResponse
 from schemas.folders import (
@@ -200,7 +200,7 @@ class DownloadsService:
         """Возвращает presigned URL thumbnail для каждого из запрошенных узлов.
 
         Запускает получение URL параллельно. Для узлов, к которым нет доступа
-        или которые не являются изображениями, возвращает None.
+        или у которых нет готового preview, возвращает None.
 
         Args:
             node_ids: Список идентификаторов узлов.
@@ -307,9 +307,9 @@ class DownloadsService:
     ) -> FileDownloadResponse:
         """Создает предварительно подписанный URL для скачивания файла.
 
-        Проверяет существование файла, права пользователя на скачивание,
-        доступность объекта в хранилище и, если указана версия, корректность
-        выбранной версии файла. После создания URL записывает событие аудита.
+        Проверяет существование файла, права пользователя на скачивание и
+        доступность объекта в хранилище. После создания URL записывает событие
+        аудита.
 
         Args:
             data: Данные запроса на скачивание файла.
@@ -317,20 +317,18 @@ class DownloadsService:
 
         Returns:
             Ответ с предварительно подписанным URL, сроком действия, HTTP-методом,
-            заголовками, метаданными файла и выбранной версии.
+            заголовками и метаданными файла.
 
         Raises:
-            DownloadServiceError: Если файл недоступен для скачивания, не связан
-                с корректным файловым узлом или выбранная версия неактивна.
+            DownloadServiceError: Если файл недоступен для скачивания или не связан
+                с корректным файловым узлом.
             PermissionServiceError: Если у пользователя нет права на скачивание.
-            ValidationServiceError: Если указанная версия не принадлежит файлу.
             ServiceError: Если произошла ошибка базы данных, хранилища или
                 непредвиденная ошибка сервиса.
         """
 
         operation = "create_file_download_url"
         file_snapshot: dict[str, Any] | None = None
-        version_snapshot: dict[str, Any] | None = None
 
         try:
             async with self.uow_factory() as uow:
@@ -343,16 +341,7 @@ class DownloadsService:
                     uow=uow,
                 )
                 _ensure_file_downloadable(file, operation=operation)
-                version = await _resolve_download_version(
-                    uow,
-                    file=file,
-                    version_id=data.version_id,
-                    operation=operation,
-                )
                 file_snapshot = _file_snapshot(file)
-                version_snapshot = (
-                    _version_snapshot(version) if version is not None else None
-                )
 
             if file_snapshot is None:
                 raise _empty_result_error(operation)
@@ -360,7 +349,6 @@ class DownloadsService:
             response = await self._build_file_download_response(
                 data,
                 file_snapshot=file_snapshot,
-                version_snapshot=version_snapshot,
             )
             await self._safe_log_download_event(
                 user_id=user_id,
@@ -370,7 +358,6 @@ class DownloadsService:
                 message="Был создан URL-адрес для загрузки файла.",
                 metadata={
                     "file": _audit_file(file_snapshot),
-                    "version": _jsonable(version_snapshot),
                     "expires_at": response.expires_at.isoformat(),
                 },
             )
@@ -712,22 +699,19 @@ class DownloadsService:
         data: FileDownloadRequest,
         *,
         file_snapshot: Mapping[str, Any],
-        version_snapshot: Mapping[str, Any] | None,
     ) -> FileDownloadResponse:
         """Формирует ответ со ссылкой на скачивание файла.
 
-        Выбирает объект хранилища из снимка файла или снимка версии, подготавливает
-        HTTP-заголовки для скачивания и запрашивает у сервиса хранилища
-        предварительно подписанный URL.
+        Выбирает объект хранилища из снимка файла, подготавливает HTTP-заголовки
+        для скачивания и запрашивает у сервиса хранилища предварительно
+        подписанный URL.
 
         Args:
             data: Исходные параметры запроса на скачивание.
             file_snapshot: Снимок метаданных файла.
-            version_snapshot: Снимок метаданных версии файла. Если None,
-                используется текущий объект файла.
 
         Returns:
-            Ответ со ссылкой на скачивание файла или выбранной версии.
+            Ответ со ссылкой на скачивание файла.
 
         Raises:
             StorageError: Если сервис хранилища не смог создать URL.
@@ -738,14 +722,6 @@ class DownloadsService:
         object_key = cast(str, file_snapshot["storage_key"])
         size_bytes = cast(int, file_snapshot["size_bytes"])
         mime_type = cast(str | None, file_snapshot["mime_type"])
-        version_id: UUID | None = None
-
-        if version_snapshot is not None:
-            version_id = cast(UUID, version_snapshot["id"])
-            object_bucket = cast(str, version_snapshot["storage_bucket"])
-            object_key = cast(str, version_snapshot["storage_key"])
-            size_bytes = cast(int, version_snapshot["size_bytes"])
-            mime_type = cast(str | None, version_snapshot["mime_type"]) or mime_type
 
         presigned = await self.storage_service.create_download_url(
             bucket=object_bucket,
@@ -766,7 +742,6 @@ class DownloadsService:
             method=presigned.method.value,
             headers=presigned.headers,
             file_id=cast(UUID, file_snapshot["id"]),
-            version_id=version_id,
             filename=filename,
             size_bytes=size_bytes,
             mime_type=mime_type,
@@ -804,9 +779,16 @@ class DownloadsService:
         )
         mime_type = cast(str | None, file_snapshot.get("mime_type"))
 
+        # При отдаче preview-объекта content-type должен соответствовать самому
+        # превью (webp/текст), а не исходному типу файла, иначе браузер получит,
+        # например, webp под видом application/pdf и не отрисует миниатюру.
+        response_content_type = (
+            preview_content_type(mime_type) if use_preview else mime_type
+        )
+
         response_headers: dict[str, str] = {}
-        if mime_type:
-            response_headers["response-content-type"] = mime_type
+        if response_content_type:
+            response_headers["response-content-type"] = response_content_type
 
         presigned = await self.storage_service.create_download_url(
             bucket=bucket,
@@ -893,7 +875,6 @@ class DownloadsService:
             method=presigned.method.value,
             headers=presigned.headers,
             file_id=None,
-            version_id=None,
             filename=resolved_filename,
             size_bytes=size_bytes,
             mime_type=ZIP_MIME_TYPE,
@@ -987,60 +968,6 @@ class DownloadsService:
             operation=operation,
             message=message,
         )
-
-
-async def _resolve_download_version(
-    uow: Any,
-    *,
-    file: File,
-    version_id: UUID | None,
-    operation: str,
-) -> FileVersion | None:
-    """Возвращает версию файла для скачивания, если она указана.
-
-    Если идентификатор версии отсутствует, возвращает None. Если версия указана,
-    проверяет, что она принадлежит переданному файлу и находится в активном
-    статусе.
-
-    Args:
-        uow: Unit of Work с репозиторием версий файлов.
-        file: Файл, для которого запрашивается скачивание.
-        version_id: Идентификатор версии файла. Если None, версия не выбирается.
-        operation: Название операции для контекста ошибок.
-
-    Returns:
-        Активная версия файла или None, если версия не запрошена.
-
-    Raises:
-        ValidationServiceError: Если версия не принадлежит указанному файлу.
-        DownloadServiceError: Если версия не находится в активном статусе.
-    """
-
-    if version_id is None:
-        return None
-    version = await uow.versions.get_required_by_id(version_id)
-    if version.file_id != file.id:
-        raise ValidationServiceError(
-            "Запрошенная версия не принадлежит запрошенному файлу.",
-            field="version_id",
-            value=version_id,
-            reason="file_version_mismatch",
-            details={
-                "service": SERVICE_NAME,
-                "operation": operation,
-                "file_id": str(file.id),
-                "version_file_id": str(version.file_id),
-            },
-        )
-    if version.status != FileVersionStatus.ACTIVE:
-        raise DownloadServiceError(
-            "Запрошенная версия файла не активна.",
-            file_id=file.id,
-            version_id=version_id,
-            operation=operation,
-            details={"version_status": version.status.value},
-        )
-    return version
 
 
 def _require_file_node(file: File, *, operation: str) -> FileSystemNode:
@@ -1302,7 +1229,6 @@ def _file_snapshot(file: File) -> dict[str, Any]:
         "extension": file.extension,
         "checksum": file.checksum,
         "checksum_algorithm": file.checksum_algorithm,
-        "current_version_id": file.current_version_id,
         "created_at": file.created_at,
         "updated_at": file.updated_at,
     }
@@ -1332,36 +1258,6 @@ def _thumbnail_snapshot(file: File) -> dict[str, Any]:
         "mime_type": file.mime_type,
         "preview_ready": file.preview_available,
         "preview_storage_key": file.preview_storage_key,
-    }
-
-
-def _version_snapshot(version: FileVersion) -> dict[str, Any]:
-    """Создает снимок метаданных версии файла.
-
-    Args:
-        version: ORM-модель версии файла.
-
-    Returns:
-        Словарь с идентификаторами версии и файла, номером версии, статусом,
-        параметрами хранилища, размером, MIME-типом, контрольной суммой,
-        автором создания и признаком текущей версии.
-    """
-
-    return {
-        "id": version.id,
-        "file_id": version.file_id,
-        "version_number": version.version_number,
-        "status": version.status,
-        "storage_bucket": version.storage_bucket,
-        "storage_key": version.storage_key,
-        "size_bytes": version.size_bytes,
-        "checksum": version.checksum,
-        "checksum_algorithm": version.checksum_algorithm,
-        "mime_type": version.mime_type,
-        "created_at": version.created_at,
-        "created_by": version.created_by,
-        "change_comment": version.change_comment,
-        "is_current": version.is_current,
     }
 
 

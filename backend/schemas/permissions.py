@@ -5,7 +5,12 @@ from uuid import UUID
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
-from database.models.enums import PermissionLevel, PermissionSubjectType
+from database.models.enums import (
+    NodeType,
+    NodeVisibility,
+    PermissionLevel,
+    PermissionSubjectType,
+)
 from schemas.common import BaseSchema
 from security.permissions import PermissionAction, PermissionDeniedReason
 
@@ -668,4 +673,79 @@ class EffectivePermissionRead(PermissionFlags):
     expires_at: datetime | None = Field(
         default=None,
         description="Дата и время истечения эффективного доступа, если применимо.",
+    )
+
+
+class SharedNodeItem(BaseSchema):
+    """Узел, к которому пользователю выдан явный доступ («Доступно мне»).
+
+    Объединяет метаданные узла файловой системы (имя, тип, путь, mime/размер)
+    с параметрами выданного права (уровень, флаги, кто и когда выдал), чтобы
+    фронтенд мог отрисовать карточку с бейджем доступа без дополнительных
+    запросов за метаданными узла.
+
+    Attributes:
+        id: Идентификатор узла.
+        owner_id: Идентификатор владельца узла.
+        parent_id: Идентификатор родительской папки узла (None для корня).
+        name: Имя узла.
+        node_type: Тип узла (файл или папка).
+        visibility: Видимость узла.
+        path: Полный путь узла.
+        created_at: Дата и время создания узла.
+        updated_at: Дата и время последнего обновления узла.
+        file_size_bytes: Размер файла в байтах (None для папок).
+        file_mime_type: MIME-тип файла (None для папок).
+        permission_id: Идентификатор записи права доступа.
+        permission_level: Уровень выданного доступа.
+        can_read: Разрешён ли просмотр.
+        can_download: Разрешено ли скачивание.
+        can_write: Разрешено ли изменение.
+        can_delete: Разрешено ли удаление.
+        can_share: Разрешена ли передача доступа дальше.
+        expires_at: Дата и время истечения доступа, если задано.
+        granted_at: Дата и время выдачи доступа.
+        granted_by: Идентификатор пользователя, выдавшего доступ.
+        granted_by_username: Имя пользователя, выдавшего доступ, если известно.
+    """
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: UUID = Field(..., description="Идентификатор узла.")
+    owner_id: UUID = Field(..., description="Идентификатор владельца узла.")
+    parent_id: UUID | None = Field(
+        default=None, description="Идентификатор родительской папки узла."
+    )
+    name: str = Field(..., description="Имя узла.")
+    node_type: NodeType = Field(..., description="Тип узла (файл или папка).")
+    visibility: NodeVisibility = Field(..., description="Видимость узла.")
+    path: str = Field(..., description="Полный путь узла.")
+    created_at: datetime = Field(..., description="Дата и время создания узла.")
+    updated_at: datetime = Field(
+        ..., description="Дата и время последнего обновления узла."
+    )
+    file_size_bytes: int | None = Field(
+        default=None, description="Размер файла в байтах (None для папок)."
+    )
+    file_mime_type: str | None = Field(
+        default=None, description="MIME-тип файла (None для папок)."
+    )
+    permission_id: UUID = Field(..., description="Идентификатор записи права доступа.")
+    permission_level: PermissionLevel = Field(
+        ..., description="Уровень выданного доступа."
+    )
+    can_read: bool = Field(..., description="Разрешён ли просмотр.")
+    can_download: bool = Field(..., description="Разрешено ли скачивание.")
+    can_write: bool = Field(..., description="Разрешено ли изменение.")
+    can_delete: bool = Field(..., description="Разрешено ли удаление.")
+    can_share: bool = Field(..., description="Разрешена ли передача доступа дальше.")
+    expires_at: datetime | None = Field(
+        default=None, description="Дата и время истечения доступа, если задано."
+    )
+    granted_at: datetime = Field(..., description="Дата и время выдачи доступа.")
+    granted_by: UUID | None = Field(
+        default=None, description="Идентификатор пользователя, выдавшего доступ."
+    )
+    granted_by_username: str | None = Field(
+        default=None, description="Имя пользователя, выдавшего доступ, если известно."
     )

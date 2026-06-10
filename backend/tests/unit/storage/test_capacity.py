@@ -77,6 +77,26 @@ def test_parse_physical_skips_unparsable_fields():
     assert CapacityProvider._parse_physical(payload) == (1000, 400)
 
 
+def test_parse_physical_availspace_field():
+    """Понимает реальное имя поля MinIO ``availspace``."""
+    payload = _info_json(
+        [{"totalspace": 220026445824, "usedspace": 30497861632, "availspace": 189528584192}]
+    )
+    assert CapacityProvider._parse_physical(payload) == (220026445824, 189528584192)
+
+
+def test_parse_physical_derives_available_from_used():
+    """Без поля свободного места выводит его из total - used."""
+    payload = _info_json([{"totalspace": 1000, "usedspace": 300}])
+    assert CapacityProvider._parse_physical(payload) == (1000, 700)
+
+
+def test_parse_physical_used_exceeding_total_clamps_to_zero():
+    """Если used > total, свободное не уходит в минус."""
+    payload = _info_json([{"totalspace": 1000, "usedspace": 1500}])
+    assert CapacityProvider._parse_physical(payload) == (1000, 0)
+
+
 # ---------------------------------------------------------------------------
 # Вычисление пула
 # ---------------------------------------------------------------------------

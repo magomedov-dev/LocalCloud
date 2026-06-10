@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from security.cookies.enums import CookieErrorCode, CookieSameSite
+from security.cookies.enums import CookieErrorCode
 from security.cookies.exceptions import CookieError
 from security.cookies.validators import (
     normalize_cookie_domain,

@@ -11,7 +11,6 @@ from security.permissions.protocols import (
     SupportsNode,
     SupportsNodePermission,
     SupportsUser,
-    SupportsUserRole,
 )
 from security.permissions.service import (
     ACTION_REQUIRED_PERMISSION_LEVEL,
@@ -54,7 +53,6 @@ __all__ = [
     "PermissionCheckError",
     "PermissionDeniedError",
     "PermissionCheckResult",
-    "SupportsUserRole",
     "SupportsUser",
     "SupportsNode",
     "SupportsNodePermission",

@@ -12,6 +12,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import type { NodeListItem } from "@/types/nodes";
 import type { SelectOpts } from "./FileGrid";
 import type { ShareBadge } from "@/hooks/useShareBadges";
+import type { ItemCapabilities } from "./itemCapabilities";
 import { cn } from "@/lib/utils";
 import { queryClient } from "@/lib/query-client";
 import { nodesApi } from "@/api/nodes";
@@ -56,6 +57,7 @@ interface Props {
   isSelected?: boolean;
   selectedItems?: NodeListItem[];
   badge?: ShareBadge;
+  capabilities?: ItemCapabilities;
   onSelect?: (item: NodeListItem, opts: SelectOpts) => void;
   onDrop?: (draggedId: string, targetFolderId: string) => void;
 }
@@ -88,6 +90,7 @@ export function FileListItem({
   isSelected,
   selectedItems,
   badge,
+  capabilities,
   onSelect,
   onDrop,
 }: Props) {
@@ -147,6 +150,7 @@ export function FileListItem({
         selectedItems={selectedItems}
         onSelect={onSelect}
         onPreview={canPreview ? () => setPreviewOpen(true) : undefined}
+        capabilities={capabilities}
       >
         <div
           className={cn(
@@ -248,6 +252,7 @@ export function FileListItem({
               onColorChange={handleColorChange}
               onOpenChange={setMenuOpen}
               onPreview={canPreview ? () => setPreviewOpen(true) : undefined}
+              capabilities={capabilities}
             />
           </div>
         </div>

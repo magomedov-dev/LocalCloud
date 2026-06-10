@@ -32,20 +32,12 @@ class FetchvalRouter:
     def __init__(
         self,
         *,
-        role_admin_exists: bool = False,
-        role_user_exists: bool = False,
         admin_user_exists: bool = False,
-        role_assigned: bool = False,
         quota_exists: bool = False,
     ) -> None:
-        self.role_admin_id = uuid.uuid4()
-        self.role_user_id = uuid.uuid4()
         self.existing_admin_id = uuid.uuid4()
         self._flags = {
-            "role_admin_exists": role_admin_exists,
-            "role_user_exists": role_user_exists,
             "admin_user_exists": admin_user_exists,
-            "role_assigned": role_assigned,
             "quota_exists": quota_exists,
         }
         self.calls: list[tuple[Any, ...]] = []
@@ -54,24 +46,12 @@ class FetchvalRouter:
         self.calls.append((sql, *args))
         normalized = " ".join(sql.split())
 
-        if "FROM roles WHERE code=$1" in normalized:
-            code = args[0]
-            if code == "admin":
-                return self.role_admin_id if self._flags["role_admin_exists"] else None
-            if code == "user":
-                return self.role_user_id if self._flags["role_user_exists"] else None
-            return None
-        if "FROM roles WHERE code='admin'" in normalized:
-            # Поиск id роли для шага назначения всегда успешен.
-            return self.role_admin_id
         if "FROM users WHERE email=$1" in normalized:
             return (
                 self.existing_admin_id
                 if self._flags["admin_user_exists"]
                 else None
             )
-        if "FROM user_roles WHERE user_id=$1" in normalized:
-            return 1 if self._flags["role_assigned"] else None
         if "FROM user_quotas WHERE user_id=$1" in normalized:
             return uuid.uuid4() if self._flags["quota_exists"] else None
         raise AssertionError(f"Unexpected fetchval SQL: {normalized!r}")
@@ -128,17 +108,12 @@ def test_fresh_database_creates_everything(capsys: pytest.CaptureFixture[str]) -
     _import_seed_admin(conn)
 
     sql = _executed_sql(conn)
-    # Две роли + один пользователь + одно назначение роли + одна квота = 5 вставок.
-    assert sum("INSERT INTO roles" in s for s in sql) == 2
+    # Один пользователь + одна квота = 2 вставки.
     assert sum("INSERT INTO users" in s for s in sql) == 1
-    assert sum("INSERT INTO user_roles" in s for s in sql) == 1
     assert sum("INSERT INTO user_quotas" in s for s in sql) == 1
 
     out = capsys.readouterr().out
-    assert "Created role: admin" in out
-    assert "Created role: user" in out
     assert "Created admin user:" in out
-    assert "Assigned admin role" in out
     assert "Created default quota for admin" in out
     assert "=== Admin user ready ===" in out
     conn.close.assert_awaited_once()
@@ -166,31 +141,27 @@ def test_user_insert_uses_expected_fields() -> None:
     assert args[4] == "hashed-password"
 
 
-def test_role_insert_carries_code_and_display() -> None:
+def test_user_insert_sets_admin_role() -> None:
     router = FetchvalRouter()
     conn = make_connection(router)
 
     _import_seed_admin(conn)
 
-    role_calls = [
-        call
+    user_sql = next(
+        " ".join(call.args[0].split())
         for call in conn.execute.await_args_list
-        if "INSERT INTO roles" in call.args[0]
-    ]
-    codes = {call.args[2] for call in role_calls}  # args: (sql, id, code, display, desc)
-    displays = {call.args[3] for call in role_calls}
-    assert codes == {"admin", "user"}
-    assert displays == {"Администратор", "Пользователь"}
+        if "INSERT INTO users" in call.args[0]
+    )
+    # Системная роль администратора задаётся прямо в значениях INSERT.
+    assert "role" in user_sql
+    assert "'admin'" in user_sql
 
 
 def test_existing_admin_skips_user_insert(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     router = FetchvalRouter(
-        role_admin_exists=True,
-        role_user_exists=True,
         admin_user_exists=True,
-        role_assigned=True,
         quota_exists=True,
     )
     conn = make_connection(router)
@@ -202,12 +173,9 @@ def test_existing_admin_skips_user_insert(
     assert sql == []
 
     out = capsys.readouterr().out
-    assert "Role exists: admin" in out
-    assert "Role exists: user" in out
     assert "Admin user exists:" in out
-    # Нет строк о создании/назначении.
-    assert "Created role" not in out
-    assert "Assigned admin role" not in out
+    # Нет строк о создании.
+    assert "Created admin user" not in out
     assert "Created default quota" not in out
     conn.close.assert_awaited_once()
 
@@ -218,39 +186,19 @@ def test_existing_admin_uses_existing_admin_id() -> None:
 
     _import_seed_admin(conn)
 
-    # Проверка существования назначения роли опирается на id *существующего* администратора.
-    assignment_checks = [
+    # Проверка существования квоты опирается на id *существующего* администратора.
+    quota_checks = [
         call
         for call in conn.fetchval.await_args_list
-        if "FROM user_roles WHERE user_id=$1" in call.args[0]
+        if "FROM user_quotas WHERE user_id=$1" in call.args[0]
     ]
-    assert assignment_checks, "expected a user_roles existence check"
-    assert assignment_checks[0].args[1] == router.existing_admin_id
-
-
-def test_role_assigned_when_missing(capsys: pytest.CaptureFixture[str]) -> None:
-    router = FetchvalRouter(
-        role_admin_exists=True,
-        role_user_exists=True,
-        admin_user_exists=True,
-        role_assigned=False,
-        quota_exists=True,
-    )
-    conn = make_connection(router)
-
-    _import_seed_admin(conn)
-
-    sql = _executed_sql(conn)
-    assert any("INSERT INTO user_roles" in s for s in sql)
-    assert "Assigned admin role" in capsys.readouterr().out
+    assert quota_checks, "expected a user_quotas existence check"
+    assert quota_checks[0].args[1] == router.existing_admin_id
 
 
 def test_quota_created_when_missing(capsys: pytest.CaptureFixture[str]) -> None:
     router = FetchvalRouter(
-        role_admin_exists=True,
-        role_user_exists=True,
         admin_user_exists=True,
-        role_assigned=True,
         quota_exists=False,
     )
     conn = make_connection(router)
@@ -298,10 +246,7 @@ def test_idempotent_second_run_is_a_pure_skip(
     # Второй запуск: всё уже существует -> вставок нет.
     second_conn = make_connection(
         FetchvalRouter(
-            role_admin_exists=True,
-            role_user_exists=True,
             admin_user_exists=True,
-            role_assigned=True,
             quota_exists=True,
         )
     )

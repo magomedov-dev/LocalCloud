@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { Download, FileText, Folder, Loader2, AlertTriangle, ImageIcon, Lock } from "lucide-react";
 import { toast } from "sonner";
 import { publicLinksApi } from "@/api/public-links";
+import { thumbnailSupported } from "@/lib/preview";
 import { downloadBlobFromUrl } from "@/lib/download";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -44,6 +45,8 @@ export function SharePage() {
   const node = link?.node;
   const isFolder = node?.node_type === "folder";
   const isImage = !isFolder && isImageFile(node?.name, node?.file_mime_type);
+  // Не-изображения (PDF/видео) показываем через сгенерированную webp-миниатюру.
+  const hasThumbnail = !isFolder && !isImage && thumbnailSupported(node?.file_mime_type);
 
   // Пароль публичной ссылки: вводится на шлюзе и подтверждается через /access.
   // До разблокировки скачивание не запускаем, иначе сервер вернёт 403.
@@ -68,6 +71,17 @@ export function SharePage() {
     queryKey: ["share-file", token, unlockedPassword],
     queryFn: () => publicLinksApi.download(token!, unlockedPassword ?? undefined),
     enabled: !!token && !!link && link.status === "active" && !isFolder && !needsUnlock,
+    staleTime: 3 * 60 * 1000,
+  });
+
+  // Миниатюра для не-изображений (PDF/видео): отдельный presigned URL на
+  // preview-объект. 404 (preview ещё не готов) трактуем как «нет миниатюры».
+  const { data: thumbData, isLoading: thumbLoading } = useQuery({
+    queryKey: ["share-thumb", token, unlockedPassword],
+    queryFn: () => publicLinksApi.thumbnail(token!, unlockedPassword ?? undefined),
+    enabled:
+      !!token && !!link && link.status === "active" && hasThumbnail && !needsUnlock,
+    retry: false,
     staleTime: 3 * 60 * 1000,
   });
 
@@ -235,6 +249,7 @@ export function SharePage() {
   // ── Shared page ──────────────────────────────────────────────────────────────
 
   const previewUrl = isImage ? fileData?.presigned_url : null;
+  const thumbnailUrl = hasThumbnail ? (thumbData?.presigned_url ?? null) : null;
   const sizeBytes = fileData?.size_bytes ?? null;
 
   return (
@@ -257,8 +272,27 @@ export function SharePage() {
           </div>
         )}
 
-        {/* Иконка для не-изображений */}
-        {!isImage && (
+        {/* Миниатюра для не-изображений с готовым preview (PDF/видео) */}
+        {hasThumbnail && (
+          <div className="bg-muted/30 flex min-h-52 items-center justify-center">
+            {thumbLoading ? (
+              <Skeleton className="h-52 w-full rounded-none" />
+            ) : thumbnailUrl ? (
+              <img
+                src={thumbnailUrl}
+                alt={node?.name ?? ""}
+                className="max-h-80 w-full object-contain"
+              />
+            ) : (
+              <div className="bg-muted flex h-20 w-20 items-center justify-center rounded-2xl">
+                <FileText className="text-muted-foreground h-10 w-10" />
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Иконка для папок и файлов без миниатюры */}
+        {!isImage && !hasThumbnail && (
           <div className="bg-muted/20 flex items-center justify-center py-10">
             <div className="bg-muted flex h-20 w-20 items-center justify-center rounded-2xl">
               {isFolder ? (

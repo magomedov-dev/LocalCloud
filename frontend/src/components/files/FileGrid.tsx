@@ -7,6 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useThumbnails } from "@/hooks/useThumbnails";
 import { useShareBadges } from "@/hooks/useShareBadges";
 import type { NodeListItem } from "@/types/nodes";
+import type { ItemCapabilities } from "./itemCapabilities";
 import { sortItems } from "./fileListUtils";
 
 export type ViewMode = "grid" | "list";
@@ -41,6 +42,11 @@ interface Props {
   hasNextPage?: boolean;
   isFetchingNextPage?: boolean;
   onLoadMore?: () => void;
+  /**
+   * Возвращает ограничение действий для элемента (вкладка «Доступно мне»).
+   * Если не задано — все действия доступны (собственные файлы).
+   */
+  capabilitiesFor?: (item: NodeListItem) => ItemCapabilities | undefined;
 }
 
 /**
@@ -175,6 +181,7 @@ export function FileGrid({
   hasNextPage = false,
   isFetchingNextPage = false,
   onLoadMore,
+  capabilitiesFor,
 }: Props) {
   const thumbnails = useThumbnails(items);
   const badges = useShareBadges(items);
@@ -215,6 +222,7 @@ export function FileGrid({
               isSelected={selectedIds?.has(item.id) ?? false}
               selectedItems={selectedItems}
               badge={badges.get(item.id)}
+              capabilities={capabilitiesFor?.(item)}
               onSelect={onSelectItem}
               onDrop={onDrop}
             />
@@ -242,6 +250,7 @@ export function FileGrid({
             selectedItems={selectedItems}
             thumbnailUrl={thumbnails.get(item.id)}
             badge={badges.get(item.id)}
+            capabilities={capabilitiesFor?.(item)}
             onSelect={onSelectItem}
             onDrop={onDrop}
           />

@@ -69,11 +69,6 @@ class TestJwtPayloadTokenTypeProperties:
         assert payload.is_refresh_token is True
         assert payload.is_access_token is False
 
-    def test_password_reset_token_is_neither_access_nor_refresh(self) -> None:
-        payload = _make_payload(token_type="password_reset")
-        assert payload.is_access_token is False
-        assert payload.is_refresh_token is False
-
 
 class TestJwtPayloadIsExpiredAt:
     def test_future_token_not_expired(self) -> None:

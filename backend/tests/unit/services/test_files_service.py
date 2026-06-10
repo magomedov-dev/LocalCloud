@@ -10,7 +10,6 @@ import pytest
 from database.models.enums import (
     FilePreviewStatus,
     FileProcessingStatus,
-    FileVersionStatus,
     NodeType,
     NodeVisibility,
     StorageObjectStatus,
@@ -22,10 +21,8 @@ from schemas.files import (
     FileRenameRequest,
     FileSearchQuery,
     FileUpdateRequest,
-    FileVersionRestoreRequest,
 )
 from services.exceptions import (
-    NotFoundServiceError,
     PermissionServiceError,
     ServiceError,
     ValidationServiceError,
@@ -33,14 +30,12 @@ from services.exceptions import (
 from services.files import (
     FileMetadataCreate,
     FilesService,
-    FileVersionCreate,
     _audit_metadata,
     _files_page,
     _jsonable,
     _preview_message,
     _validate_file_sort_field,
     _validate_pagination,
-    _version_storage_key,
     get_files_service,
 )
 
@@ -107,29 +102,11 @@ def make_file_mock(file_id=None, node_id=None, owner_id=None, size_bytes=1024):
     file.storage_status = StorageObjectStatus.AVAILABLE
     file.processing_status = FileProcessingStatus.READY
     file.preview_status = FilePreviewStatus.NOT_REQUIRED
-    file.current_version_id = uuid.uuid4()
     file.created_at = datetime.now(UTC)
     file.updated_at = datetime.now(UTC)
     file.storage_bucket = "files"
     file.storage_key = "key/file.txt"
     return file
-
-
-def make_version_mock(version_id=None, file_id=None):
-    version = MagicMock()
-    version.id = version_id or uuid.uuid4()
-    version.file_id = file_id or uuid.uuid4()
-    version.version_number = 1
-    version.status = FileVersionStatus.ACTIVE
-    version.size_bytes = 1024
-    version.checksum = "abc123"
-    version.checksum_algorithm = "sha256"
-    version.mime_type = "text/plain"
-    version.created_at = datetime.now(UTC)
-    version.created_by = uuid.uuid4()
-    version.change_comment = None
-    version.is_current = True
-    return version
 
 
 def make_access(node=None):
@@ -249,20 +226,14 @@ async def test_create_file_metadata_success():
     owner_id = uuid.uuid4()
     file_id = uuid.uuid4()
     node_id = uuid.uuid4()
-    version_id = uuid.uuid4()
 
     file = make_file_mock(file_id=file_id, node_id=node_id, owner_id=owner_id)
-    version = make_version_mock(version_id=version_id, file_id=file_id)
 
     files_repo = AsyncMock()
     files_repo.create_file_with_node = AsyncMock(return_value=file)
     files_repo.get_required_by_id = AsyncMock(return_value=file)
-    files_repo.update_current_version = AsyncMock()
 
-    versions_repo = AsyncMock()
-    versions_repo.create_version = AsyncMock(return_value=version)
-
-    uow = make_uow(files=files_repo, versions=versions_repo)
+    uow = make_uow(files=files_repo)
     service = make_files_service(uow)
 
     data = FileMetadataCreate(
@@ -314,21 +285,8 @@ def make_files_repo(file=None):
         repo.update_metadata = AsyncMock(return_value=file)
         repo.set_preview_ready = AsyncMock(return_value=file)
         repo.update_preview = AsyncMock(return_value=file)
-    repo.update_current_version = AsyncMock()
     repo.update_storage_info = AsyncMock()
     repo.delete_by_node_id = AsyncMock()
-    return repo
-
-
-def make_versions_repo(version=None):
-    repo = AsyncMock()
-    if version is not None:
-        repo.create_version = AsyncMock(return_value=version)
-        repo.get_required_by_id = AsyncMock(return_value=version)
-        repo.set_current_version = AsyncMock(return_value=version)
-        repo.update_change_comment = AsyncMock(return_value=version)
-        repo.get_versions_by_file_id = AsyncMock(return_value=[version])
-    repo.delete_versions_by_file_id = AsyncMock()
     return repo
 
 
@@ -339,12 +297,10 @@ async def test_create_file_metadata_with_parent_success():
     parent_id = uuid.uuid4()
     parent = make_node_mock(node_id=parent_id, owner_id=owner_id, node_type=NodeType.FOLDER)
     file = make_file_mock(owner_id=owner_id)
-    version = make_version_mock(file_id=file.id)
 
     files_repo = make_files_repo(file)
-    versions_repo = make_versions_repo(version)
     access = make_access(node=parent)
-    uow = make_uow(files=files_repo, versions=versions_repo)
+    uow = make_uow(files=files_repo)
     audit = make_audit()
     service = make_files_service(uow, access_svc=access, audit_svc=audit)
 
@@ -359,7 +315,6 @@ async def test_create_file_metadata_with_parent_success():
 
     assert result is not None
     files_repo.create_file_with_node.assert_called_once()
-    versions_repo.create_version.assert_called_once()
     audit.log_user_event.assert_awaited_once()
 
 
@@ -404,7 +359,7 @@ async def test_create_file_metadata_database_error_wrapped():
     owner_id = uuid.uuid4()
     files_repo = make_files_repo()
     files_repo.create_file_with_node = AsyncMock(side_effect=DatabaseError("boom"))
-    uow = make_uow(files=files_repo, versions=make_versions_repo())
+    uow = make_uow(files=files_repo)
     service = make_files_service(uow)
 
     data = FileMetadataCreate(name="x", storage_bucket="b", storage_key="k", size_bytes=1)
@@ -418,7 +373,7 @@ async def test_create_file_metadata_unexpected_error_wrapped():
     owner_id = uuid.uuid4()
     files_repo = make_files_repo()
     files_repo.create_file_with_node = AsyncMock(side_effect=RuntimeError("kaboom"))
-    uow = make_uow(files=files_repo, versions=make_versions_repo())
+    uow = make_uow(files=files_repo)
     service = make_files_service(uow)
 
     data = FileMetadataCreate(name="x", storage_bucket="b", storage_key="k", size_bytes=1)
@@ -607,22 +562,10 @@ async def test_purge_file_validation_passthrough():
     """purge_file пробрасывает ValidationServiceError для узла, не являющегося файлом."""
     node = make_node_mock(node_type=NodeType.FOLDER)
     access = make_access(node=node)
-    uow = make_uow(files=make_files_repo(), versions=make_versions_repo(), nodes=AsyncMock())
+    uow = make_uow(files=make_files_repo(), nodes=AsyncMock())
     service = make_files_service(uow, access_svc=access)
     with pytest.raises(ValidationServiceError):
         await service.purge_file(node.id, actor_id=uuid.uuid4())
-
-
-@pytest.mark.asyncio
-async def test_create_file_version_validation_passthrough():
-    """create_file_version пробрасывает ValidationServiceError для узла, не являющегося файлом."""
-    node = make_node_mock(node_type=NodeType.FOLDER)
-    access = make_access(node=node)
-    uow = make_uow(files=make_files_repo(), versions=make_versions_repo())
-    service = make_files_service(uow, access_svc=access)
-    data = FileVersionCreate(storage_bucket="b", storage_key="k", size_bytes=1)
-    with pytest.raises(ValidationServiceError):
-        await service.create_file_version(node.id, data, actor_id=uuid.uuid4())
 
 
 @pytest.mark.asyncio
@@ -840,21 +783,19 @@ async def test_restore_file_non_file_node_raises_validation():
 
 @pytest.mark.asyncio
 async def test_purge_file_success():
-    """purge_file удаляет версии, строку файла, помечает узел purged и пишет аудит."""
+    """purge_file удаляет строку файла, помечает узел purged и пишет аудит."""
     node = make_node_mock(node_type=NodeType.FILE)
     file = make_file_mock(node_id=node.id)
     files_repo = make_files_repo(file)
-    versions_repo = make_versions_repo()
     nodes_repo = AsyncMock()
     nodes_repo.mark_purged = AsyncMock()
     access = make_access(node=node)
     audit = make_audit()
-    uow = make_uow(files=files_repo, versions=versions_repo, nodes=nodes_repo)
+    uow = make_uow(files=files_repo, nodes=nodes_repo)
     service = make_files_service(uow, access_svc=access, audit_svc=audit)
 
     result = await service.purge_file(node.id, actor_id=uuid.uuid4())
     assert result is None
-    versions_repo.delete_versions_by_file_id.assert_called_once()
     files_repo.delete_by_node_id.assert_called_once()
     nodes_repo.mark_purged.assert_called_once()
     audit.log_user_event.assert_awaited_once()
@@ -867,7 +808,7 @@ async def test_purge_file_database_error_wrapped():
     files_repo = make_files_repo()
     files_repo.get_required_by_node_id = AsyncMock(side_effect=DatabaseError("db"))
     access = make_access(node=node)
-    uow = make_uow(files=files_repo, versions=make_versions_repo(), nodes=AsyncMock())
+    uow = make_uow(files=files_repo, nodes=AsyncMock())
     service = make_files_service(uow, access_svc=access)
 
     with pytest.raises(ServiceError):
@@ -1016,221 +957,6 @@ async def test_search_files_database_error_wrapped():
     params = FileSearchQuery(limit=10, offset=0)
     with pytest.raises(ServiceError):
         await service.search_files(params, user_id=uuid.uuid4())
-
-
-# ---------------------------------------------------------------------------
-# Тесты: create_file_version
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_create_file_version_make_current_success():
-    """create_file_version создаёт текущую версию и обновляет метаданные файла."""
-    node = make_node_mock(node_type=NodeType.FILE)
-    file = make_file_mock(node_id=node.id)
-    version = make_version_mock(file_id=file.id)
-    files_repo = make_files_repo(file)
-    versions_repo = make_versions_repo(version)
-    access = make_access(node=node)
-    audit = make_audit()
-    uow = make_uow(files=files_repo, versions=versions_repo)
-    service = make_files_service(uow, access_svc=access, audit_svc=audit)
-
-    data = FileVersionCreate(
-        storage_bucket="b", storage_key="k", size_bytes=20, make_current=True
-    )
-    result = await service.create_file_version(node.id, data, actor_id=uuid.uuid4())
-
-    assert result is not None
-    files_repo.update_metadata.assert_called_once()
-    files_repo.update_storage_info.assert_called_once()
-    audit.log_user_event.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_create_file_version_not_current_skips_metadata_update():
-    """create_file_version с make_current False не обновляет метаданные файла."""
-    node = make_node_mock(node_type=NodeType.FILE)
-    file = make_file_mock(node_id=node.id)
-    version = make_version_mock(file_id=file.id)
-    files_repo = make_files_repo(file)
-    versions_repo = make_versions_repo(version)
-    access = make_access(node=node)
-    uow = make_uow(files=files_repo, versions=versions_repo)
-    service = make_files_service(uow, access_svc=access)
-
-    data = FileVersionCreate(
-        storage_bucket="b", storage_key="k", size_bytes=20, make_current=False
-    )
-    result = await service.create_file_version(node.id, data, actor_id=uuid.uuid4())
-
-    assert result is not None
-    files_repo.update_metadata.assert_not_called()
-    files_repo.update_storage_info.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_create_file_version_database_error_wrapped():
-    """create_file_version преобразует DatabaseError в ServiceError."""
-    node = make_node_mock(node_type=NodeType.FILE)
-    file = make_file_mock(node_id=node.id)
-    files_repo = make_files_repo(file)
-    versions_repo = make_versions_repo()
-    versions_repo.create_version = AsyncMock(side_effect=DatabaseError("db"))
-    access = make_access(node=node)
-    uow = make_uow(files=files_repo, versions=versions_repo)
-    service = make_files_service(uow, access_svc=access)
-
-    data = FileVersionCreate(storage_bucket="b", storage_key="k", size_bytes=1)
-    with pytest.raises(ServiceError):
-        await service.create_file_version(node.id, data, actor_id=uuid.uuid4())
-
-
-# ---------------------------------------------------------------------------
-# Тесты: list_versions
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_list_versions_success():
-    """list_versions возвращает постраничный список версий."""
-    node = make_node_mock(node_type=NodeType.FILE)
-    file = make_file_mock(node_id=node.id)
-    version = make_version_mock(file_id=file.id)
-    files_repo = make_files_repo(file)
-    versions_repo = make_versions_repo(version)
-    access = make_access(node=node)
-    uow = make_uow(files=files_repo, versions=versions_repo)
-    service = make_files_service(uow, access_svc=access)
-
-    page = await service.list_versions(node.id, user_id=uuid.uuid4(), limit=10, offset=0)
-    assert page.meta.total == 1
-    assert page.meta.count == 1
-
-
-@pytest.mark.asyncio
-async def test_list_versions_invalid_limit_raises_validation():
-    """list_versions вызывает ValidationServiceError для limit вне диапазона."""
-    uow = make_uow(files=make_files_repo(), versions=make_versions_repo())
-    service = make_files_service(uow)
-
-    with pytest.raises(ValidationServiceError):
-        await service.list_versions(uuid.uuid4(), user_id=uuid.uuid4(), limit=0, offset=0)
-
-
-@pytest.mark.asyncio
-async def test_list_versions_negative_offset_raises_validation():
-    """list_versions вызывает ValidationServiceError для отрицательного offset."""
-    uow = make_uow(files=make_files_repo(), versions=make_versions_repo())
-    service = make_files_service(uow)
-
-    with pytest.raises(ValidationServiceError):
-        await service.list_versions(uuid.uuid4(), user_id=uuid.uuid4(), limit=10, offset=-1)
-
-
-# ---------------------------------------------------------------------------
-# Тесты: restore_version
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_restore_version_success():
-    """restore_version делает версию текущей и обновляет файл."""
-    node = make_node_mock(node_type=NodeType.FILE)
-    file = make_file_mock(node_id=node.id)
-    version = make_version_mock(file_id=file.id)
-    version.storage_bucket = "b"
-    version.storage_key = "k"
-    files_repo = make_files_repo(file)
-    versions_repo = make_versions_repo(version)
-    access = make_access(node=node)
-    audit = make_audit()
-    uow = make_uow(files=files_repo, versions=versions_repo)
-    service = make_files_service(uow, access_svc=access, audit_svc=audit)
-
-    data = FileVersionRestoreRequest(version_id=version.id, change_comment="restore it")
-    result = await service.restore_version(node.id, data, actor_id=uuid.uuid4())
-
-    assert result is not None
-    versions_repo.set_current_version.assert_called_once()
-    versions_repo.update_change_comment.assert_called_once()
-    files_repo.update_storage_info.assert_called_once()
-    files_repo.update_metadata.assert_called_once()
-    audit.log_user_event.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_restore_version_without_comment_skips_update_comment():
-    """restore_version без комментария не вызывает update_change_comment."""
-    node = make_node_mock(node_type=NodeType.FILE)
-    file = make_file_mock(node_id=node.id)
-    version = make_version_mock(file_id=file.id)
-    version.storage_bucket = "b"
-    version.storage_key = "k"
-    files_repo = make_files_repo(file)
-    versions_repo = make_versions_repo(version)
-    access = make_access(node=node)
-    uow = make_uow(files=files_repo, versions=versions_repo)
-    service = make_files_service(uow, access_svc=access)
-
-    data = FileVersionRestoreRequest(version_id=version.id)
-    result = await service.restore_version(node.id, data, actor_id=uuid.uuid4())
-
-    assert result is not None
-    versions_repo.update_change_comment.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_restore_version_file_mismatch_raises_validation():
-    """restore_version вызывает ValidationServiceError, когда версия принадлежит другому файлу."""
-    node = make_node_mock(node_type=NodeType.FILE)
-    file = make_file_mock(node_id=node.id)
-    version = make_version_mock(file_id=uuid.uuid4())  # другой файл
-    files_repo = make_files_repo(file)
-    versions_repo = make_versions_repo(version)
-    access = make_access(node=node)
-    uow = make_uow(files=files_repo, versions=versions_repo)
-    service = make_files_service(uow, access_svc=access)
-
-    data = FileVersionRestoreRequest(version_id=version.id)
-    with pytest.raises(ValidationServiceError):
-        await service.restore_version(node.id, data, actor_id=uuid.uuid4())
-
-
-@pytest.mark.asyncio
-async def test_restore_version_deleted_version_raises_validation():
-    """restore_version вызывает ValidationServiceError для удалённой версии."""
-    node = make_node_mock(node_type=NodeType.FILE)
-    file = make_file_mock(node_id=node.id)
-    version = make_version_mock(file_id=file.id)
-    version.status = FileVersionStatus.DELETED
-    files_repo = make_files_repo(file)
-    versions_repo = make_versions_repo(version)
-    access = make_access(node=node)
-    uow = make_uow(files=files_repo, versions=versions_repo)
-    service = make_files_service(uow, access_svc=access)
-
-    data = FileVersionRestoreRequest(version_id=version.id)
-    with pytest.raises(ValidationServiceError):
-        await service.restore_version(node.id, data, actor_id=uuid.uuid4())
-
-
-@pytest.mark.asyncio
-async def test_restore_version_database_error_wrapped():
-    """restore_version преобразует DatabaseError в ServiceError."""
-    node = make_node_mock(node_type=NodeType.FILE)
-    file = make_file_mock(node_id=node.id)
-    version = make_version_mock(file_id=file.id)
-    files_repo = make_files_repo(file)
-    versions_repo = make_versions_repo(version)
-    versions_repo.get_required_by_id = AsyncMock(side_effect=DatabaseError("db"))
-    access = make_access(node=node)
-    uow = make_uow(files=files_repo, versions=versions_repo)
-    service = make_files_service(uow, access_svc=access)
-
-    data = FileVersionRestoreRequest(version_id=version.id)
-    with pytest.raises(ServiceError):
-        await service.restore_version(node.id, data, actor_id=uuid.uuid4())
 
 
 # ---------------------------------------------------------------------------
@@ -1445,7 +1171,6 @@ async def test_safe_log_file_event_with_metadata():
         "storage_status": file.storage_status,
         "processing_status": file.processing_status,
         "preview_status": file.preview_status,
-        "current_version_id": file.current_version_id,
         "node": {
             "name": "f.txt",
             "path": "/f.txt",
@@ -1497,10 +1222,6 @@ def test_validate_pagination_bad_offset():
         _validate_pagination(limit=10, offset=-1)
 
 
-def test_version_storage_key():
-    assert _version_storage_key("a/b.txt") == "a/b.txt.v1"
-
-
 def test_preview_message_all_statuses():
     for status in FilePreviewStatus:
         file = MagicMock()
@@ -1540,7 +1261,6 @@ def test_audit_metadata_without_node():
         "storage_status": StorageObjectStatus.AVAILABLE,
         "processing_status": FileProcessingStatus.READY,
         "preview_status": FilePreviewStatus.READY,
-        "current_version_id": uuid.uuid4(),
         "node": None,
     }
     metadata = _audit_metadata(snapshot)
@@ -1656,64 +1376,10 @@ async def test_purge_file_unexpected_error_wrapped():
     files_repo = make_files_repo()
     files_repo.get_required_by_node_id = AsyncMock(side_effect=RuntimeError("boom"))
     access = make_access(node=node)
-    uow = make_uow(files=files_repo, versions=make_versions_repo(), nodes=AsyncMock())
+    uow = make_uow(files=files_repo, nodes=AsyncMock())
     service = make_files_service(uow, access_svc=access)
     with pytest.raises(ServiceError):
         await service.purge_file(node.id, actor_id=uuid.uuid4())
-
-
-@pytest.mark.asyncio
-async def test_create_file_version_unexpected_error_wrapped():
-    node = make_node_mock(node_type=NodeType.FILE)
-    file = make_file_mock(node_id=node.id)
-    versions_repo = make_versions_repo()
-    versions_repo.create_version = AsyncMock(side_effect=RuntimeError("boom"))
-    access = make_access(node=node)
-    uow = make_uow(files=make_files_repo(file), versions=versions_repo)
-    service = make_files_service(uow, access_svc=access)
-    data = FileVersionCreate(storage_bucket="b", storage_key="k", size_bytes=1)
-    with pytest.raises(ServiceError):
-        await service.create_file_version(node.id, data, actor_id=uuid.uuid4())
-
-
-@pytest.mark.asyncio
-async def test_list_versions_unexpected_error_wrapped():
-    node = make_node_mock(node_type=NodeType.FILE)
-    file = make_file_mock(node_id=node.id)
-    versions_repo = make_versions_repo()
-    versions_repo.get_versions_by_file_id = AsyncMock(side_effect=RuntimeError("boom"))
-    access = make_access(node=node)
-    uow = make_uow(files=make_files_repo(file), versions=versions_repo)
-    service = make_files_service(uow, access_svc=access)
-    with pytest.raises(ServiceError):
-        await service.list_versions(node.id, user_id=uuid.uuid4())
-
-
-@pytest.mark.asyncio
-async def test_list_versions_database_error_wrapped():
-    node = make_node_mock(node_type=NodeType.FILE)
-    file = make_file_mock(node_id=node.id)
-    versions_repo = make_versions_repo()
-    versions_repo.get_versions_by_file_id = AsyncMock(side_effect=DatabaseError("db"))
-    access = make_access(node=node)
-    uow = make_uow(files=make_files_repo(file), versions=versions_repo)
-    service = make_files_service(uow, access_svc=access)
-    with pytest.raises(ServiceError):
-        await service.list_versions(node.id, user_id=uuid.uuid4())
-
-
-@pytest.mark.asyncio
-async def test_restore_version_unexpected_error_wrapped():
-    node = make_node_mock(node_type=NodeType.FILE)
-    file = make_file_mock(node_id=node.id)
-    versions_repo = make_versions_repo()
-    versions_repo.get_required_by_id = AsyncMock(side_effect=RuntimeError("boom"))
-    access = make_access(node=node)
-    uow = make_uow(files=make_files_repo(file), versions=versions_repo)
-    service = make_files_service(uow, access_svc=access)
-    data = FileVersionRestoreRequest(version_id=uuid.uuid4())
-    with pytest.raises(ServiceError):
-        await service.restore_version(node.id, data, actor_id=uuid.uuid4())
 
 
 @pytest.mark.asyncio
@@ -1726,25 +1392,6 @@ async def test_get_preview_unexpected_error_wrapped():
     service = make_files_service(uow, access_svc=access)
     with pytest.raises(ServiceError):
         await service.get_preview(node.id, user_id=uuid.uuid4())
-
-
-@pytest.mark.asyncio
-async def test_create_file_version_database_then_get_required_error():
-    """create_file_version: ошибка БД при повторной загрузке файла оборачивается."""
-    node = make_node_mock(node_type=NodeType.FILE)
-    file = make_file_mock(node_id=node.id)
-    version = make_version_mock(file_id=file.id)
-    files_repo = make_files_repo(file)
-    files_repo.get_required_by_id = AsyncMock(side_effect=DatabaseError("db"))
-    versions_repo = make_versions_repo(version)
-    access = make_access(node=node)
-    uow = make_uow(files=files_repo, versions=versions_repo)
-    service = make_files_service(uow, access_svc=access)
-    data = FileVersionCreate(
-        storage_bucket="b", storage_key="k", size_bytes=1, make_current=False
-    )
-    with pytest.raises(ServiceError):
-        await service.create_file_version(node.id, data, actor_id=uuid.uuid4())
 
 
 def test_get_files_service_with_dependency_returns_new_instance():

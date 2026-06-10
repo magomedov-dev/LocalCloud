@@ -1,7 +1,8 @@
-import { THUMBNAIL_URL_TTL_MS } from "@/lib/constants";
+import { THUMBNAIL_NEGATIVE_TTL_MS, THUMBNAIL_URL_TTL_MS } from "@/lib/constants";
 
 const PREFIX = "lc:thumb:";
 const TTL_MS = THUMBNAIL_URL_TTL_MS;
+const NEGATIVE_TTL_MS = THUMBNAIL_NEGATIVE_TTL_MS;
 
 /**
  * Возвращает сохранённое значение thumbnail URL из `sessionStorage`.
@@ -31,13 +32,18 @@ export function getThumbnailCache(id: string): string | null | undefined {
     }
 
     const ts = Number(raw.slice(0, sep));
-    if (!Number.isFinite(ts) || Date.now() - ts > TTL_MS) {
+    const url = raw.slice(sep + 1);
+    const value = url === "" ? null : url;
+    // Отрицательный результат (превью ещё нет) живёт коротко — оно может вот-вот
+    // появиться; положительный URL — весь срок жизни presigned-ссылки.
+    const ttl = value === null ? NEGATIVE_TTL_MS : TTL_MS;
+
+    if (!Number.isFinite(ts) || Date.now() - ts > ttl) {
       sessionStorage.removeItem(PREFIX + id);
       return undefined;
     }
 
-    const url = raw.slice(sep + 1);
-    return url === "" ? null : url;
+    return value;
   } catch {
     return undefined;
   }

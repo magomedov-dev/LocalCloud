@@ -17,7 +17,7 @@ from database.models.enums import (
     NodeType,
     TrashItemStatus,
 )
-from database.models.filesystem import File, FileSystemNode, FileVersion, TrashItem
+from database.models.filesystem import File, FileSystemNode, TrashItem
 from schemas.common import PageMeta, PageResponse
 from schemas.nodes import NodeListItem
 from schemas.trash import (
@@ -1260,13 +1260,13 @@ async def _build_purge_plan(*, uow: Any, trash_item: TrashItem) -> PurgePlan:
 
 
 def _file_storage_objects(file: File) -> list[StorageObjectRef]:
-    """Возвращает объекты хранилища файла и его версий.
+    """Возвращает объекты хранилища файла.
 
     Args:
         file: ORM-модель файла.
 
     Returns:
-        Список ссылок на физические объекты файла и его версий.
+        Список ссылок на физические объекты файла.
     """
 
     refs: list[StorageObjectRef] = []
@@ -1274,27 +1274,7 @@ def _file_storage_objects(file: File) -> list[StorageObjectRef]:
         refs.append(
             StorageObjectRef(bucket=file.storage_bucket, object_key=file.storage_key)
         )
-    for version in file.versions:
-        refs.extend(_version_storage_objects(version))
     return refs
-
-
-def _version_storage_objects(version: FileVersion) -> list[StorageObjectRef]:
-    """Возвращает объект хранилища версии файла.
-
-    Args:
-        version: ORM-модель версии файла.
-
-    Returns:
-        Список из одной ссылки на объект версии или пустой список, если
-        storage_key отсутствует.
-    """
-
-    if not version.storage_key:
-        return []
-    return [
-        StorageObjectRef(bucket=version.storage_bucket, object_key=version.storage_key)
-    ]
 
 
 def _validate_sort_field(sort_by: str) -> str:

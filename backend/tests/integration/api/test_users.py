@@ -7,12 +7,11 @@ from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock
 
-import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
 from api.dependencies import get_users_service_dependency
-from database.models.enums import UserStatus
+from database.models.enums import SystemRole, UserStatus
 from security.dependencies.users import get_current_active_user, get_current_admin_user
 from tests.integration.conftest import API_V1, _make_mock_user
 
@@ -30,7 +29,6 @@ def _user_read_dict(user_id: uuid.UUID | None = None) -> dict[str, Any]:
         "email": "user@example.com",
         "username": "testuser",
         "status": "active",
-        "is_email_verified": True,
         "last_login_at": None,
         "approved_at": None,
         "blocked_at": None,
@@ -45,7 +43,7 @@ def _user_read_dict(user_id: uuid.UUID | None = None) -> dict[str, Any]:
 
 def _user_with_roles_dict(user_id: uuid.UUID | None = None) -> dict[str, Any]:
     data = _user_read_dict(user_id)
-    data["roles"] = []
+    data["role"] = "user"
     return data
 
 
@@ -58,8 +56,7 @@ def _page_response(items: list[Any]) -> dict[str, Any]:
 
 
 def _make_admin() -> Any:
-    role = object.__new__(type("Role", (), {"code": "admin", "name": "admin"}))
-    return _make_mock_user(roles=[role])
+    return _make_mock_user(role=SystemRole.ADMIN)
 
 
 # ---------------------------------------------------------------------------
@@ -77,8 +74,7 @@ class TestGetMe:
             email=mock_user.email,
             username=mock_user.username,
             status=UserStatus.ACTIVE,
-            is_email_verified=True,
-            roles=[],
+            role=SystemRole.USER,
         )
 
         mock_svc = AsyncMock()
@@ -242,7 +238,6 @@ class TestDeleteUser:
 class TestUpdateMe:
     def test_update_me_returns_200(self) -> None:
         mock_user = _make_mock_user()
-        now = datetime.now(tz=timezone.utc).isoformat()
         user_read = _user_read_dict(mock_user.id)
 
         mock_svc = AsyncMock()

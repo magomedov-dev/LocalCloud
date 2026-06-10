@@ -10,6 +10,7 @@ import pytest
 from database import DatabaseError
 from database.models.enums import AuditAction, NodeType, NodeVisibility
 from schemas.nodes import (
+    NodeCopyRequest,
     NodeCreate,
     NodeMoveRequest,
     NodeQueryParams,
@@ -19,6 +20,7 @@ from schemas.nodes import (
 )
 from services.exceptions import (
     PermissionServiceError,
+    QuotaExceededServiceError,
     ServiceError,
     ValidationServiceError,
 )
@@ -35,6 +37,7 @@ from services.nodes import (
     _normalize_datetime,
     _normalize_sort_by,
     _sort_direction,
+    _unique_copy_name,
     get_nodes_service,
 )
 
@@ -1524,3 +1527,334 @@ async def test_list_nodes_slow_path_with_parent_get_children():
 
     assert result.meta.total == 1
     nodes_repo.get_children.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Тесты: _unique_copy_name
+# ---------------------------------------------------------------------------
+
+
+def test_unique_copy_name_no_conflict_returns_desired():
+    """_unique_copy_name возвращает исходное имя без конфликта."""
+    assert _unique_copy_name(set(), "report.pdf", is_file=True) == "report.pdf"
+
+
+def test_unique_copy_name_file_preserves_extension():
+    """_unique_copy_name сохраняет расширение файла при конфликте."""
+    assert (
+        _unique_copy_name({"report.pdf"}, "report.pdf", is_file=True)
+        == "report (копия).pdf"
+    )
+
+
+def test_unique_copy_name_folder_appends_suffix():
+    """_unique_copy_name добавляет суффикс к имени папки при конфликте."""
+    assert _unique_copy_name({"docs"}, "docs", is_file=False) == "docs (копия)"
+
+
+def test_unique_copy_name_increments_counter():
+    """_unique_copy_name увеличивает счётчик при множественных конфликтах."""
+    existing = {"docs", "docs (копия)"}
+    assert _unique_copy_name(existing, "docs", is_file=False) == "docs (копия 2)"
+
+
+# ---------------------------------------------------------------------------
+# Тесты: copy_node
+# ---------------------------------------------------------------------------
+
+
+def make_file_node_mock(node_id=None, owner_id=None, name="file.txt", parent_id=None):
+    return make_node_mock(
+        node_id=node_id,
+        owner_id=owner_id,
+        node_type=NodeType.FILE,
+        name=name,
+        parent_id=parent_id,
+    )
+
+
+def make_file_row(
+    *,
+    size_bytes=10,
+    mime_type="text/plain",
+    bucket="files",
+    key="users/x/files/a/versions/b",
+):
+    row = MagicMock()
+    row.storage_bucket = bucket
+    row.storage_key = key
+    row.size_bytes = size_bytes
+    row.mime_type = mime_type
+    row.extension = "txt"
+    row.checksum = "abc"
+    row.checksum_algorithm = "sha256"
+    return row
+
+
+def make_quota_mock(
+    *, available=1000, files_limit=None, files_used=0, used=0, limit=1000
+):
+    quota = MagicMock()
+    quota.available_storage_bytes = available
+    quota.files_limit = files_limit
+    quota.files_used = files_used
+    quota.storage_used_bytes = used
+    quota.storage_limit_bytes = limit
+    return quota
+
+
+def make_files_repo(*, file_rows=None, created_node_id=None):
+    repo = AsyncMock()
+    if file_rows is not None:
+        repo.get_required_by_node_id = AsyncMock(
+            side_effect=lambda node_id: file_rows[node_id]
+        )
+    else:
+        repo.get_required_by_node_id = AsyncMock()
+    created = MagicMock()
+    created.id = uuid.uuid4()
+    created.node_id = created_node_id or uuid.uuid4()
+    repo.create_file_with_node = AsyncMock(return_value=created)
+    return repo
+
+
+def make_quotas_repo(quota):
+    repo = AsyncMock()
+    repo.get_required_by_user_id = AsyncMock(return_value=quota)
+    repo.increase_used_space = AsyncMock()
+    repo.increase_files_used = AsyncMock()
+    return repo
+
+
+def make_storage():
+    svc = MagicMock()
+    svc.copy_file_object = AsyncMock()
+    svc.delete_file_object = AsyncMock()
+    return svc
+
+
+def make_copy_service(uow, storage, access_svc=None, audit_svc=None):
+    return NodesService(
+        uow_factory=make_factory(uow),
+        access_service=access_svc or make_access(),
+        audit_service=audit_svc or make_audit(),
+        storage_service=storage,
+    )
+
+
+@pytest.mark.asyncio
+async def test_copy_node_single_file():
+    """copy_node для одиночного файла копирует объект и создаёт файл."""
+    actor_id = uuid.uuid4()
+    file_node_id = uuid.uuid4()
+    file_node = make_file_node_mock(
+        node_id=file_node_id, owner_id=actor_id, name="report.txt"
+    )
+    file_row = make_file_row(size_bytes=42)
+
+    nodes_repo = make_nodes_repo()
+    nodes_repo.get_descendants = AsyncMock(return_value=[file_node])
+    nodes_repo.get_root_nodes = AsyncMock(return_value=[])
+    new_node = make_file_node_mock(owner_id=actor_id, name="report.txt")
+    nodes_repo.get_required_by_id = AsyncMock(return_value=new_node)
+
+    new_file_node_id = uuid.uuid4()
+    files_repo = make_files_repo(
+        file_rows={file_node_id: file_row}, created_node_id=new_file_node_id
+    )
+    quotas_repo = make_quotas_repo(make_quota_mock(available=1000))
+    storage = make_storage()
+
+    uow = make_uow(
+        nodes=nodes_repo,
+        files=files_repo,
+        quotas=quotas_repo,
+    )
+    audit = make_audit()
+    service = make_copy_service(uow, storage, audit_svc=audit)
+
+    result = await service.copy_node(
+        file_node_id, NodeCopyRequest(target_parent_id=None), actor_id=actor_id
+    )
+
+    assert result.success is True
+    storage.copy_file_object.assert_awaited_once()
+    files_repo.create_file_with_node.assert_awaited_once()
+    quotas_repo.increase_used_space.assert_awaited_once()
+    quotas_repo.increase_files_used.assert_awaited_once()
+    audit.log_user_event.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_copy_node_folder_with_child_file():
+    """copy_node рекурсивно копирует папку с дочерним файлом."""
+    actor_id = uuid.uuid4()
+    folder_id = uuid.uuid4()
+    child_id = uuid.uuid4()
+    folder = make_node_mock(
+        node_id=folder_id, owner_id=actor_id, node_type=NodeType.FOLDER, name="docs"
+    )
+    child = make_file_node_mock(
+        node_id=child_id, owner_id=actor_id, name="a.txt", parent_id=folder_id
+    )
+    file_row = make_file_row(size_bytes=5)
+
+    nodes_repo = make_nodes_repo()
+    nodes_repo.get_descendants = AsyncMock(return_value=[folder, child])
+    nodes_repo.get_root_nodes = AsyncMock(return_value=[])
+    new_folder = MagicMock(node_id=uuid.uuid4())
+    nodes_repo.get_required_by_id = AsyncMock(
+        return_value=make_node_mock(owner_id=actor_id, node_type=NodeType.FOLDER)
+    )
+    folders_repo = AsyncMock()
+    folders_repo.get_required_by_node_id = AsyncMock(
+        return_value=MagicMock(description=None, color=None)
+    )
+    folders_repo.create_folder = AsyncMock(return_value=new_folder)
+
+    files_repo = make_files_repo(file_rows={child_id: file_row})
+    quotas_repo = make_quotas_repo(make_quota_mock(available=1000))
+    storage = make_storage()
+
+    uow = make_uow(
+        nodes=nodes_repo,
+        folders=folders_repo,
+        files=files_repo,
+        quotas=quotas_repo,
+    )
+    service = make_copy_service(uow, storage)
+
+    result = await service.copy_node(
+        folder_id, NodeCopyRequest(target_parent_id=None), actor_id=actor_id
+    )
+
+    assert result.success is True
+    folders_repo.create_folder.assert_awaited_once()
+    files_repo.create_file_with_node.assert_awaited_once()
+    storage.copy_file_object.assert_awaited_once()
+    # Дочерний файл создаётся под новой папкой (по её node_id).
+    _, kwargs = files_repo.create_file_with_node.call_args
+    assert kwargs["parent_id"] == new_folder.node_id
+
+
+@pytest.mark.asyncio
+async def test_copy_node_quota_exceeded():
+    """copy_node при превышении квоты выбрасывает QuotaExceededServiceError."""
+    actor_id = uuid.uuid4()
+    file_node_id = uuid.uuid4()
+    file_node = make_file_node_mock(node_id=file_node_id, owner_id=actor_id)
+    file_row = make_file_row(size_bytes=500)
+
+    nodes_repo = make_nodes_repo()
+    nodes_repo.get_descendants = AsyncMock(return_value=[file_node])
+
+    files_repo = make_files_repo(file_rows={file_node_id: file_row})
+    quotas_repo = make_quotas_repo(make_quota_mock(available=100))
+    storage = make_storage()
+
+    uow = make_uow(
+        nodes=nodes_repo,
+        files=files_repo,
+        quotas=quotas_repo,
+    )
+    service = make_copy_service(uow, storage)
+
+    with pytest.raises(QuotaExceededServiceError):
+        await service.copy_node(
+            file_node_id, NodeCopyRequest(target_parent_id=None), actor_id=actor_id
+        )
+
+    storage.copy_file_object.assert_not_awaited()
+    uow.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_copy_node_name_conflict_renames_root():
+    """copy_node переименовывает корень при конфликте имени в целевой папке."""
+    actor_id = uuid.uuid4()
+    folder_id = uuid.uuid4()
+    folder = make_node_mock(
+        node_id=folder_id, owner_id=actor_id, node_type=NodeType.FOLDER, name="docs"
+    )
+
+    existing = make_node_mock(owner_id=actor_id, name="docs")
+    nodes_repo = make_nodes_repo()
+    nodes_repo.get_descendants = AsyncMock(return_value=[folder])
+    nodes_repo.get_root_nodes = AsyncMock(return_value=[existing])
+    nodes_repo.get_required_by_id = AsyncMock(
+        return_value=make_node_mock(owner_id=actor_id, node_type=NodeType.FOLDER)
+    )
+    folders_repo = AsyncMock()
+    folders_repo.get_required_by_node_id = AsyncMock(
+        return_value=MagicMock(description=None, color=None)
+    )
+    folders_repo.create_folder = AsyncMock(
+        return_value=MagicMock(node_id=uuid.uuid4())
+    )
+
+    files_repo = make_files_repo(file_rows={})
+    quotas_repo = make_quotas_repo(make_quota_mock(available=1000))
+    storage = make_storage()
+
+    uow = make_uow(
+        nodes=nodes_repo,
+        folders=folders_repo,
+        files=files_repo,
+        quotas=quotas_repo,
+    )
+    service = make_copy_service(uow, storage)
+
+    await service.copy_node(
+        folder_id, NodeCopyRequest(target_parent_id=None), actor_id=actor_id
+    )
+
+    _, kwargs = folders_repo.create_folder.call_args
+    assert kwargs["name"] == "docs (копия)"
+
+
+@pytest.mark.asyncio
+async def test_copy_node_storage_failure_rolls_back_objects():
+    """copy_node при ошибке хранилища удаляет уже скопированные объекты."""
+    actor_id = uuid.uuid4()
+    folder_id = uuid.uuid4()
+    child1_id = uuid.uuid4()
+    child2_id = uuid.uuid4()
+    folder = make_node_mock(
+        node_id=folder_id, owner_id=actor_id, node_type=NodeType.FOLDER, name="docs"
+    )
+    child1 = make_file_node_mock(
+        node_id=child1_id, owner_id=actor_id, name="a.txt", parent_id=folder_id
+    )
+    child2 = make_file_node_mock(
+        node_id=child2_id, owner_id=actor_id, name="b.txt", parent_id=folder_id
+    )
+    row1 = make_file_row(size_bytes=5, key="users/x/files/1/versions/1")
+    row2 = make_file_row(size_bytes=5, key="users/x/files/2/versions/2")
+
+    nodes_repo = make_nodes_repo()
+    nodes_repo.get_descendants = AsyncMock(return_value=[folder, child1, child2])
+    nodes_repo.get_root_nodes = AsyncMock(return_value=[])
+    new_folder = make_node_mock(owner_id=actor_id, node_type=NodeType.FOLDER)
+    nodes_repo.create_folder_node = AsyncMock(return_value=new_folder)
+
+    files_repo = make_files_repo(file_rows={child1_id: row1, child2_id: row2})
+    quotas_repo = make_quotas_repo(make_quota_mock(available=1000))
+    storage = make_storage()
+    # Первый файл копируется успешно, второй падает.
+    storage.copy_file_object = AsyncMock(side_effect=[None, RuntimeError("boom")])
+
+    uow = make_uow(
+        nodes=nodes_repo,
+        files=files_repo,
+        quotas=quotas_repo,
+    )
+    service = make_copy_service(uow, storage)
+
+    with pytest.raises(ServiceError):
+        await service.copy_node(
+            folder_id, NodeCopyRequest(target_parent_id=None), actor_id=actor_id
+        )
+
+    # Уже скопированный объект первого файла удаляется best-effort.
+    storage.delete_file_object.assert_awaited_once()
+    uow.commit.assert_not_awaited()

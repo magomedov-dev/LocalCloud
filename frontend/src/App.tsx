@@ -2,11 +2,10 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "@/contexts/auth";
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 import { LoginPage } from "@/pages/Login";
-import { ForgotPasswordPage } from "@/pages/ForgotPassword";
-import { ResetPasswordPage } from "@/pages/ResetPassword";
 import { RegisterPage } from "@/pages/Register";
 import { FilesPage } from "@/pages/Files";
 import { TrashPage } from "@/pages/Trash";
+import { SharedPage } from "@/pages/Shared";
 import { SharePage } from "@/pages/Share";
 import { AdminLayout } from "@/pages/admin/AdminLayout";
 import { UsersPage } from "@/pages/admin/UsersPage";
@@ -22,8 +21,6 @@ function App() {
         {/* Публичные маршруты */}
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
-        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-        <Route path="/reset-password" element={<ResetPasswordPage />} />
         <Route path="/share/:token" element={<SharePage />} />
 
         {/* Protected — all wrapped in AppShell */}
@@ -36,6 +33,7 @@ function App() {
         >
           <Route path="/files" element={<FilesPage />} />
           <Route path="/files/folders/:nodeId" element={<FilesPage />} />
+          <Route path="/shared" element={<SharedPage />} />
           <Route path="/trash" element={<TrashPage />} />
 
           {/* Административные маршруты */}

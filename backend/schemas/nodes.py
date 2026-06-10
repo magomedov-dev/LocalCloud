@@ -212,6 +212,52 @@ class NodeMoveRequest(BaseSchema):
     )
 
 
+class NodeCopyRequest(BaseSchema):
+    """Запрос на копирование (дублирование) узла файловой системы.
+
+    Используется для создания независимой копии файла или папки в указанной
+    целевой папке либо в корне файловой системы. При копировании папки её
+    содержимое копируется рекурсивно.
+
+    Attributes:
+        target_parent_id: Идентификатор целевой родительской папки. ``None``
+            означает копирование в корень.
+        new_name: Необязательное новое имя корневого узла копии. Если ``None``,
+            используется имя исходного узла.
+    """
+
+    target_parent_id: UUID | None = Field(
+        default=None,
+        description="Идентификатор целевой родительской папки. None означает копирование в корень.",
+    )
+    new_name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=255,
+        description="Новое имя корневого узла копии. None означает использование исходного имени.",
+    )
+
+    @field_validator("new_name")
+    @classmethod
+    def validate_new_name(cls, value: str | None) -> str | None:
+        """Проверяет необязательное новое имя копии узла.
+
+        Args:
+            value: Новое имя узла или ``None``.
+
+        Returns:
+            Нормализованное имя узла или ``None``, если имя не задано.
+
+        Raises:
+            ValueError: Если имя узла не проходит правила валидации.
+        """
+
+        if value is None:
+            return None
+
+        return validate_node_name(value)
+
+
 class NodeRead(BaseSchema):
     """Полное представление узла файловой системы.
 

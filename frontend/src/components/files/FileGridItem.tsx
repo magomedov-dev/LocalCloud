@@ -13,7 +13,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import type { NodeListItem } from "@/types/nodes";
 import type { SelectOpts } from "./FileGrid";
 import type { ShareBadge } from "@/hooks/useShareBadges";
+import type { ItemCapabilities } from "./itemCapabilities";
 import { cn } from "@/lib/utils";
+import { thumbnailSupported } from "@/lib/preview";
 import { queryClient } from "@/lib/query-client";
 import { nodesApi } from "@/api/nodes";
 import { FOLDER_PAGE_SIZE, folderQueryKey } from "@/hooks/useFileBrowser";
@@ -62,6 +64,7 @@ interface Props {
   /** undefined = still loading | null = failed | string = presigned URL */
   thumbnailUrl?: string | null;
   badge?: ShareBadge;
+  capabilities?: ItemCapabilities;
   onSelect?: (item: NodeListItem, opts: SelectOpts) => void;
   onDrop?: (draggedId: string, targetFolderId: string) => void;
 }
@@ -95,6 +98,7 @@ export function FileGridItem({
   selectedItems,
   thumbnailUrl,
   badge,
+  capabilities,
   onSelect,
   onDrop,
 }: Props) {
@@ -107,7 +111,8 @@ export function FileGridItem({
     item.node_type === "folder" ? getFolderColor(item.id) : null,
   );
 
-  const isImage = item.node_type === "file" && !!mimeType?.startsWith("image/");
+  const hasThumbnail =
+    item.node_type === "file" && thumbnailSupported(mimeType ?? item.file_mime_type);
   const canPreview =
     item.node_type === "file" && !!detectPreviewKind(item.name, mimeType ?? item.file_mime_type);
 
@@ -155,6 +160,7 @@ export function FileGridItem({
         selectedItems={selectedItems}
         onSelect={onSelect}
         onPreview={canPreview ? () => setPreviewOpen(true) : undefined}
+        capabilities={capabilities}
       >
         <div
           className={cn(
@@ -203,7 +209,7 @@ export function FileGridItem({
         >
           {/* Область предпросмотра / иконки */}
           <div className="bg-muted/30 relative flex h-24 w-full items-center justify-center">
-            {isImage ? (
+            {hasThumbnail ? (
               thumbnailUrl === undefined ? (
                 <Skeleton className="h-full w-full rounded-none" />
               ) : thumbnailUrl ? (
@@ -287,6 +293,7 @@ export function FileGridItem({
               onColorChange={handleColorChange}
               onOpenChange={setMenuOpen}
               onPreview={canPreview ? () => setPreviewOpen(true) : undefined}
+              capabilities={capabilities}
             />
           </div>
         </div>

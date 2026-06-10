@@ -43,7 +43,6 @@ class FileStorageInfo(TypedDict):
         processing_status: Статус обработки файла.
         preview_status: Статус предпросмотра файла.
         preview_storage_key: Ключ предпросмотра в объектном хранилище.
-        current_version_id: Идентификатор текущей версии файла.
     """
 
     storage_bucket: str
@@ -57,7 +56,6 @@ class FileStorageInfo(TypedDict):
     processing_status: FileProcessingStatus
     preview_status: FilePreviewStatus
     preview_storage_key: str | None
-    current_version_id: uuid.UUID | None
 
 
 class FileRepository(BaseRepository[File]):
@@ -113,8 +111,6 @@ class FileRepository(BaseRepository[File]):
             .where(File.id == entity_id)
             .options(
                 selectinload(File.node),
-                selectinload(File.current_version),
-                selectinload(File.versions),
             )
         )
 
@@ -177,8 +173,6 @@ class FileRepository(BaseRepository[File]):
             )
             .options(
                 selectinload(File.node),
-                selectinload(File.current_version),
-                selectinload(File.versions),
             )
         )
 
@@ -296,7 +290,6 @@ class FileRepository(BaseRepository[File]):
             )
             .options(
                 selectinload(File.node),
-                selectinload(File.current_version),
             )
         )
 
@@ -361,7 +354,6 @@ class FileRepository(BaseRepository[File]):
         processing_status: FileProcessingStatus = FileProcessingStatus.READY,
         preview_status: FilePreviewStatus = FilePreviewStatus.NOT_REQUIRED,
         preview_storage_key: str | None = None,
-        current_version_id: uuid.UUID | None = None,
         flush: bool = True,
         refresh: bool = False,
         validate_node: bool = True,
@@ -385,7 +377,6 @@ class FileRepository(BaseRepository[File]):
             processing_status: Начальный статус обработки файла.
             preview_status: Начальный статус предпросмотра файла.
             preview_storage_key: Ключ предпросмотра в объектном хранилище.
-            current_version_id: Идентификатор текущей версии файла.
             flush: Выполнить ``flush`` после создания.
             refresh: Выполнить ``refresh`` после создания.
             validate_node: Проверять ли существование и тип узла.
@@ -426,7 +417,6 @@ class FileRepository(BaseRepository[File]):
             preview_storage_key=self._normalize_storage_key_optional(
                 preview_storage_key,
             ),
-            current_version_id=current_version_id,
         )
 
         return await self.create(
@@ -452,7 +442,6 @@ class FileRepository(BaseRepository[File]):
         processing_status: FileProcessingStatus = FileProcessingStatus.READY,
         preview_status: FilePreviewStatus = FilePreviewStatus.NOT_REQUIRED,
         preview_storage_key: str | None = None,
-        current_version_id: uuid.UUID | None = None,
         visibility: NodeVisibility = NodeVisibility.PRIVATE,
         created_by: uuid.UUID | None = None,
         flush: bool = True,
@@ -480,7 +469,6 @@ class FileRepository(BaseRepository[File]):
             processing_status: Начальный статус обработки файла.
             preview_status: Начальный статус предпросмотра файла.
             preview_storage_key: Ключ предпросмотра в объектном хранилище.
-            current_version_id: Идентификатор текущей версии файла.
             visibility: Видимость создаваемого узла.
             created_by: Идентификатор пользователя, создавшего файл.
             flush: Выполнить ``flush`` после создания.
@@ -525,7 +513,6 @@ class FileRepository(BaseRepository[File]):
             processing_status=processing_status,
             preview_status=preview_status,
             preview_storage_key=preview_storage_key,
-            current_version_id=current_version_id,
             flush=flush,
             refresh=refresh,
             validate_node=False,
@@ -632,7 +619,6 @@ class FileRepository(BaseRepository[File]):
             "processing_status": file.processing_status,
             "preview_status": file.preview_status,
             "preview_storage_key": file.preview_storage_key,
-            "current_version_id": file.current_version_id,
         }
 
     async def update_storage_info(
@@ -848,46 +834,6 @@ class FileRepository(BaseRepository[File]):
                     checksum_algorithm,
                 ),
             },
-            flush=flush,
-            refresh=refresh,
-        )
-
-    async def update_current_version(
-        self,
-        *,
-        file_id: uuid.UUID | None = None,
-        node_id: uuid.UUID | None = None,
-        current_version_id: uuid.UUID | None,
-        flush: bool = True,
-        refresh: bool = False,
-    ) -> File:
-        """Обновляет текущую активную версию файла.
-
-        Нужно передать ровно один идентификатор: ``file_id`` или ``node_id``.
-
-        Args:
-            file_id: Идентификатор записи файла.
-            node_id: Идентификатор узла файла.
-            current_version_id: Идентификатор текущей версии файла или ``None``.
-            flush: Выполнить ли ``flush`` после обновления.
-            refresh: Выполнить ли ``refresh`` после обновления.
-
-        Returns:
-            Обновлённый файл.
-
-        Raises:
-            InvalidQueryError: Если идентификаторы переданы некорректно.
-            EntityNotFoundError: Если файл не найден.
-        """
-
-        file = await self._get_required_by_file_id_or_node_id(
-            file_id=file_id,
-            node_id=node_id,
-        )
-
-        return await self.update(
-            file,
-            {"current_version_id": current_version_id},
             flush=flush,
             refresh=refresh,
         )
@@ -1419,7 +1365,6 @@ class FileRepository(BaseRepository[File]):
             .where(File.checksum == normalized_checksum)
             .options(
                 selectinload(File.node),
-                selectinload(File.current_version),
             )
             .order_by(File.created_at.desc())
             .offset(offset)
@@ -1529,7 +1474,6 @@ class FileRepository(BaseRepository[File]):
             .where(File.mime_type == normalized_mime_type)
             .options(
                 selectinload(File.node),
-                selectinload(File.current_version),
             )
             .order_by(File.created_at.desc())
             .offset(offset)
@@ -1594,7 +1538,6 @@ class FileRepository(BaseRepository[File]):
             .where(File.extension == normalized_extension)
             .options(
                 selectinload(File.node),
-                selectinload(File.current_version),
             )
             .order_by(File.created_at.desc())
             .offset(offset)
@@ -1788,7 +1731,6 @@ class FileRepository(BaseRepository[File]):
             .where(File.node_id.in_(node_ids))
             .options(
                 selectinload(File.node),
-                selectinload(File.current_version),
             )
         )
 
@@ -1834,7 +1776,6 @@ class FileRepository(BaseRepository[File]):
             )
             .options(
                 selectinload(File.node),
-                selectinload(File.current_version),
             )
             .order_by(FileSystemNode.path.asc())
             .offset(offset)
@@ -2048,7 +1989,6 @@ class FileRepository(BaseRepository[File]):
             )
             .options(
                 selectinload(File.node),
-                selectinload(File.current_version),
             )
             .order_by(FileSystemNode.name.asc())
             .offset(offset)
@@ -2100,7 +2040,6 @@ class FileRepository(BaseRepository[File]):
             )
             .options(
                 selectinload(File.node),
-                selectinload(File.current_version),
             )
             .order_by(File.created_at.desc())
             .offset(offset)
@@ -2492,7 +2431,7 @@ class FileRepository(BaseRepository[File]):
                 FileSystemNode.owner_id == owner_id,
                 FileSystemNode.node_type == NodeType.FILE,
             )
-            .options(selectinload(File.node), selectinload(File.current_version))
+            .options(selectinload(File.node))
         )
         if parent_id is not None:
             statement = statement.where(FileSystemNode.parent_id == parent_id)

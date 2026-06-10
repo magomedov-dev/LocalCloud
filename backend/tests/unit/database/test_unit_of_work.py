@@ -136,12 +136,6 @@ class TestUnitOfWorkRepositories:
             repo = uow.users
             assert repo is not None
 
-    async def test_roles_repository_created(self) -> None:
-        session = make_mock_session()
-        uow = UnitOfWork(session=session, close_session_on_exit=False)
-        async with uow:
-            assert uow.roles is not None
-
     async def test_registration_requests_repository_created(self) -> None:
         session = make_mock_session()
         uow = UnitOfWork(session=session, close_session_on_exit=False)
@@ -171,12 +165,6 @@ class TestUnitOfWorkRepositories:
         uow = UnitOfWork(session=session, close_session_on_exit=False)
         async with uow:
             assert uow.folders is not None
-
-    async def test_versions_repository_created(self) -> None:
-        session = make_mock_session()
-        uow = UnitOfWork(session=session, close_session_on_exit=False)
-        async with uow:
-            assert uow.versions is not None
 
     async def test_trash_repository_created(self) -> None:
         session = make_mock_session()

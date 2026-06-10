@@ -27,7 +27,6 @@ from database.models.base import Base
 from database.models.enums import (
     FilePreviewStatus,
     FileProcessingStatus,
-    FileVersionStatus,
     NodeType,
     NodeVisibility,
     StorageObjectStatus,
@@ -542,10 +541,7 @@ class File(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         processing_status: Статус постобработки файла.
         preview_status: Статус генерации предпросмотра.
         preview_storage_key: Ключ объекта предпросмотра в MinIO/S3.
-        current_version_id: Текущая активная версия файла.
         node: Узел файловой системы, связанный с файлом.
-        versions: Все версии файла.
-        current_version: Текущая активная версия файла.
 
     Table:
         files
@@ -571,7 +567,6 @@ class File(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         Index("ix_files_processing_status", "processing_status"),
         Index("ix_files_preview_status", "preview_status"),
         Index("ix_files_storage_status", "storage_status"),
-        Index("ix_files_current_version_id", "current_version_id"),
         Index("ix_files_created_at", "created_at"),
         Index("ix_files_updated_at", "updated_at"),
     )
@@ -678,18 +673,6 @@ class File(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         comment="Ключ объекта предпросмотра в MinIO/S3.",
     )
 
-    current_version_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey(
-            "file_versions.id",
-            name="fk_files_current_version_id",
-            ondelete="SET NULL",
-            use_alter=True,
-        ),
-        nullable=True,
-        comment="Текущая активная версия файла.",
-    )
-
     # -------------------------------------------------------------------------
     # Связи
     # -------------------------------------------------------------------------
@@ -698,21 +681,6 @@ class File(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         "FileSystemNode",
         foreign_keys=[node_id],
         back_populates="file",
-        lazy="raise",
-    )
-
-    versions: Mapped[list[FileVersion]] = relationship(
-        "FileVersion",
-        foreign_keys="FileVersion.file_id",
-        back_populates="file",
-        cascade="all, delete-orphan",
-        lazy="raise",
-    )
-
-    current_version: Mapped[FileVersion | None] = relationship(
-        "FileVersion",
-        foreign_keys=[current_version_id],
-        post_update=True,
         lazy="raise",
     )
 
@@ -787,19 +755,6 @@ class File(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
         self.preview_storage_key = preview_storage_key
         self.preview_status = FilePreviewStatus.READY
-
-    def set_current_version(self, version: FileVersion) -> None:
-        """Устанавливает текущую версию файла.
-
-        Связывает файл с переданной версией и записывает её идентификатор
-        в поле `current_version_id`.
-
-        Args:
-            version: Версия, которая должна стать текущей.
-        """
-
-        self.current_version = version
-        self.current_version_id = version.id
 
     def __repr__(self) -> str:
         """Возвращает строковое представление файла.
@@ -904,250 +859,6 @@ class Folder(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         """
 
         return f"<Folder(id={self.id}, node_id={self.node_id}, color={self.color!r})>"
-
-
-class FileVersion(Base, UUIDPrimaryKeyMixin):
-    """Версия файла.
-
-    Каждая версия указывает на отдельный объект в MinIO/S3. Это позволяет
-    хранить историю изменений файла и при необходимости восстанавливать
-    предыдущие версии.
-
-    Attributes:
-        file_id: Файл, к которому относится версия.
-        version_number: Порядковый номер версии внутри файла.
-        status: Статус версии файла.
-        storage_bucket: Bucket MinIO/S3, в котором хранится объект версии.
-        storage_key: Ключ объекта MinIO/S3 для версии файла.
-        size_bytes: Размер версии файла в байтах.
-        checksum: Контрольная сумма версии файла.
-        checksum_algorithm: Алгоритм контрольной суммы версии.
-        mime_type: MIME-тип версии файла.
-        created_at: Дата и время создания версии.
-        created_by: Пользователь, создавший версию файла.
-        change_comment: Комментарий к изменению версии.
-        is_current: Признак текущей активной версии файла.
-        file: Файл, к которому относится версия.
-        creator: Пользователь, создавший версию файла.
-
-    Table:
-        file_versions
-    """
-
-    __tablename__ = "file_versions"
-
-    __table_args__ = (
-        UniqueConstraint(
-            "file_id",
-            "version_number",
-            name="uq_file_versions_file_id_version_number",
-        ),
-        UniqueConstraint(
-            "storage_key",
-            name="uq_file_versions_storage_key",
-        ),
-        CheckConstraint(
-            "version_number > 0",
-            name="ck_file_versions_version_number_positive",
-        ),
-        CheckConstraint(
-            "size_bytes >= 0",
-            name="ck_file_versions_size_bytes_non_negative",
-        ),
-        Index("ix_file_versions_file_id", "file_id"),
-        Index("ix_file_versions_status", "status"),
-        Index("ix_file_versions_file_current", "file_id", "is_current"),
-        Index("ix_file_versions_file_created_at", "file_id", "created_at"),
-        Index(
-            "ix_file_versions_storage_bucket_key",
-            "storage_bucket",
-            "storage_key",
-        ),
-        Index(
-            "uq_file_versions_current_per_file",
-            "file_id",
-            unique=True,
-            postgresql_where=text("is_current = true"),
-        ),
-    )
-
-    file_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("files.id", ondelete="CASCADE"),
-        nullable=False,
-        comment="Файл, к которому относится версия.",
-    )
-
-    version_number: Mapped[int] = mapped_column(
-        Integer,
-        nullable=False,
-        comment="Порядковый номер версии внутри файла.",
-    )
-
-    status: Mapped[FileVersionStatus] = mapped_column(
-        Enum(
-            FileVersionStatus,
-            name="file_version_status",
-            native_enum=False,
-            validate_strings=True,
-            create_constraint=True,
-            values_callable=lambda enum_cls: [item.value for item in enum_cls],
-        ),
-        nullable=False,
-        default=FileVersionStatus.ACTIVE,
-        server_default=FileVersionStatus.ACTIVE.value,
-        comment="Статус версии файла.",
-    )
-
-    storage_bucket: Mapped[str] = mapped_column(
-        String(length=128),
-        nullable=False,
-        comment="Bucket MinIO/S3, в котором хранится объект версии.",
-    )
-
-    storage_key: Mapped[str] = mapped_column(
-        Text,
-        nullable=False,
-        comment="Ключ объекта MinIO/S3 для версии файла.",
-    )
-
-    size_bytes: Mapped[int] = mapped_column(
-        BigInteger,
-        nullable=False,
-        default=0,
-        server_default="0",
-        comment="Размер версии файла в байтах.",
-    )
-
-    checksum: Mapped[str | None] = mapped_column(
-        String(length=128),
-        nullable=True,
-        comment="Контрольная сумма версии файла.",
-    )
-
-    checksum_algorithm: Mapped[str | None] = mapped_column(
-        String(length=32),
-        nullable=True,
-        comment="Алгоритм контрольной суммы версии.",
-    )
-
-    mime_type: Mapped[str | None] = mapped_column(
-        String(length=255),
-        nullable=True,
-        comment="MIME-тип версии файла.",
-    )
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        comment="Дата и время создания версии.",
-    )
-
-    created_by: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="SET NULL"),
-        nullable=True,
-        comment="Пользователь, создавший версию файла.",
-    )
-
-    change_comment: Mapped[str | None] = mapped_column(
-        Text,
-        nullable=True,
-        comment="Комментарий к изменению версии.",
-    )
-
-    is_current: Mapped[bool] = mapped_column(
-        Boolean,
-        nullable=False,
-        default=False,
-        server_default=text("false"),
-        comment="Признак текущей активной версии файла.",
-    )
-
-    # -------------------------------------------------------------------------
-    # Связи
-    # -------------------------------------------------------------------------
-
-    file: Mapped[File] = relationship(
-        "File",
-        foreign_keys=[file_id],
-        back_populates="versions",
-        lazy="raise",
-    )
-
-    creator: Mapped[User | None] = relationship(
-        "User",
-        foreign_keys=[created_by],
-        lazy="raise",
-    )
-
-    # -------------------------------------------------------------------------
-    # Вспомогательные свойства и методы
-    # -------------------------------------------------------------------------
-
-    @property
-    def is_active(self) -> bool:
-        """Проверяет, является ли версия активной.
-
-        Returns:
-            `True`, если статус версии равен `FileVersionStatus.ACTIVE`,
-            иначе `False`.
-        """
-
-        return self.status == FileVersionStatus.ACTIVE
-
-    # -------------------------------------------------------------------------
-    # Методы изменения состояния
-    # -------------------------------------------------------------------------
-
-    def make_current(self) -> None:
-        """Помечает версию как текущую.
-
-        Устанавливает флаг `is_current` и активный статус версии. Снятие флага
-        `is_current` с других версий этого файла должно выполняться
-        в сервисном слое.
-        """
-
-        self.is_current = True
-        self.status = FileVersionStatus.ACTIVE
-
-    def archive(self) -> None:
-        """Архивирует версию файла.
-
-        Снимает признак текущей версии и переводит версию в статус
-        `FileVersionStatus.ARCHIVED`.
-        """
-
-        self.is_current = False
-        self.status = FileVersionStatus.ARCHIVED
-
-    def mark_deleted(self) -> None:
-        """Помечает версию как удалённую.
-
-        Снимает признак текущей версии и переводит версию в статус
-        `FileVersionStatus.DELETED`.
-        """
-
-        self.is_current = False
-        self.status = FileVersionStatus.DELETED
-
-    def __repr__(self) -> str:
-        """Возвращает строковое представление версии файла.
-
-        Returns:
-            Строковое представление `FileVersion` с основными полями.
-        """
-
-        return (
-            f"<FileVersion("
-            f"id={self.id}, "
-            f"file_id={self.file_id}, "
-            f"version_number={self.version_number}, "
-            f"status={self.status.value!r}, "
-            f"is_current={self.is_current}"
-            f")>"
-        )
 
 
 class TrashItem(Base, UUIDPrimaryKeyMixin):

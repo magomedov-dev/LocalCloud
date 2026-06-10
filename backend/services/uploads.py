@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 
 from core.config import Settings, get_settings
 from core.logging import get_logger
+from core.preview_mime import preview_required
 from database import DatabaseError, UnitOfWorkFactory, create_unit_of_work_factory
 from database.models.enums import (
     AuditAction,
@@ -755,8 +756,7 @@ class UploadsService:
                 )
 
                 extension = _filename_extension(upload_session.file_name)
-                _mime = (upload_session.mime_type or "").lower()
-                _needs_preview = _mime.startswith("image/")
+                _needs_preview = preview_required(upload_session.mime_type)
                 file = await uow.files.create_file_with_node(
                     owner_id=upload_session.user_id,
                     parent_id=upload_session.parent_node_id,
@@ -792,28 +792,6 @@ class UploadsService:
                         refresh=False,
                     )
                     preview_task.payload = {"file_id": str(file.id)}
-                version = await uow.versions.create_version(
-                    file_id=file.id,
-                    storage_bucket=upload_session.storage_bucket,
-                    storage_key=f"{upload_session.storage_key}.v1",
-                    size_bytes=upload_session.file_size_bytes,
-                    checksum=data.checksum or upload_session.checksum,
-                    mime_type=upload_session.mime_type,
-                    created_by=user_id,
-                    change_comment="Начальная версия multipart-загрузки.",
-                    is_current=True,
-                    update_file_current_version=True,
-                    check_file_exists=False,
-                    flush=True,
-                    refresh=True,
-                )
-                version.checksum_algorithm = upload_session.checksum_algorithm
-                await uow.files.update_current_version(
-                    file_id=file.id,
-                    current_version_id=version.id,
-                    flush=True,
-                    refresh=False,
-                )
 
                 upload_session = await uow.upload_sessions.mark_completed(
                     upload_session.id,

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
@@ -12,7 +11,6 @@ from database.models.enums import UserStatus
 from schemas.users import (
     AdminChangePasswordRequest,
     UserAdminUpdate,
-    UserApproveRequest,
     UserBlockRequest,
     UserCreate,
     UserQueryParams,
@@ -34,7 +32,6 @@ class TestUserCreate:
         assert u.email == "ivan_petrov@example.com" or u.email == "user@example.com"
         assert u.username == "ivan_petrov"
         assert u.status == UserStatus.PENDING
-        assert u.is_email_verified is False
 
     def test_missing_email_raises(self):
         with pytest.raises(ValidationError):
@@ -210,18 +207,6 @@ class TestUserStatusUpdateRequest:
             UserStatusUpdateRequest(status="invalid_status")
 
 
-class TestUserApproveRequest:
-    """Тесты запроса одобрения пользователя."""
-
-    def test_default_is_email_verified_true(self):
-        r = UserApproveRequest()
-        assert r.is_email_verified is True
-
-    def test_can_set_false(self):
-        r = UserApproveRequest(is_email_verified=False)
-        assert r.is_email_verified is False
-
-
 class TestUserQueryParams:
     """Тесты параметров запроса списка пользователей."""
 
@@ -242,14 +227,12 @@ class TestUserQueryParams:
             UserQueryParams(query="   ")
 
     def test_created_to_before_created_from_raises(self):
-        from datetime import datetime, timezone
         d1 = datetime(2024, 1, 10, tzinfo=timezone.utc)
         d2 = datetime(2024, 1, 1, tzinfo=timezone.utc)
         with pytest.raises(ValidationError):
             UserQueryParams(created_from=d1, created_to=d2)
 
     def test_valid_date_range(self):
-        from datetime import datetime, timezone
         d1 = datetime(2024, 1, 1, tzinfo=timezone.utc)
         d2 = datetime(2024, 1, 10, tzinfo=timezone.utc)
         q = UserQueryParams(created_from=d1, created_to=d2)

@@ -17,7 +17,6 @@ from core.config import (
 )
 from core.constants import ApplicationConstants as APC
 from core.constants import SecurityConstants as SCC
-from core.constants import StorageConstants as STC
 
 
 class TestApplicationSettings:

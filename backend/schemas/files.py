@@ -9,7 +9,6 @@ from schemas.nodes import NodeListItem, NodeRead, validate_node_name
 from database.models.enums import (
     FilePreviewStatus,
     FileProcessingStatus,
-    FileVersionStatus,
     StorageObjectStatus,
 )
 from schemas.common import BaseSchema, PaginationParams
@@ -30,7 +29,6 @@ class FileMetadataRead(BaseSchema):
         storage_status: Статус физического объекта файла в хранилище.
         processing_status: Статус обработки файла.
         preview_status: Статус генерации предпросмотра файла.
-        current_version_id: Идентификатор текущей версии файла.
     """
 
     size_bytes: int = Field(
@@ -73,10 +71,6 @@ class FileMetadataRead(BaseSchema):
         ...,
         description="Статус генерации предпросмотра файла.",
     )
-    current_version_id: UUID | None = Field(
-        default=None,
-        description="Идентификатор текущей версии файла.",
-    )
 
 
 class FileRead(BaseSchema):
@@ -97,7 +91,6 @@ class FileRead(BaseSchema):
         storage_status: Статус физического объекта файла в хранилище.
         processing_status: Статус обработки файла.
         preview_status: Статус генерации предпросмотра файла.
-        current_version_id: Идентификатор текущей версии файла.
         created_at: Дата и время создания metadata-записи файла.
         updated_at: Дата и время последнего обновления metadata-записи файла.
         node: Общие данные узла файловой системы, если они были загружены.
@@ -150,10 +143,6 @@ class FileRead(BaseSchema):
         ...,
         description="Статус генерации предпросмотра файла.",
     )
-    current_version_id: UUID | None = Field(
-        default=None,
-        description="Идентификатор текущей версии файла.",
-    )
     created_at: datetime = Field(
         ...,
         description="Дата и время создания metadata-записи файла.",
@@ -185,7 +174,6 @@ class FileListItem(BaseSchema):
         storage_status: Статус физического объекта файла в хранилище.
         processing_status: Статус обработки файла.
         preview_status: Статус генерации предпросмотра файла.
-        current_version_id: Идентификатор текущей версии файла.
         created_at: Дата и время создания metadata-записи файла.
         updated_at: Дата и время последнего обновления metadata-записи файла.
         node: Краткие данные узла файловой системы, если они были загружены.
@@ -237,10 +225,6 @@ class FileListItem(BaseSchema):
     preview_status: FilePreviewStatus = Field(
         ...,
         description="Статус генерации предпросмотра файла.",
-    )
-    current_version_id: UUID | None = Field(
-        default=None,
-        description="Идентификатор текущей версии файла.",
     )
     created_at: datetime = Field(
         ...,
@@ -413,8 +397,6 @@ class FileDownloadRequest(BaseSchema):
     Attributes:
         file_id: Идентификатор файла, для которого нужно получить ссылку на
             скачивание.
-        version_id: Идентификатор версии файла. ``None`` означает скачивание
-            текущей версии.
         force_download: Добавлять ли заголовки для скачивания как attachment.
         filename: Имя файла, которое нужно предложить клиенту при скачивании.
     """
@@ -422,10 +404,6 @@ class FileDownloadRequest(BaseSchema):
     file_id: UUID = Field(
         ...,
         description="Идентификатор файла, для которого нужно получить ссылку на скачивание.",
-    )
-    version_id: UUID | None = Field(
-        default=None,
-        description="Идентификатор версии файла. None означает скачивание текущей версии.",
     )
     force_download: bool = Field(
         default=True,
@@ -472,8 +450,6 @@ class FileDownloadResponse(BaseSchema):
         headers: HTTP-заголовки, которые нужно использовать при скачивании,
             если применимо.
         file_id: Идентификатор файла, для которого сформирована ссылка.
-        version_id: Идентификатор версии файла, если ссылка сформирована для
-            конкретной версии.
         filename: Предлагаемое имя файла для скачивания.
         size_bytes: Размер скачиваемого файла в байтах, если известен.
         mime_type: MIME-тип скачиваемого файла, если известен.
@@ -499,10 +475,6 @@ class FileDownloadResponse(BaseSchema):
     file_id: UUID | None = Field(
         default=None,
         description="Идентификатор файла, для которого сформирована ссылка.",
-    )
-    version_id: UUID | None = Field(
-        default=None,
-        description="Идентификатор версии файла, если ссылка сформирована для конкретной версии.",
     )
     filename: str | None = Field(
         default=None,
@@ -588,198 +560,6 @@ class FilePreviewRead(BaseSchema):
         default=None,
         description="Дополнительное сообщение о состоянии предпросмотра.",
     )
-
-
-class FileVersionRead(BaseSchema):
-    """Полное публичное представление версии файла.
-
-    ``storage_bucket`` и ``storage_key`` намеренно не возвращаются, чтобы не
-    раскрывать внутреннюю структуру объектного хранилища.
-
-    Attributes:
-        id: Уникальный идентификатор версии файла.
-        file_id: Идентификатор файла, к которому относится версия.
-        version_number: Порядковый номер версии внутри файла.
-        status: Статус версии файла.
-        size_bytes: Размер версии файла в байтах.
-        checksum: Контрольная сумма версии файла.
-        checksum_algorithm: Алгоритм контрольной суммы версии файла.
-        mime_type: MIME-тип версии файла.
-        created_at: Дата и время создания версии файла.
-        created_by: Идентификатор пользователя, создавшего версию файла.
-        change_comment: Комментарий к изменению версии.
-        is_current: Признак текущей активной версии файла.
-    """
-
-    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
-
-    id: UUID = Field(
-        ...,
-        description="Уникальный идентификатор версии файла.",
-    )
-    file_id: UUID = Field(
-        ...,
-        description="Идентификатор файла, к которому относится версия.",
-    )
-    version_number: int = Field(
-        ...,
-        ge=1,
-        description="Порядковый номер версии внутри файла.",
-    )
-    status: FileVersionStatus = Field(
-        ...,
-        description="Статус версии файла.",
-    )
-    size_bytes: int = Field(
-        ...,
-        ge=0,
-        description="Размер версии файла в байтах.",
-    )
-    checksum: str | None = Field(
-        default=None,
-        max_length=128,
-        description="Контрольная сумма версии файла.",
-    )
-    checksum_algorithm: str | None = Field(
-        default=None,
-        max_length=32,
-        description="Алгоритм контрольной суммы версии файла.",
-    )
-    mime_type: str | None = Field(
-        default=None,
-        max_length=255,
-        description="MIME-тип версии файла.",
-    )
-    created_at: datetime = Field(
-        ...,
-        description="Дата и время создания версии файла.",
-    )
-    created_by: UUID | None = Field(
-        default=None,
-        description="Идентификатор пользователя, создавшего версию файла.",
-    )
-    change_comment: str | None = Field(
-        default=None,
-        description="Комментарий к изменению версии.",
-    )
-    is_current: bool = Field(
-        ...,
-        description="Признак текущей активной версии файла.",
-    )
-
-
-class FileVersionListItem(BaseSchema):
-    """Краткое представление версии файла для списков.
-
-    Используется для отображения истории версий файла без лишних подробностей
-    и без внутренних storage-ключей.
-
-    Attributes:
-        id: Уникальный идентификатор версии файла.
-        file_id: Идентификатор файла, к которому относится версия.
-        version_number: Порядковый номер версии внутри файла.
-        status: Статус версии файла.
-        size_bytes: Размер версии файла в байтах.
-        mime_type: MIME-тип версии файла.
-        checksum: Контрольная сумма версии файла.
-        checksum_algorithm: Алгоритм контрольной суммы версии файла.
-        created_at: Дата и время создания версии файла.
-        created_by: Идентификатор пользователя, создавшего версию файла.
-        is_current: Признак текущей активной версии файла.
-    """
-
-    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
-
-    id: UUID = Field(
-        ...,
-        description="Уникальный идентификатор версии файла.",
-    )
-    file_id: UUID = Field(
-        ...,
-        description="Идентификатор файла, к которому относится версия.",
-    )
-    version_number: int = Field(
-        ...,
-        ge=1,
-        description="Порядковый номер версии внутри файла.",
-    )
-    status: FileVersionStatus = Field(
-        ...,
-        description="Статус версии файла.",
-    )
-    size_bytes: int = Field(
-        ...,
-        ge=0,
-        description="Размер версии файла в байтах.",
-    )
-    mime_type: str | None = Field(
-        default=None,
-        max_length=255,
-        description="MIME-тип версии файла.",
-    )
-    checksum: str | None = Field(
-        default=None,
-        max_length=128,
-        description="Контрольная сумма версии файла.",
-    )
-    checksum_algorithm: str | None = Field(
-        default=None,
-        max_length=32,
-        description="Алгоритм контрольной суммы версии файла.",
-    )
-    created_at: datetime = Field(
-        ...,
-        description="Дата и время создания версии файла.",
-    )
-    created_by: UUID | None = Field(
-        default=None,
-        description="Идентификатор пользователя, создавшего версию файла.",
-    )
-    is_current: bool = Field(
-        ...,
-        description="Признак текущей активной версии файла.",
-    )
-
-
-class FileVersionRestoreRequest(BaseSchema):
-    """Запрос на восстановление версии файла как текущей.
-
-    Используется для выбора существующей версии файла и назначения её текущей
-    активной версией.
-
-    Attributes:
-        version_id: Идентификатор версии файла, которую нужно восстановить.
-        change_comment: Комментарий к восстановлению версии.
-    """
-
-    version_id: UUID = Field(
-        ...,
-        description="Идентификатор версии файла, которую нужно восстановить.",
-    )
-    change_comment: str | None = Field(
-        default=None,
-        max_length=512,
-        description="Комментарий к восстановлению версии.",
-    )
-
-    @field_validator("change_comment")
-    @classmethod
-    def normalize_change_comment(cls, value: str | None) -> str | None:
-        """Нормализует комментарий к восстановлению версии.
-
-        Args:
-            value: Исходный комментарий.
-
-        Returns:
-            Комментарий без пробелов по краям или ``None``, если комментарий
-            отсутствует либо содержит только пробельные символы.
-        """
-
-        if value is None:
-            return None
-
-        normalized_value = value.strip()
-        return normalized_value or None
 
 
 class FileSearchQuery(PaginationParams):

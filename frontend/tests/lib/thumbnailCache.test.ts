@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { THUMBNAIL_URL_TTL_MS } from "@/lib/constants";
+import { THUMBNAIL_NEGATIVE_TTL_MS, THUMBNAIL_URL_TTL_MS } from "@/lib/constants";
 import { getThumbnailCache, setThumbnailCache } from "@/lib/thumbnailCache";
 
 const PREFIX = "lc:thumb:";
@@ -58,6 +58,27 @@ describe("thumbnailCache", () => {
       setThumbnailCache("edge", "https://cdn/edge.png");
       vi.setSystemTime(THUMBNAIL_URL_TTL_MS);
       expect(getThumbnailCache("edge")).toBe("https://cdn/edge.png");
+    });
+
+    it("истекает null-маркер по короткому отрицательному TTL", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(0);
+      setThumbnailCache("pending", null);
+      // В пределах отрицательного TTL — ещё известно «нет превью».
+      vi.setSystemTime(THUMBNAIL_NEGATIVE_TTL_MS);
+      expect(getThumbnailCache("pending")).toBeNull();
+      // За пределами — запись истекает, чтобы перепросить готовое превью.
+      vi.setSystemTime(THUMBNAIL_NEGATIVE_TTL_MS + 1);
+      expect(getThumbnailCache("pending")).toBeUndefined();
+      expect(sessionStorage.getItem(PREFIX + "pending")).toBeNull();
+    });
+
+    it("null-маркер не доживает до длинного положительного TTL", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(0);
+      setThumbnailCache("neg", null);
+      vi.setSystemTime(THUMBNAIL_NEGATIVE_TTL_MS * 2);
+      expect(getThumbnailCache("neg")).toBeUndefined();
     });
 
     it("возвращает undefined, если storage бросает исключение", () => {

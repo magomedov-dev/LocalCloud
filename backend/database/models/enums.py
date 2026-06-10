@@ -61,20 +61,18 @@ class TokenType(StrEnum):
     """Тип токена безопасности.
 
     Определяет назначение токена, используемого в механизмах аутентификации,
-    регистрации, сброса пароля и публичного доступа.
+    регистрации и публичного доступа.
 
     Attributes:
         ACCESS: Access-токен для доступа к защищённым ресурсам.
         REFRESH: Refresh-токен для обновления access-токена.
         REGISTRATION_APPROVAL: Токен подтверждения или одобрения регистрации.
-        PASSWORD_RESET: Токен сброса пароля.
         PUBLIC_LINK: Токен публичной ссылки.
     """
 
     ACCESS = "access"
     REFRESH = "refresh"
     REGISTRATION_APPROVAL = "registration_approval"
-    PASSWORD_RESET = "password_reset"
     PUBLIC_LINK = "public_link"
 
 
@@ -162,22 +160,6 @@ class FilePreviewStatus(StrEnum):
     GENERATING = "generating"
     READY = "ready"
     FAILED = "failed"
-
-
-class FileVersionStatus(StrEnum):
-    """Статус версии файла.
-
-    Описывает состояние конкретной версии файла в системе версионирования.
-
-    Attributes:
-        ACTIVE: Версия файла активна.
-        ARCHIVED: Версия файла архивирована.
-        DELETED: Версия файла удалена или помечена как удалённая.
-    """
-
-    ACTIVE = "active"
-    ARCHIVED = "archived"
-    DELETED = "deleted"
 
 
 class UploadSessionStatus(StrEnum):

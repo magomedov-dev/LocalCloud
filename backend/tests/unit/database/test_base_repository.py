@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -14,6 +14,14 @@ from database.repositories.base import BaseRepository
 from database.models.base import Base
 from database.models.users import User
 from database.models.enums import UserStatus
+from database.exceptions import (
+    ConstraintViolationError,
+    DuplicateEntityError,
+    EntityNotFoundError,
+    InvalidPaginationError,
+    InvalidQueryError,
+    RepositoryError,
+)
 
 
 class _SinglePKModel(Base):
@@ -31,14 +39,6 @@ class _CompositePKModel(Base):
 
     part_a: Mapped[str] = mapped_column(primary_key=True)
     part_b: Mapped[str] = mapped_column(primary_key=True)
-from database.exceptions import (
-    ConstraintViolationError,
-    DuplicateEntityError,
-    EntityNotFoundError,
-    InvalidPaginationError,
-    InvalidQueryError,
-    RepositoryError,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +249,7 @@ class TestCreate:
     async def test_session_add_called(self) -> None:
         repo, session = make_repo()
         user = make_user()
-        result = await repo.create(user, flush=False, refresh=False)
+        await repo.create(user, flush=False, refresh=False)
         session.add.assert_called_once_with(user)
 
     async def test_returns_entity(self) -> None:
@@ -1098,15 +1098,13 @@ class TestGetPrimaryKeyColumn:
         assert column is User.id
 
     def test_composite_primary_key_raises_repository_error(self) -> None:
-        from database.models.roles import UserRole
-
-        repo = BaseRepository(session=AsyncMock(), model=UserRole)
+        repo = BaseRepository(session=AsyncMock(), model=_CompositePKModel)
         with pytest.raises(RepositoryError) as exc_info:
             repo._get_primary_key_column()
-        assert exc_info.value.details.get("model") == "UserRole"
+        assert exc_info.value.details.get("model") == "_CompositePKModel"
         assert set(exc_info.value.details.get("primary_key_columns")) == {
-            "user_id",
-            "role_id",
+            "part_a",
+            "part_b",
         }
 
     def test_single_non_id_primary_key_returns_column(self) -> None:

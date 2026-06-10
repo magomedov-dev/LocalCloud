@@ -37,7 +37,6 @@ function listItem(over: Partial<UserListItem> = {}): UserListItem {
     email: "alice@example.com",
     username: "alice",
     status: "active",
-    is_email_verified: true,
     last_login_at: null,
     created_at: "2026-01-01T00:00:00Z",
     is_primary_admin: false,
@@ -51,7 +50,6 @@ function detail(over: Partial<UserRead> = {}): UserRead {
     email: "alice@example.com",
     username: "alice",
     status: "active",
-    is_email_verified: true,
     last_login_at: "2026-02-02T12:00:00Z",
     approved_at: "2026-01-02T00:00:00Z",
     blocked_at: null,
@@ -132,7 +130,6 @@ describe("UserDetailSheet", () => {
     await waitFor(() => expect(usersApi.get).toHaveBeenCalledWith("u1"));
     expect(await screen.findByText("Зарегистрирован")).toBeInTheDocument();
     expect(screen.getByText("Одобрен")).toBeInTheDocument();
-    expect(screen.getByText("Да")).toBeInTheDocument();
     // Quota section
     expect(screen.getByText("Хранилище")).toBeInTheDocument();
     expect(screen.getByText("Файлы")).toBeInTheDocument();
@@ -144,7 +141,6 @@ describe("UserDetailSheet", () => {
     usersApi.get.mockResolvedValue(
       detail({
         status: "blocked",
-        is_email_verified: false,
         blocked_at: "2026-03-01T00:00:00Z",
         block_reason: "abuse",
         rejected_at: "2026-03-02T00:00:00Z",
@@ -158,7 +154,6 @@ describe("UserDetailSheet", () => {
     expect(screen.getByText("abuse")).toBeInTheDocument();
     expect(screen.getByText("Причина откл.")).toBeInTheDocument();
     expect(screen.getByText("dup")).toBeInTheDocument();
-    expect(screen.getByText("Нет")).toBeInTheDocument();
   });
 
   it("shows 'quota not configured' when quota is null", async () => {

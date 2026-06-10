@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, Enum, Index, String, UniqueConstraint, text
+from sqlalchemy import DateTime, Enum, Index, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -18,7 +18,6 @@ if TYPE_CHECKING:
     from database.models.links import PublicLink
     from database.models.quotas import UserQuota
     from database.models.registration import RegistrationRequest
-    from database.models.roles import Role, UserRole
     from database.models.tasks import BackgroundTask
     from database.models.tokens import RefreshToken
 
@@ -43,7 +42,6 @@ class User(Base, TimestampMixin):
         username: Уникальное имя пользователя, отображаемое в системе.
         password_hash: Хэшированный пароль пользователя.
         status: Текущий статус учётной записи.
-        is_email_verified: Признак подтверждения адреса электронной почты.
         last_login_at: Дата и время последнего успешного входа в систему.
         approved_at: Дата и время одобрения регистрации пользователя.
         blocked_at: Дата и время блокировки пользователя.
@@ -51,10 +49,7 @@ class User(Base, TimestampMixin):
         deleted_at: Дата и время логического удаления пользователя.
         block_reason: Причина блокировки пользователя.
         rejection_reason: Причина отклонения регистрации пользователя.
-        user_roles: Связи пользователя с ролями.
-        roles: Активные и неактивные роли пользователя.
-        assigned_user_roles: Роли, назначенные этим пользователем другим
-            пользователям.
+        role: Системная роль пользователя (admin или user).
         refresh_tokens: Refresh-токены пользователя.
         registration_requests: Заявки на регистрацию, связанные с созданием
             этого пользователя.
@@ -122,12 +117,19 @@ class User(Base, TimestampMixin):
         comment="Текущий статус учётной записи.",
     )
 
-    is_email_verified: Mapped[bool] = mapped_column(
-        Boolean,
+    role: Mapped[SystemRole] = mapped_column(
+        Enum(
+            SystemRole,
+            name="user_role",
+            native_enum=False,
+            validate_strings=True,
+            create_constraint=True,
+            values_callable=lambda enum_cls: [item.value for item in enum_cls],
+        ),
         nullable=False,
-        default=False,
-        server_default=text("false"),
-        comment="Признак подтверждения адреса электронной почты.",
+        default=SystemRole.USER,
+        server_default=SystemRole.USER.value,
+        comment="Системная роль пользователя.",
     )
 
     last_login_at: Mapped[datetime | None] = mapped_column(
@@ -186,31 +188,6 @@ class User(Base, TimestampMixin):
     # Доступ к ним выполняется через соответствующие репозитории, а не через
     # навигацию по связи; ссылочная целостность обеспечивается на уровне БД
     # (``ON DELETE CASCADE``/``SET NULL`` на внешних ключах).
-
-    user_roles: Mapped[list[UserRole]] = relationship(
-        "UserRole",
-        foreign_keys="UserRole.user_id",
-        back_populates="user",
-        cascade="all, delete-orphan",
-        lazy="selectin",
-    )
-
-    roles: Mapped[list[Role]] = relationship(
-        "Role",
-        secondary="user_roles",
-        primaryjoin="User.id == UserRole.user_id",
-        secondaryjoin="Role.id == UserRole.role_id",
-        back_populates="users",
-        viewonly=True,
-        lazy="selectin",
-    )
-
-    assigned_user_roles: Mapped[list[UserRole]] = relationship(
-        "UserRole",
-        foreign_keys="UserRole.assigned_by",
-        back_populates="assigner",
-        lazy="raise",
-    )
 
     refresh_tokens: Mapped[list[RefreshToken]] = relationship(
         "RefreshToken",
@@ -343,37 +320,36 @@ class User(Base, TimestampMixin):
 
     @property
     def role_codes(self) -> set[str]:
-        """Возвращает множество кодов активных ролей пользователя.
+        """Возвращает множество кодов ролей пользователя.
 
-        Свойство работает корректно, если связь `roles` уже загружена.
+        Сохранено для обратной совместимости: пользователь имеет ровно одну
+        системную роль (`role`).
 
         Returns:
-            Множество кодов активных ролей пользователя.
+            Множество из одного кода роли пользователя.
         """
 
-        return {role.code for role in self.roles if role.is_active}
+        return {self.role.value}
 
     @property
     def is_admin(self) -> bool:
-        """Проверяет, есть ли у пользователя роль администратора.
+        """Проверяет, является ли пользователь администратором.
 
         Returns:
-            `True`, если у пользователя есть активная роль `admin`,
-            иначе `False`.
+            `True`, если роль пользователя — `admin`, иначе `False`.
         """
 
-        return SystemRole.ADMIN.value in self.role_codes
+        return self.role == SystemRole.ADMIN
 
     @property
     def is_regular_user(self) -> bool:
-        """Проверяет, есть ли у пользователя базовая роль пользователя.
+        """Проверяет, является ли пользователь обычным пользователем.
 
         Returns:
-            `True`, если у пользователя есть активная роль `user`,
-            иначе `False`.
+            `True`, если роль пользователя — `user`, иначе `False`.
         """
 
-        return SystemRole.USER.value in self.role_codes
+        return self.role == SystemRole.USER
 
     # -------------------------------------------------------------------------
     # Методы изменения состояния
@@ -388,11 +364,6 @@ class User(Base, TimestampMixin):
         """
 
         self.last_login_at = logged_in_at or datetime.now(UTC)
-
-    def verify_email(self) -> None:
-        """Помечает адрес электронной почты как подтверждённый."""
-
-        self.is_email_verified = True
 
     def approve(self, approved_at: datetime | None = None) -> None:
         """Одобряет пользователя и переводит его в активное состояние.

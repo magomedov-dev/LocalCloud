@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import {
+  Copy,
+  CopyPlus,
   Download,
   Eye,
   FolderInput,
@@ -28,7 +32,10 @@ import { MoveDialog } from "./MoveDialog";
 import { useFolderDownload } from "@/hooks/useFolderDownload";
 import { useInfoPanel } from "@/contexts/infoPanel-context";
 import { downloadNodeFile } from "@/lib/download";
+import { nodesApi } from "@/api/nodes";
+import { friendlyError } from "@/lib/errors";
 import type { NodeListItem } from "@/types/nodes";
+import { type ItemCapabilities, resolveCapabilities } from "./itemCapabilities";
 import type { SelectOpts } from "./FileGrid";
 import type { ReactNode } from "react";
 
@@ -54,6 +61,8 @@ interface Props {
   selectedItems?: NodeListItem[];
   onSelect?: (item: NodeListItem, opts: SelectOpts) => void;
   onPreview?: () => void;
+  /** Ограничение действий по выданным правам (для «Доступно мне»). */
+  capabilities?: ItemCapabilities;
   children: ReactNode;
 }
 
@@ -76,9 +85,12 @@ export function ItemContextMenu({
   selectedItems,
   onSelect,
   onPreview,
+  capabilities,
   children,
 }: Props) {
+  const caps = resolveCapabilities(capabilities);
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { openInfo } = useInfoPanel();
   const { downloadFolder, downloading } = useFolderDownload();
   const isFolderDownloading = downloading === item.id;
@@ -87,9 +99,11 @@ export function ItemContextMenu({
 
   const [renameOpen, setRenameOpen] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
+  const [copyOpen, setCopyOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [colorOpen, setColorOpen] = useState(false);
+  const [duplicating, setDuplicating] = useState(false);
 
   /**
    * Скачивает текущий элемент.
@@ -102,6 +116,26 @@ export function ItemContextMenu({
       downloadFolder(item.id, item.name);
     } else {
       downloadNodeFile(item.id, item.name);
+    }
+  }
+
+  /**
+   * Дублирует элемент в его текущей папке.
+   *
+   * Имя копии не передаётся — backend сам добавит суффикс «(копия)».
+   * После успеха обновляет кеш текущей папки и квоту.
+   */
+  async function handleDuplicate() {
+    setDuplicating(true);
+    try {
+      await nodesApi.copy(item.id, { target_parent_id: item.parent_id });
+      queryClient.invalidateQueries({ queryKey: folderQueryKey });
+      queryClient.invalidateQueries({ queryKey: ["quota", "me"] });
+      toast.success("Дублировано");
+    } catch (err) {
+      toast.error(friendlyError(err, { operation: "copy", name: item.name }));
+    } finally {
+      setDuplicating(false);
     }
   }
 
@@ -139,44 +173,64 @@ export function ItemContextMenu({
             Скачать
           </ContextMenuItem>
 
-          <ContextMenuSeparator />
+          {caps.canWrite && (
+            <>
+              <ContextMenuSeparator />
 
-          <ContextMenuItem onClick={() => setRenameOpen(true)}>
-            <Pencil />
-            Переименовать
-          </ContextMenuItem>
+              <ContextMenuItem onClick={() => setRenameOpen(true)}>
+                <Pencil />
+                Переименовать
+              </ContextMenuItem>
 
-          <ContextMenuItem onClick={() => setMoveOpen(true)}>
-            <FolderInput />
-            Переместить
-          </ContextMenuItem>
+              <ContextMenuItem onClick={() => setMoveOpen(true)}>
+                <FolderInput />
+                Переместить
+              </ContextMenuItem>
 
-          {item.node_type === "folder" && (
-            <ContextMenuItem onClick={() => setColorOpen(true)}>
-              <Palette />
-              Цвет папки
-            </ContextMenuItem>
+              <ContextMenuItem disabled={duplicating} onClick={handleDuplicate}>
+                {duplicating ? <Loader2 className="animate-spin" /> : <CopyPlus />}
+                Дублировать
+              </ContextMenuItem>
+
+              <ContextMenuItem onClick={() => setCopyOpen(true)}>
+                <Copy />
+                Копировать в…
+              </ContextMenuItem>
+
+              {item.node_type === "folder" && (
+                <ContextMenuItem onClick={() => setColorOpen(true)}>
+                  <Palette />
+                  Цвет папки
+                </ContextMenuItem>
+              )}
+            </>
           )}
 
-          <ContextMenuItem onClick={() => setShareOpen(true)}>
-            <Share2 />
-            Поделиться
-          </ContextMenuItem>
+          {caps.canShare && (
+            <ContextMenuItem onClick={() => setShareOpen(true)}>
+              <Share2 />
+              Поделиться
+            </ContextMenuItem>
+          )}
 
           <ContextMenuItem onClick={() => openInfo(item)}>
             <Info />
             Информация
           </ContextMenuItem>
 
-          <ContextMenuSeparator />
+          {caps.canDelete && (
+            <>
+              <ContextMenuSeparator />
 
-          <ContextMenuItem
-            onClick={() => setDeleteOpen(true)}
-            className="text-destructive focus:text-destructive"
-          >
-            <Trash2 />
-            Удалить
-          </ContextMenuItem>
+              <ContextMenuItem
+                onClick={() => setDeleteOpen(true)}
+                className="text-destructive focus:text-destructive"
+              >
+                <Trash2 />
+                Удалить
+              </ContextMenuItem>
+            </>
+          )}
         </ContextMenuContent>
       </ContextMenu>
 
@@ -190,6 +244,14 @@ export function ItemContextMenu({
       <MoveDialog
         open={moveOpen}
         onOpenChange={setMoveOpen}
+        nodeIds={[item.id]}
+        label={item.name}
+        folderQueryKey={folderQueryKey}
+      />
+      <MoveDialog
+        mode="copy"
+        open={copyOpen}
+        onOpenChange={setCopyOpen}
         nodeIds={[item.id]}
         label={item.name}
         folderQueryKey={folderQueryKey}

@@ -10,7 +10,6 @@ import pytest
 from database.exceptions import DatabaseError
 from database.models.enums import (
     BackgroundTaskStatus,
-    BackgroundTaskType,
     NodeType,
     NodeVisibility,
     PublicLinkPermissionType,
@@ -26,6 +25,7 @@ from schemas.public_links import (
 )
 from security.password import hash_password
 from services.exceptions import (
+    NotFoundServiceError,
     PermissionServiceError,
     PublicLinkServiceError,
     ServiceError,
@@ -1098,6 +1098,94 @@ async def test_create_public_download_url_unexpected_error_wrapped():
 
 
 # ---------------------------------------------------------------------------
+# Тесты: create_public_thumbnail_url
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_public_thumbnail_url_serves_webp_preview():
+    node = make_node_mock(node_type=NodeType.FILE, name="book.pdf")
+    link = make_link_mock(node=node, node_id=node.id, password_hash=None)
+    file = make_file_mock(node_id=node.id, node=node)
+    file.mime_type = "application/pdf"
+    file.preview_available = True
+    file.preview_storage_key = "users/u/previews/f/preview.webp"
+
+    links_repo = AsyncMock()
+    links_repo.get_required_available_link_by_token = AsyncMock(return_value=link)
+    nodes_repo = AsyncMock()
+    nodes_repo.get_required_by_id = AsyncMock(return_value=node)
+    files_repo = AsyncMock()
+    files_repo.get_required_by_node_id = AsyncMock(return_value=file)
+
+    storage = make_storage()
+    uow = make_uow(links=links_repo, nodes=nodes_repo, files=files_repo)
+    service = make_service(uow, storage_svc=storage)
+
+    result = await service.create_public_thumbnail_url(PublicLinkAccessRequest(token="tok"))
+
+    assert result.presigned_url == "https://example.com/file"
+    assert result.mime_type == "image/webp"
+    # content-type заголовка отражает webp-превью, а не исходный PDF.
+    _, kwargs = storage.create_download_url.call_args
+    assert kwargs["object_key"] == "users/u/previews/f/preview.webp"
+    assert kwargs["response_headers"]["response-content-type"] == "image/webp"
+
+
+@pytest.mark.asyncio
+async def test_create_public_thumbnail_url_no_preview_raises_not_found():
+    node = make_node_mock(node_type=NodeType.FILE, name="archive.zip")
+    link = make_link_mock(node=node, node_id=node.id, password_hash=None)
+    file = make_file_mock(node_id=node.id, node=node)
+    file.preview_available = False
+    file.preview_storage_key = None
+
+    links_repo = AsyncMock()
+    links_repo.get_required_available_link_by_token = AsyncMock(return_value=link)
+    nodes_repo = AsyncMock()
+    nodes_repo.get_required_by_id = AsyncMock(return_value=node)
+    files_repo = AsyncMock()
+    files_repo.get_required_by_node_id = AsyncMock(return_value=file)
+
+    uow = make_uow(links=links_repo, nodes=nodes_repo, files=files_repo)
+    service = make_service(uow)
+
+    with pytest.raises(NotFoundServiceError):
+        await service.create_public_thumbnail_url(PublicLinkAccessRequest(token="tok"))
+
+
+@pytest.mark.asyncio
+async def test_create_public_thumbnail_url_folder_raises_validation():
+    node = make_node_mock(node_type=NodeType.FOLDER, name="dir")
+    link = make_link_mock(node=node, node_id=node.id, password_hash=None)
+
+    links_repo = AsyncMock()
+    links_repo.get_required_available_link_by_token = AsyncMock(return_value=link)
+    nodes_repo = AsyncMock()
+    nodes_repo.get_required_by_id = AsyncMock(return_value=node)
+    uow = make_uow(links=links_repo, nodes=nodes_repo, files=AsyncMock())
+    service = make_service(uow)
+
+    with pytest.raises(ValidationServiceError):
+        await service.create_public_thumbnail_url(PublicLinkAccessRequest(token="tok"))
+
+
+@pytest.mark.asyncio
+async def test_create_public_thumbnail_url_wrong_password_raises_permission():
+    node = make_node_mock(node_type=NodeType.FILE, name="book.pdf")
+    link = make_link_mock(node=node, node_id=node.id, password_hash="hashed")
+
+    links_repo = AsyncMock()
+    links_repo.get_required_available_link_by_token = AsyncMock(return_value=link)
+    uow = make_uow(links=links_repo, nodes=AsyncMock(), files=AsyncMock())
+    service = make_service(uow)
+
+    data = PublicLinkAccessRequest(token="tok", password="nope")
+    with pytest.raises(PermissionServiceError):
+        await service.create_public_thumbnail_url(data)
+
+
+# ---------------------------------------------------------------------------
 # Тесты: create_public_folder_archive
 # ---------------------------------------------------------------------------
 
@@ -1525,6 +1613,32 @@ def test_include_by_password_filter_dead_helper():
     assert _include_by_password_filter(link_with, None) is True
     assert _include_by_password_filter(link_with, True) is True
     assert _include_by_password_filter(link_without, True) is False
+
+
+def test_node_payload_includes_file_mime_when_file_loaded():
+    from database.models.filesystem import File
+    from services.public_links import _node_list_item_payload
+
+    node = make_node_mock(node_type=NodeType.FILE, name="book.pdf")
+    # Имитируем eager-загруженное отношение `file`: реальный File в __dict__.
+    file = File(mime_type="application/pdf", size_bytes=2048)
+    node.__dict__["file"] = file
+
+    payload = _node_list_item_payload(node)
+    assert payload["file_mime_type"] == "application/pdf"
+    assert payload["file_size_bytes"] == 2048
+
+
+def test_node_payload_no_mime_when_file_not_loaded():
+    from services.public_links import _node_list_item_payload
+
+    node = make_node_mock(node_type=NodeType.FOLDER, name="dir")
+    # Отношение `file` не загружено — ленивую подгрузку не дёргаем.
+    node.__dict__.pop("file", None)
+
+    payload = _node_list_item_payload(node)
+    assert payload["file_mime_type"] is None
+    assert payload["file_size_bytes"] is None
 
 
 @pytest.mark.asyncio

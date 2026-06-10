@@ -71,10 +71,11 @@ def make_node_mock(
     return node
 
 
-def make_user_mock(user_id=None, status=UserStatus.ACTIVE):
+def make_user_mock(user_id=None, status=UserStatus.ACTIVE, role=SystemRole.USER):
     user = MagicMock()
     user.id = user_id or uuid.uuid4()
     user.status = status
+    user.role = role
     return user
 
 
@@ -91,12 +92,6 @@ def make_users_repo(user):
     return repo
 
 
-def make_roles_repo(roles=None):
-    repo = AsyncMock()
-    repo.get_user_roles = AsyncMock(return_value=roles or [])
-    return repo
-
-
 def make_permissions_repo(permissions=None):
     repo = AsyncMock()
     repo.get_node_permissions = AsyncMock(return_value=permissions or [])
@@ -108,20 +103,12 @@ def make_uow_for_owner(node, user):
     return make_uow(
         nodes=make_nodes_repo(node),
         users=make_users_repo(user),
-        roles=make_roles_repo(),
         permissions=make_permissions_repo(),
     )
 
 
 def make_service(uow):
     return AccessService(uow_factory=make_factory(uow))
-
-
-def make_role_mock(code=SystemRole.ADMIN.value, name=SystemRole.ADMIN.value):
-    role = MagicMock()
-    role.code = code
-    role.name = name
-    return role
 
 
 def make_permission_mock(
@@ -213,7 +200,6 @@ async def test_check_access_anonymous_private_node_denied():
     uow = make_uow(
         nodes=make_nodes_repo(node),
         users=make_users_repo(make_user_mock()),
-        roles=make_roles_repo(),
         permissions=make_permissions_repo(),
     )
     service = make_service(uow)
@@ -257,7 +243,6 @@ async def test_check_access_database_error_propagates():
     uow = make_uow(
         nodes=nodes_repo,
         users=make_users_repo(make_user_mock()),
-        roles=make_roles_repo(),
         permissions=make_permissions_repo(),
     )
     service = make_service(uow)
@@ -279,7 +264,6 @@ async def test_check_access_entity_not_found_raises_not_found():
     uow = make_uow(
         nodes=nodes_repo,
         users=make_users_repo(make_user_mock()),
-        roles=make_roles_repo(),
         permissions=make_permissions_repo(),
     )
     service = make_service(uow)
@@ -417,7 +401,6 @@ async def test_get_accessible_node_not_found_raises():
     uow = make_uow(
         nodes=nodes_repo,
         users=make_users_repo(make_user_mock()),
-        roles=make_roles_repo(),
         permissions=make_permissions_repo(),
     )
     service = make_service(uow)
@@ -440,7 +423,6 @@ async def test_get_accessible_node_database_error():
     uow = make_uow(
         nodes=nodes_repo,
         users=make_users_repo(make_user_mock()),
-        roles=make_roles_repo(),
         permissions=make_permissions_repo(),
     )
     service = make_service(uow)
@@ -486,7 +468,6 @@ async def test_get_effective_permissions_database_error():
     uow = make_uow(
         nodes=nodes_repo,
         users=make_users_repo(make_user_mock()),
-        roles=make_roles_repo(),
         permissions=make_permissions_repo(),
     )
     service = make_service(uow)
@@ -673,7 +654,6 @@ async def test_check_access_inactive_user_denied():
     uow = make_uow(
         nodes=make_nodes_repo(node),
         users=make_users_repo(user),
-        roles=make_roles_repo(),
         permissions=make_permissions_repo(),
     )
     service = make_service(uow)
@@ -695,7 +675,6 @@ async def test_check_access_deleted_node_denied_without_allow_deleted():
     uow = make_uow(
         nodes=make_nodes_repo(node),
         users=make_users_repo(user),
-        roles=make_roles_repo(),
         permissions=make_permissions_repo(),
     )
     service = make_service(uow)
@@ -740,7 +719,6 @@ async def test_load_permissions_paginates(monkeypatch):
     uow = make_uow(
         nodes=make_nodes_repo(node),
         users=make_users_repo(user),
-        roles=make_roles_repo(),
         permissions=perms_repo,
     )
     service = make_service(uow)
@@ -830,7 +808,6 @@ async def test_check_access_granted_via_direct_permission():
     uow = make_uow(
         nodes=make_nodes_repo(node),
         users=make_users_repo(user),
-        roles=make_roles_repo(),
         permissions=make_permissions_repo([perm]),
     )
     service = make_service(uow)
@@ -858,7 +835,6 @@ async def test_check_access_denied_when_permission_revoked():
     uow = make_uow(
         nodes=make_nodes_repo(node),
         users=make_users_repo(user),
-        roles=make_roles_repo(),
         permissions=make_permissions_repo([perm]),
     )
     service = make_service(uow)
@@ -885,7 +861,6 @@ async def test_check_access_denied_when_permission_expired():
     uow = make_uow(
         nodes=make_nodes_repo(node),
         users=make_users_repo(user),
-        roles=make_roles_repo(),
         permissions=make_permissions_repo([perm]),
     )
     service = make_service(uow)
@@ -913,7 +888,6 @@ async def test_check_access_denied_insufficient_permission_level():
     uow = make_uow(
         nodes=make_nodes_repo(node),
         users=make_users_repo(user),
-        roles=make_roles_repo(),
         permissions=make_permissions_repo([perm]),
     )
     service = make_service(uow)
@@ -934,7 +908,6 @@ async def test_check_access_public_node_anonymous_read_allowed():
     uow = make_uow(
         nodes=make_nodes_repo(node),
         users=make_users_repo(make_user_mock()),
-        roles=make_roles_repo(),
         permissions=make_permissions_repo(),
     )
     service = make_service(uow)
@@ -954,7 +927,6 @@ async def test_check_access_public_node_ignored_when_allow_public_false():
     uow = make_uow(
         nodes=make_nodes_repo(node),
         users=make_users_repo(make_user_mock()),
-        roles=make_roles_repo(),
         permissions=make_permissions_repo(),
     )
     service = make_service(uow)
@@ -974,11 +946,10 @@ async def test_check_access_public_node_ignored_when_allow_public_false():
 async def test_check_access_admin_role_allowed():
     node = make_node_mock(owner_id=uuid.uuid4())
     admin_id = uuid.uuid4()
-    user = make_user_mock(user_id=admin_id)
+    user = make_user_mock(user_id=admin_id, role=SystemRole.ADMIN)
     uow = make_uow(
         nodes=make_nodes_repo(node),
         users=make_users_repo(user),
-        roles=make_roles_repo([make_role_mock()]),
         permissions=make_permissions_repo(),
     )
     service = make_service(uow)
@@ -990,7 +961,7 @@ async def test_check_access_admin_role_allowed():
         uow=uow,
     )
     assert response.allowed is True
-    uow.roles.get_user_roles.assert_awaited_once()
+    uow.users.get_required_user_by_id.assert_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -1004,7 +975,6 @@ async def test_get_effective_permissions_public_node_anonymous():
     uow = make_uow(
         nodes=make_nodes_repo(node),
         users=make_users_repo(make_user_mock()),
-        roles=make_roles_repo(),
         permissions=make_permissions_repo(),
     )
     service = make_service(uow)
@@ -1037,7 +1007,6 @@ async def test_get_effective_permissions_granted_permission_level():
     uow = make_uow(
         nodes=make_nodes_repo(node),
         users=make_users_repo(user),
-        roles=make_roles_repo(),
         permissions=make_permissions_repo([perm]),
     )
     service = make_service(uow)
@@ -1063,7 +1032,6 @@ async def test_get_effective_permissions_denied_all_false():
     uow = make_uow(
         nodes=make_nodes_repo(node),
         users=make_users_repo(user),
-        roles=make_roles_repo(),
         permissions=make_permissions_repo(),
     )
     service = make_service(uow)
@@ -1121,7 +1089,6 @@ async def test_load_permissions_paginates_multiple_pages():
     uow = make_uow(
         nodes=make_nodes_repo(node),
         users=make_users_repo(user),
-        roles=make_roles_repo(),
         permissions=perms_repo,
     )
     service = make_service(uow)
@@ -1152,7 +1119,6 @@ async def test_check_access_wraps_permission_check_error(monkeypatch):
     uow = make_uow(
         nodes=make_nodes_repo(node),
         users=make_users_repo(user),
-        roles=make_roles_repo(),
         permissions=make_permissions_repo(),
     )
     service = make_service(uow)
@@ -1181,7 +1147,6 @@ async def test_check_access_wraps_unexpected_error():
     uow = make_uow(
         nodes=nodes_repo,
         users=make_users_repo(make_user_mock()),
-        roles=make_roles_repo(),
         permissions=make_permissions_repo(),
     )
     service = make_service(uow)
@@ -1203,7 +1168,6 @@ async def test_get_effective_permissions_wraps_permission_check_error(monkeypatc
     uow = make_uow(
         nodes=make_nodes_repo(node),
         users=make_users_repo(user),
-        roles=make_roles_repo(),
         permissions=make_permissions_repo(),
     )
     service = make_service(uow)
@@ -1230,7 +1194,6 @@ async def test_get_effective_permissions_wraps_unexpected_error():
     uow = make_uow(
         nodes=nodes_repo,
         users=make_users_repo(make_user_mock()),
-        roles=make_roles_repo(),
         permissions=make_permissions_repo(),
     )
     service = make_service(uow)
@@ -1252,7 +1215,6 @@ async def test_get_accessible_node_wraps_unexpected_error():
     uow = make_uow(
         nodes=nodes_repo,
         users=make_users_repo(make_user_mock()),
-        roles=make_roles_repo(),
         permissions=make_permissions_repo(),
     )
     service = make_service(uow)

@@ -6,9 +6,8 @@ from uuid import UUID
 
 from pydantic import ConfigDict, EmailStr, Field, field_validator
 
-from database.models.enums import UserStatus
+from database.models.enums import SystemRole, UserStatus
 from schemas.common import BaseSchema, PaginationParams
-from schemas.roles import RoleListItem
 
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 
@@ -74,7 +73,7 @@ class UserCreate(UserBase):
     """Запрос на создание пользователя администратором.
 
     Используется для административного создания учётной записи с email,
-    username, паролем, начальным статусом и признаком подтверждения email.
+    username, паролем и начальным статусом.
     Пароль передаётся в исходном виде только на уровне DTO, а его хэширование
     выполняется в security/service-слое.
 
@@ -84,7 +83,6 @@ class UserCreate(UserBase):
         password: Пароль пользователя. Хэширование выполняется в
             security/service-слое.
         status: Начальный статус учётной записи.
-        is_email_verified: Признак подтверждения адреса электронной почты.
     """
 
     password: str = Field(
@@ -96,10 +94,6 @@ class UserCreate(UserBase):
     status: UserStatus = Field(
         default=UserStatus.PENDING,
         description="Начальный статус учётной записи.",
-    )
-    is_email_verified: bool = Field(
-        default=False,
-        description="Признак подтверждения адреса электронной почты.",
     )
 
 
@@ -162,14 +156,12 @@ class UserAdminUpdate(UserUpdate):
     """Запрос на административное обновление пользователя.
 
     Расширяет пользовательское обновление полями, доступными администратору:
-    статусом учётной записи, подтверждением email, причиной блокировки и
-    причиной отклонения.
+    статусом учётной записи, причиной блокировки и причиной отклонения.
 
     Attributes:
         email: Новый адрес электронной почты пользователя.
         username: Новое имя пользователя.
         status: Новый статус учётной записи.
-        is_email_verified: Новый признак подтверждения email.
         block_reason: Причина блокировки пользователя.
         rejection_reason: Причина отклонения пользователя.
     """
@@ -177,10 +169,6 @@ class UserAdminUpdate(UserUpdate):
     status: UserStatus | None = Field(
         default=None,
         description="Новый статус учётной записи.",
-    )
-    is_email_verified: bool | None = Field(
-        default=None,
-        description="Новый признак подтверждения email.",
     )
     block_reason: str | None = Field(
         default=None,
@@ -224,7 +212,6 @@ class UserRead(UserBase):
         username: Уникальное имя пользователя.
         id: Уникальный идентификатор пользователя.
         status: Текущий статус учётной записи.
-        is_email_verified: Признак подтверждения адреса электронной почты.
         last_login_at: Дата и время последнего успешного входа.
         approved_at: Дата и время одобрения регистрации пользователя.
         blocked_at: Дата и время блокировки пользователя.
@@ -245,10 +232,6 @@ class UserRead(UserBase):
     status: UserStatus = Field(
         ...,
         description="Текущий статус учётной записи.",
-    )
-    is_email_verified: bool = Field(
-        ...,
-        description="Признак подтверждения адреса электронной почты.",
     )
     last_login_at: datetime | None = Field(
         default=None,
@@ -295,6 +278,35 @@ class UserRead(UserBase):
     )
 
 
+class UserLookupItem(BaseSchema):
+    """Минимальное представление пользователя для автопоиска при шеринге.
+
+    Отдаётся любому авторизованному пользователю эндпоинтом lookup, поэтому
+    содержит только то, что нужно, чтобы выбрать получателя доступа: иденти-
+    фикатор, username и email. Без статусов, дат и админ-признаков.
+
+    Attributes:
+        id: Уникальный идентификатор пользователя.
+        username: Уникальное имя пользователя.
+        email: Адрес электронной почты пользователя.
+    """
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: UUID = Field(
+        ...,
+        description="Уникальный идентификатор пользователя.",
+    )
+    username: str = Field(
+        ...,
+        description="Уникальное имя пользователя.",
+    )
+    email: EmailStr = Field(
+        ...,
+        description="Адрес электронной почты пользователя.",
+    )
+
+
 class UserListItem(BaseSchema):
     """Краткое представление пользователя для списков.
 
@@ -307,7 +319,6 @@ class UserListItem(BaseSchema):
         email: Адрес электронной почты пользователя.
         username: Уникальное имя пользователя.
         status: Текущий статус учётной записи.
-        is_email_verified: Признак подтверждения адреса электронной почты.
         last_login_at: Дата и время последнего успешного входа.
         created_at: Дата и время создания пользователя.
     """
@@ -329,10 +340,6 @@ class UserListItem(BaseSchema):
     status: UserStatus = Field(
         ...,
         description="Текущий статус учётной записи.",
-    )
-    is_email_verified: bool = Field(
-        ...,
-        description="Признак подтверждения адреса электронной почты.",
     )
     last_login_at: datetime | None = Field(
         default=None,
@@ -362,9 +369,8 @@ class CurrentUserRead(BaseSchema):
         email: Адрес электронной почты текущего пользователя.
         username: Имя текущего пользователя.
         status: Текущий статус учётной записи.
-        is_email_verified: Признак подтверждения адреса электронной почты.
         last_login_at: Дата и время последнего успешного входа.
-        roles: Роли текущего пользователя.
+        role: Системная роль текущего пользователя.
     """
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
@@ -385,17 +391,13 @@ class CurrentUserRead(BaseSchema):
         ...,
         description="Текущий статус учётной записи.",
     )
-    is_email_verified: bool = Field(
-        ...,
-        description="Признак подтверждения адреса электронной почты.",
-    )
     last_login_at: datetime | None = Field(
         default=None,
         description="Дата и время последнего успешного входа.",
     )
-    roles: list[RoleListItem] = Field(
-        default_factory=list,
-        description="Роли текущего пользователя.",
+    role: SystemRole = Field(
+        ...,
+        description="Системная роль пользователя.",
     )
 
 
@@ -520,34 +522,15 @@ class UserRejectRequest(BaseSchema):
         return normalized_value
 
 
-class UserApproveRequest(BaseSchema):
-    """Запрос на одобрение пользователя.
-
-    Используется для одобрения пользователя или заявки, связанной с
-    пользователем, с возможностью отметить email как подтверждённый.
-
-    Attributes:
-        is_email_verified: Нужно ли считать email пользователя подтверждённым
-            после одобрения.
-    """
-
-    is_email_verified: bool = Field(
-        default=True,
-        description="Нужно ли считать email пользователя подтверждённым после одобрения.",
-    )
-
-
 class UserQueryParams(PaginationParams):
     """Параметры фильтрации списка пользователей.
 
     Используется для постраничного получения пользователей с фильтрацией по
-    поисковой строке, статусу, подтверждению email, дате создания и настройкам
-    сортировки.
+    поисковой строке, статусу, дате создания и настройкам сортировки.
 
     Attributes:
         query: Поисковая строка по email или username.
         status: Фильтр по статусу пользователя.
-        is_email_verified: Фильтр по признаку подтверждения email.
         created_from: Фильтр по дате создания: начало диапазона включительно.
         created_to: Фильтр по дате создания: конец диапазона включительно.
         sort_by: Поле сортировки.
@@ -563,10 +546,6 @@ class UserQueryParams(PaginationParams):
     status: UserStatus | None = Field(
         default=None,
         description="Фильтр по статусу пользователя.",
-    )
-    is_email_verified: bool | None = Field(
-        default=None,
-        description="Фильтр по признаку подтверждения email.",
     )
     created_from: datetime | None = Field(
         default=None,
@@ -662,7 +641,6 @@ class UserWithRolesRead(UserRead):
         username: Уникальное имя пользователя.
         id: Уникальный идентификатор пользователя.
         status: Текущий статус учётной записи.
-        is_email_verified: Признак подтверждения адреса электронной почты.
         last_login_at: Дата и время последнего успешного входа.
         approved_at: Дата и время одобрения регистрации пользователя.
         blocked_at: Дата и время блокировки пользователя.
@@ -672,10 +650,10 @@ class UserWithRolesRead(UserRead):
         rejection_reason: Причина отклонения пользователя.
         created_at: Дата и время создания пользователя.
         updated_at: Дата и время последнего обновления пользователя.
-        roles: Роли пользователя.
+        role: Системная роль пользователя.
     """
 
-    roles: list[RoleListItem] = Field(
-        default_factory=list,
-        description="Роли пользователя.",
+    role: SystemRole = Field(
+        ...,
+        description="Системная роль пользователя.",
     )

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from database.exceptions import EntityNotFoundError, InvalidQueryError
+from database.models.filesystem import FileSystemNode
 from database.models.permissions import NodePermission
 from database.repositories.base import BaseRepository
 
@@ -907,7 +908,9 @@ class NodePermissionsRepository(BaseRepository[NodePermission]):
             select(NodePermission)
             .where(NodePermission.user_id == user_id)
             .options(
-                selectinload(NodePermission.node),
+                # Грузим File узла, чтобы «Доступно мне» знало mime/размер без
+                # ленивой подгрузки (как сделано для public links в links.py).
+                selectinload(NodePermission.node).selectinload(FileSystemNode.file),
                 selectinload(NodePermission.grantor),
             )
         )

@@ -318,6 +318,42 @@ async def download_from_public_link(
 
 
 @router.post(
+    "/public/{token}/thumbnail",
+    response_model=PublicLinkDownloadResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def public_link_thumbnail(
+    data: PublicLinkAccessRequest,
+    token: str = Path(..., min_length=1, max_length=128),
+    public_links_service: PublicLinksService = Depends(
+        get_public_links_service_dependency
+    ),
+) -> PublicLinkDownloadResponse:
+    """Создаёт presigned URL для preview-миниатюры файла по публичному токену.
+
+    Требует только право просмотра ссылки и отдаёт сгенерированный preview-объект
+    (webp для изображений/PDF/видео), а не исходный файл. Если preview ещё не
+    готов или не поддерживается, возвращает 404, и клиент показывает иконку.
+
+    Args:
+        data: Данные доступа к публичной ссылке, например пароль.
+        token: Публичный токен ссылки.
+        public_links_service: Сервис публичных ссылок, создающий ссылку
+            на миниатюру.
+
+    Returns:
+        Данные presigned URL для preview-миниатюры.
+
+    Raises:
+        HTTPException: Если токен некорректен, ссылка недоступна, пароль неверен,
+            тип узла не поддерживается или preview отсутствует.
+    """
+
+    request_data = data.model_copy(update={"token": token})
+    return await public_links_service.create_public_thumbnail_url(request_data)
+
+
+@router.post(
     "/public/{token}/folder-download",
     response_model=PublicLinkFolderArchiveResponse,
     status_code=status.HTTP_202_ACCEPTED,

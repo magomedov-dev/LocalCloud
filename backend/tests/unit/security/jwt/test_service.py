@@ -8,7 +8,6 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from core.config import Settings
-from security.jwt.enums import JwtErrorCode
 from security.jwt.exceptions import (
     JwtExpiredError,
     JwtInvalidTokenTypeError,
@@ -134,16 +133,6 @@ class TestCreateRefreshToken:
 
 
 class TestCreateToken:
-    def test_password_reset_token_type(self, test_settings: Settings) -> None:
-        token = create_token(
-            uuid.uuid4(),
-            token_type="password_reset",
-            expires_delta=timedelta(minutes=30),
-            settings=test_settings,
-        )
-        payload = decode_token(token, expected_type="password_reset", settings=test_settings)
-        assert payload.token_type == "password_reset"
-
     def test_custom_jti_used(self, test_settings: Settings) -> None:
         custom_jti = "my-custom-jti"
         token = create_token(

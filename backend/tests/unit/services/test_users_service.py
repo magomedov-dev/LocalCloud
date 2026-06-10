@@ -8,14 +8,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from database.models.enums import UserStatus
+from database.models.enums import SystemRole, UserStatus
 from schemas.common import PageResponse
 from schemas.users import (
     CurrentUserRead,
     UserAdminUpdate,
     UserBlockRequest,
     UserCreate,
-    UserListItem,
     UserQueryParams,
     UserRead,
     UserRejectRequest,
@@ -33,7 +32,6 @@ from services.users import (
     UsersService,
     _audit_user,
     _matches_created_range,
-    _role_list_item,
     get_users_service,
 )
 from tests.unit.services.conftest import make_uow_factory, make_uow_mock, make_user_mock
@@ -62,7 +60,7 @@ def _make_user_snapshot(**kwargs) -> dict[str, Any]:
         "email": "user@example.com",
         "username": "testuser",
         "status": UserStatus.ACTIVE,
-        "is_email_verified": True,
+        "role": SystemRole.USER,
         "last_login_at": None,
         "approved_at": None,
         "blocked_at": None,
@@ -77,18 +75,6 @@ def _make_user_snapshot(**kwargs) -> dict[str, Any]:
     return base
 
 
-def _make_role_mock(name: str = "user") -> MagicMock:
-    """Вернуть мок, имитирующий ORM-модель Role для снимков ролей."""
-    role = MagicMock()
-    role.id = uuid.uuid4()
-    role.name = name
-    role.code = name
-    role.display_name = name.capitalize()
-    role.is_system = True
-    role.is_active = True
-    return role
-
-
 # ---------------------------------------------------------------------------
 # create_user
 # ---------------------------------------------------------------------------
@@ -96,20 +82,13 @@ def _make_role_mock(name: str = "user") -> MagicMock:
 
 @pytest.mark.asyncio
 async def test_create_user_success(audit_service):
-    """create_user создаёт пользователя и назначает роль по умолчанию."""
+    """create_user создаёт пользователя с ролью по умолчанию."""
     user = make_user_mock(user_id=USER_ID, email="new@example.com", username="newuser")
-
-    role = MagicMock()
-    role.id = uuid.uuid4()
 
     users_repo = AsyncMock()
     users_repo.create_user = AsyncMock(return_value=user)
 
-    roles_repo = AsyncMock()
-    roles_repo.get_required_user_role_model = AsyncMock(return_value=role)
-    roles_repo.assign_role = AsyncMock()
-
-    uow = make_uow_mock(users=users_repo, roles=roles_repo)
+    uow = make_uow_mock(users=users_repo)
     service = _make_service(uow, audit_service)
 
     data = UserCreate(
@@ -121,7 +100,6 @@ async def test_create_user_success(audit_service):
 
     assert isinstance(result, UserRead)
     users_repo.create_user.assert_awaited_once()
-    roles_repo.assign_role.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -143,17 +121,13 @@ async def test_create_user_weak_password_raises(audit_service):
 
 @pytest.mark.asyncio
 async def test_create_user_without_default_role(audit_service):
-    """create_user с assign_default_role=False пропускает назначение роли."""
+    """create_user с assign_default_role=False создаёт пользователя."""
     user = make_user_mock(user_id=USER_ID, email="new@example.com", username="newuser")
-
-    roles_repo = AsyncMock()
-    roles_repo.get_required_user_role_model = AsyncMock()
-    roles_repo.assign_role = AsyncMock()
 
     users_repo = AsyncMock()
     users_repo.create_user = AsyncMock(return_value=user)
 
-    uow = make_uow_mock(users=users_repo, roles=roles_repo)
+    uow = make_uow_mock(users=users_repo)
     service = _make_service(uow, audit_service)
 
     data = UserCreate(
@@ -164,8 +138,7 @@ async def test_create_user_without_default_role(audit_service):
     result = await service.create_user(data, assign_default_role=False)
 
     assert isinstance(result, UserRead)
-    roles_repo.get_required_user_role_model.assert_not_awaited()
-    roles_repo.assign_role.assert_not_awaited()
+    users_repo.create_user.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -308,7 +281,7 @@ async def test_delete_user_rejects_self(audit_service):
     users_repo = AsyncMock()
     users_repo.mark_deleted = AsyncMock()
 
-    uow = make_uow_mock(users=users_repo, roles=AsyncMock())
+    uow = make_uow_mock(users=users_repo)
     service = _make_service(uow, audit_service)
 
     with pytest.raises(PermissionServiceError) as exc_info:
@@ -324,11 +297,9 @@ async def test_delete_user_rejects_first_admin(audit_service):
     """delete_user запрещает удаление учётной записи первичного администратора."""
     users_repo = AsyncMock()
     users_repo.mark_deleted = AsyncMock()
+    users_repo.get_first_admin_user_id = AsyncMock(return_value=USER_ID)
 
-    roles_repo = AsyncMock()
-    roles_repo.get_first_admin_user_id = AsyncMock(return_value=USER_ID)
-
-    uow = make_uow_mock(users=users_repo, roles=roles_repo)
+    uow = make_uow_mock(users=users_repo)
     service = _make_service(uow, audit_service)
 
     with pytest.raises(PermissionServiceError) as exc_info:
@@ -347,11 +318,9 @@ async def test_delete_user_allows_other_non_primary(audit_service):
     users_repo = AsyncMock()
     users_repo.get_required_user_by_id = AsyncMock(return_value=user)
     users_repo.mark_deleted = AsyncMock(return_value=user)
+    users_repo.get_first_admin_user_id = AsyncMock(return_value=uuid.uuid4())
 
-    roles_repo = AsyncMock()
-    roles_repo.get_first_admin_user_id = AsyncMock(return_value=uuid.uuid4())
-
-    uow = make_uow_mock(users=users_repo, roles=roles_repo)
+    uow = make_uow_mock(users=users_repo)
     uow.flush_and_refresh = AsyncMock(return_value=user)
     service = _make_service(uow, audit_service)
 
@@ -363,7 +332,6 @@ async def test_delete_user_allows_other_non_primary(audit_service):
 @pytest.mark.asyncio
 async def test_block_user_updates_status(audit_service):
     """block_user вызывает mark_blocked у пользователя."""
-    from schemas.users import UserBlockRequest
 
     user = make_user_mock(user_id=USER_ID, status=UserStatus.BLOCKED)
     users_repo = AsyncMock()
@@ -541,13 +509,9 @@ async def test_create_user_unexpected_error_wraps(audit_service):
 async def test_create_user_system_audit_when_no_actor(audit_service):
     """create_user логирует системное событие аудита, когда actor_id равен None."""
     user = make_user_mock(user_id=USER_ID)
-    role = _make_role_mock()
     users_repo = AsyncMock()
     users_repo.create_user = AsyncMock(return_value=user)
-    roles_repo = AsyncMock()
-    roles_repo.get_required_user_role_model = AsyncMock(return_value=role)
-    roles_repo.assign_role = AsyncMock()
-    uow = make_uow_mock(users=users_repo, roles=roles_repo)
+    uow = make_uow_mock(users=users_repo)
     service = _make_service(uow, audit_service)
 
     data = UserCreate(email="a@example.com", username="auser", password="SecurePass123!")
@@ -562,13 +526,9 @@ async def test_create_user_user_audit_when_actor(audit_service):
     """create_user логирует пользовательское событие аудита, когда задан actor_id."""
     actor = uuid.uuid4()
     user = make_user_mock(user_id=USER_ID)
-    role = _make_role_mock()
     users_repo = AsyncMock()
     users_repo.create_user = AsyncMock(return_value=user)
-    roles_repo = AsyncMock()
-    roles_repo.get_required_user_role_model = AsyncMock(return_value=role)
-    roles_repo.assign_role = AsyncMock()
-    uow = make_uow_mock(users=users_repo, roles=roles_repo)
+    uow = make_uow_mock(users=users_repo)
     service = _make_service(uow, audit_service)
 
     data = UserCreate(email="a@example.com", username="auser", password="SecurePass123!")
@@ -582,13 +542,9 @@ async def test_create_user_user_audit_when_actor(audit_service):
 async def test_create_user_audit_failure_is_swallowed(audit_service):
     """Сбой аудита во время create_user не пробрасывается."""
     user = make_user_mock(user_id=USER_ID)
-    role = _make_role_mock()
     users_repo = AsyncMock()
     users_repo.create_user = AsyncMock(return_value=user)
-    roles_repo = AsyncMock()
-    roles_repo.get_required_user_role_model = AsyncMock(return_value=role)
-    roles_repo.assign_role = AsyncMock()
-    uow = make_uow_mock(users=users_repo, roles=roles_repo)
+    uow = make_uow_mock(users=users_repo)
     audit_service.log_system_event = AsyncMock(side_effect=RuntimeError("audit down"))
     service = _make_service(uow, audit_service)
 
@@ -604,18 +560,18 @@ async def test_create_user_audit_failure_is_swallowed(audit_service):
 
 @pytest.mark.asyncio
 async def test_get_user_with_roles_success(audit_service):
-    """get_user_with_roles возвращает пользователя вместе с ролями."""
-    user = make_user_mock(user_id=USER_ID)
+    """get_user_with_roles возвращает пользователя вместе с его ролью."""
+    user = make_user_mock(user_id=USER_ID, role=SystemRole.ADMIN)
     users_repo = AsyncMock()
     users_repo.get_required_user_by_id = AsyncMock(return_value=user)
-    roles_repo = AsyncMock()
-    roles_repo.get_user_roles = AsyncMock(return_value=[_make_role_mock("admin")])
-    uow = make_uow_mock(users=users_repo, roles=roles_repo)
+    users_repo.get_first_admin_user_id = AsyncMock(return_value=USER_ID)
+    uow = make_uow_mock(users=users_repo)
     service = _make_service(uow, audit_service)
 
     result = await service.get_user_with_roles(USER_ID)
     assert isinstance(result, UserWithRolesRead)
-    assert len(result.roles) == 1
+    assert result.role == SystemRole.ADMIN
+    assert result.is_primary_admin is True
 
 
 @pytest.mark.asyncio
@@ -625,7 +581,7 @@ async def test_get_user_with_roles_database_error(audit_service):
 
     users_repo = AsyncMock()
     users_repo.get_required_user_by_id = AsyncMock(side_effect=DBError("x"))
-    uow = make_uow_mock(users=users_repo, roles=AsyncMock())
+    uow = make_uow_mock(users=users_repo)
     service = _make_service(uow, audit_service)
 
     with pytest.raises(ServiceError):
@@ -637,7 +593,7 @@ async def test_get_user_with_roles_unexpected_error(audit_service):
     """get_user_with_roles оборачивает непредвиденную ошибку в ServiceError."""
     users_repo = AsyncMock()
     users_repo.get_required_user_by_id = AsyncMock(side_effect=RuntimeError("x"))
-    uow = make_uow_mock(users=users_repo, roles=AsyncMock())
+    uow = make_uow_mock(users=users_repo)
     service = _make_service(uow, audit_service)
 
     with pytest.raises(ServiceError):
@@ -646,18 +602,16 @@ async def test_get_user_with_roles_unexpected_error(audit_service):
 
 @pytest.mark.asyncio
 async def test_get_current_user_read_success(audit_service):
-    """get_current_user_read возвращает CurrentUserRead с активными ролями."""
-    user = make_user_mock(user_id=USER_ID)
+    """get_current_user_read возвращает CurrentUserRead с системной ролью."""
+    user = make_user_mock(user_id=USER_ID, role=SystemRole.USER)
     users_repo = AsyncMock()
     users_repo.get_required_user_by_id = AsyncMock(return_value=user)
-    roles_repo = AsyncMock()
-    roles_repo.get_user_roles = AsyncMock(return_value=[_make_role_mock("user")])
-    uow = make_uow_mock(users=users_repo, roles=roles_repo)
+    uow = make_uow_mock(users=users_repo)
     service = _make_service(uow, audit_service)
 
     result = await service.get_current_user_read(USER_ID)
     assert isinstance(result, CurrentUserRead)
-    roles_repo.get_user_roles.assert_awaited_once()
+    assert result.role == SystemRole.USER
 
 
 @pytest.mark.asyncio
@@ -667,7 +621,7 @@ async def test_get_current_user_read_database_error(audit_service):
 
     users_repo = AsyncMock()
     users_repo.get_required_user_by_id = AsyncMock(side_effect=DBError("x"))
-    uow = make_uow_mock(users=users_repo, roles=AsyncMock())
+    uow = make_uow_mock(users=users_repo)
     service = _make_service(uow, audit_service)
 
     with pytest.raises(ServiceError):
@@ -679,7 +633,7 @@ async def test_get_current_user_read_unexpected_error(audit_service):
     """get_current_user_read оборачивает непредвиденную ошибку в ServiceError."""
     users_repo = AsyncMock()
     users_repo.get_required_user_by_id = AsyncMock(side_effect=RuntimeError("x"))
-    uow = make_uow_mock(users=users_repo, roles=AsyncMock())
+    uow = make_uow_mock(users=users_repo)
     service = _make_service(uow, audit_service)
 
     with pytest.raises(ServiceError):
@@ -797,6 +751,62 @@ async def test_username_exists_with_exclude(audit_service):
     assert result is True
     _, kwargs = users_repo.username_exists.call_args
     assert kwargs["exclude_user_id"] == USER_ID
+
+
+# ---------------------------------------------------------------------------
+# lookup_users: автопоиск для шеринга
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_lookup_users_returns_minimal_items(audit_service):
+    """lookup_users отдаёт активных пользователей по запросу."""
+    user = make_user_mock(user_id=uuid.uuid4(), username="alice", email="a@x.io")
+    users_repo = AsyncMock()
+    users_repo.search_users = AsyncMock(return_value=[user])
+    uow = make_uow_mock(users=users_repo)
+    service = _make_service(uow, audit_service)
+
+    result = await service.lookup_users("ali", limit=10)
+
+    assert len(result) == 1
+    assert result[0].username == "alice"
+    assert result[0].email == "a@x.io"
+    # Поиск ограничен только активными пользователями.
+    _, kwargs = users_repo.search_users.call_args
+    assert kwargs["statuses"] == [UserStatus.ACTIVE]
+
+
+@pytest.mark.asyncio
+async def test_lookup_users_short_query_returns_empty(audit_service):
+    """Запрос короче двух символов не дергает репозиторий и даёт пустой список."""
+    users_repo = AsyncMock()
+    users_repo.search_users = AsyncMock(return_value=[])
+    uow = make_uow_mock(users=users_repo)
+    service = _make_service(uow, audit_service)
+
+    result = await service.lookup_users("a")
+
+    assert result == []
+    users_repo.search_users.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_lookup_users_excludes_self_and_caps_limit(audit_service):
+    """Исключает инициатора и не превышает жёсткий предел в 10 результатов."""
+    me = make_user_mock(user_id=USER_ID)
+    others = [make_user_mock(user_id=uuid.uuid4()) for _ in range(11)]
+    users_repo = AsyncMock()
+    users_repo.search_users = AsyncMock(return_value=[me, *others])
+    uow = make_uow_mock(users=users_repo)
+    service = _make_service(uow, audit_service)
+
+    result = await service.lookup_users("user", exclude_user_id=USER_ID, limit=100)
+
+    assert all(item.id != USER_ID for item in result)
+    assert len(result) == 10
+    _, kwargs = users_repo.search_users.call_args
+    assert kwargs["limit"] <= 11
 
 
 # ---------------------------------------------------------------------------
@@ -965,13 +975,12 @@ async def test_admin_update_user_no_changes_returns_current(audit_service):
 
 @pytest.mark.asyncio
 async def test_admin_update_user_all_fields(audit_service):
-    """admin_update_user обновляет идентичность, статус и подтверждение email."""
+    """admin_update_user обновляет идентичность и статус."""
     user = make_user_mock(user_id=USER_ID, status=UserStatus.BLOCKED)
     users_repo = AsyncMock()
     users_repo.get_required_user_by_id = AsyncMock(return_value=user)
     users_repo.update_identity = AsyncMock(return_value=user)
     users_repo.update_status = AsyncMock(return_value=user)
-    users_repo.set_email_verified = AsyncMock(return_value=user)
     uow = make_uow_mock(users=users_repo)
     service = _make_service(uow, audit_service)
 
@@ -980,13 +989,11 @@ async def test_admin_update_user_all_fields(audit_service):
         username="adminuser",
         status=UserStatus.BLOCKED,
         block_reason="abuse",
-        is_email_verified=False,
     )
     result = await service.admin_update_user(USER_ID, data, actor_id=uuid.uuid4())
     assert isinstance(result, UserRead)
     users_repo.update_identity.assert_awaited_once()
     users_repo.update_status.assert_awaited_once()
-    users_repo.set_email_verified.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1128,8 +1135,8 @@ async def test_update_status_other_falls_back_to_admin_update(audit_service):
 
 
 @pytest.mark.asyncio
-async def test_approve_user_sets_email_verified(audit_service):
-    """approve_user помечает пользователя активным и устанавливает флаг подтверждённого email."""
+async def test_approve_user_marks_active(audit_service):
+    """approve_user помечает пользователя активным."""
     user = make_user_mock(user_id=USER_ID, status=UserStatus.ACTIVE)
     users_repo = AsyncMock()
     users_repo.get_required_user_by_id = AsyncMock(return_value=user)
@@ -1138,10 +1145,9 @@ async def test_approve_user_sets_email_verified(audit_service):
     uow.flush_and_refresh = AsyncMock(return_value=user)
     service = _make_service(uow, audit_service)
 
-    result = await service.approve_user(USER_ID, is_email_verified=True)
+    result = await service.approve_user(USER_ID)
     assert isinstance(result, UserRead)
     users_repo.mark_active.assert_awaited_once()
-    assert user.is_email_verified is True
 
 
 @pytest.mark.asyncio
@@ -1204,51 +1210,6 @@ async def test_mutate_status_unexpected_error(audit_service):
 
     with pytest.raises(ServiceError):
         await service.delete_user(USER_ID)
-
-
-# ---------------------------------------------------------------------------
-# set_email_verified
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_set_email_verified_success(audit_service):
-    """set_email_verified обновляет флаг и логирует событие аудита."""
-    user = make_user_mock(user_id=USER_ID, is_email_verified=True)
-    users_repo = AsyncMock()
-    users_repo.set_email_verified_by_id = AsyncMock(return_value=user)
-    uow = make_uow_mock(users=users_repo)
-    service = _make_service(uow, audit_service)
-
-    result = await service.set_email_verified(USER_ID, is_verified=True)
-    assert isinstance(result, UserRead)
-    users_repo.set_email_verified_by_id.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_set_email_verified_database_error(audit_service):
-    """set_email_verified оборачивает DatabaseError в ServiceError."""
-    from database.exceptions import DatabaseError as DBError
-
-    users_repo = AsyncMock()
-    users_repo.set_email_verified_by_id = AsyncMock(side_effect=DBError("x"))
-    uow = make_uow_mock(users=users_repo)
-    service = _make_service(uow, audit_service)
-
-    with pytest.raises(ServiceError):
-        await service.set_email_verified(USER_ID)
-
-
-@pytest.mark.asyncio
-async def test_set_email_verified_unexpected_error(audit_service):
-    """set_email_verified оборачивает непредвиденную ошибку в ServiceError."""
-    users_repo = AsyncMock()
-    users_repo.set_email_verified_by_id = AsyncMock(side_effect=RuntimeError("x"))
-    uow = make_uow_mock(users=users_repo)
-    service = _make_service(uow, audit_service)
-
-    with pytest.raises(ServiceError):
-        await service.set_email_verified(USER_ID)
 
 
 # ---------------------------------------------------------------------------
@@ -1384,13 +1345,6 @@ async def test_user_audit_failure_is_swallowed(audit_service):
 # ---------------------------------------------------------------------------
 
 
-def test_role_list_item_converts_role():
-    """_role_list_item собирает RoleListItem из мока роли."""
-    from schemas.roles import RoleListItem
-
-    item = _role_list_item(_make_role_mock("editor"))
-    assert isinstance(item, RoleListItem)
-    assert item.name == "editor"
 
 
 def test_audit_user_with_enum_status():
@@ -1453,7 +1407,7 @@ async def test_create_user_value_error_inside_uow_wraps(audit_service):
     """ValueError внутри UoW преобразуется в ValidationServiceError."""
     users_repo = AsyncMock()
     users_repo.create_user = AsyncMock(side_effect=ValueError("bad"))
-    uow = make_uow_mock(users=users_repo, roles=AsyncMock())
+    uow = make_uow_mock(users=users_repo)
     service = _make_service(uow, audit_service)
 
     data = UserCreate(email="a@example.com", username="auser", password="SecurePass123!")
@@ -1467,7 +1421,7 @@ async def test_create_user_service_error_reraised(audit_service):
     sentinel = ServiceError("boom", service="users", operation="create_user")
     users_repo = AsyncMock()
     users_repo.create_user = AsyncMock(side_effect=sentinel)
-    uow = make_uow_mock(users=users_repo, roles=AsyncMock())
+    uow = make_uow_mock(users=users_repo)
     service = _make_service(uow, audit_service)
 
     data = UserCreate(email="a@example.com", username="auser", password="SecurePass123!")
@@ -1560,20 +1514,6 @@ async def test_change_password_service_error_reraised(audit_service):
 
 
 @pytest.mark.asyncio
-async def test_set_email_verified_service_error_reraised(audit_service):
-    """set_email_verified пробрасывает ServiceError, возникший внутри UoW."""
-    sentinel = ServiceError("inner", service="users", operation="set_email_verified")
-    users_repo = AsyncMock()
-    users_repo.set_email_verified_by_id = AsyncMock(side_effect=sentinel)
-    uow = make_uow_mock(users=users_repo)
-    service = _make_service(uow, audit_service)
-
-    with pytest.raises(ServiceError) as exc_info:
-        await service.set_email_verified(USER_ID)
-    assert exc_info.value is sentinel
-
-
-@pytest.mark.asyncio
 async def test_mark_login_service_error_reraised(audit_service):
     """mark_login пробрасывает ServiceError, возникший внутри UoW."""
     sentinel = ServiceError("inner", service="users", operation="mark_login")
@@ -1589,13 +1529,12 @@ async def test_mark_login_service_error_reraised(audit_service):
 
 @pytest.mark.asyncio
 async def test_get_user_with_roles_unexpected_wraps_distinct(audit_service):
-    """get_user_with_roles оборачивает ошибку из get_user_roles в ServiceError."""
+    """get_user_with_roles оборачивает ошибку первичного администратора в ServiceError."""
     user = make_user_mock(user_id=USER_ID)
     users_repo = AsyncMock()
     users_repo.get_required_user_by_id = AsyncMock(return_value=user)
-    roles_repo = AsyncMock()
-    roles_repo.get_user_roles = AsyncMock(side_effect=RuntimeError("x"))
-    uow = make_uow_mock(users=users_repo, roles=roles_repo)
+    users_repo.get_first_admin_user_id = AsyncMock(side_effect=RuntimeError("x"))
+    uow = make_uow_mock(users=users_repo)
     service = _make_service(uow, audit_service)
 
     with pytest.raises(ServiceError):
@@ -1604,13 +1543,10 @@ async def test_get_user_with_roles_unexpected_wraps_distinct(audit_service):
 
 @pytest.mark.asyncio
 async def test_get_current_user_read_unexpected_from_roles(audit_service):
-    """get_current_user_read оборачивает ошибку из get_user_roles в ServiceError."""
-    user = make_user_mock(user_id=USER_ID)
+    """get_current_user_read оборачивает непредвиденную ошибку в ServiceError."""
     users_repo = AsyncMock()
-    users_repo.get_required_user_by_id = AsyncMock(return_value=user)
-    roles_repo = AsyncMock()
-    roles_repo.get_user_roles = AsyncMock(side_effect=RuntimeError("x"))
-    uow = make_uow_mock(users=users_repo, roles=roles_repo)
+    users_repo.get_required_user_by_id = AsyncMock(side_effect=RuntimeError("x"))
+    uow = make_uow_mock(users=users_repo)
     service = _make_service(uow, audit_service)
 
     with pytest.raises(ServiceError):
@@ -1637,7 +1573,7 @@ async def test_get_user_with_roles_service_error_reraised(audit_service):
     sentinel = ServiceError("inner", service="users", operation="get_user_with_roles")
     users_repo = AsyncMock()
     users_repo.get_required_user_by_id = AsyncMock(side_effect=sentinel)
-    uow = make_uow_mock(users=users_repo, roles=AsyncMock())
+    uow = make_uow_mock(users=users_repo)
     service = _make_service(uow, audit_service)
 
     with pytest.raises(ServiceError) as exc_info:
@@ -1651,7 +1587,7 @@ async def test_get_current_user_read_service_error_reraised(audit_service):
     sentinel = ServiceError("inner", service="users", operation="get_current_user_read")
     users_repo = AsyncMock()
     users_repo.get_required_user_by_id = AsyncMock(side_effect=sentinel)
-    uow = make_uow_mock(users=users_repo, roles=AsyncMock())
+    uow = make_uow_mock(users=users_repo)
     service = _make_service(uow, audit_service)
 
     with pytest.raises(ServiceError) as exc_info:

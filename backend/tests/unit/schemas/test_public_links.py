@@ -9,7 +9,6 @@ import pytest
 from pydantic import ValidationError
 
 from database.models.enums import (
-    BackgroundTaskStatus,
     PublicLinkPermissionType,
     PublicLinkStatus,
 )

@@ -1,4 +1,4 @@
-"""Модульные тесты моделей Role, UserRole, UserQuota, UploadSession, UploadPart,
+"""Модульные тесты моделей UserQuota, UploadSession, UploadPart,
 RegistrationRequest, NodePermission и PublicLink.
 
 Все экземпляры создаются через ``model_construct``, поэтому сессия БД не требуется.
@@ -24,89 +24,7 @@ from database.models.links import PublicLink
 from database.models.permissions import NodePermission
 from database.models.quotas import UserQuota
 from database.models.registration import RegistrationRequest
-from database.models.roles import Role, UserRole
 from database.models.uploads import UploadPart, UploadSession
-
-
-# ===========================================================================
-# Role
-# ===========================================================================
-
-def make_role(**kwargs: object) -> Role:
-    defaults: dict[str, object] = dict(
-        id=uuid.uuid4(),
-        name="user",
-        code="user",
-        display_name="User",
-        description=None,
-        is_system=False,
-        is_active=True,
-    )
-    defaults.update(kwargs)
-    return Role(**defaults)
-
-
-class TestRoleIsActive:
-    def test_active_role(self) -> None:
-        role = make_role(is_active=True)
-        assert role.is_active is True
-
-    def test_inactive_role(self) -> None:
-        role = make_role(is_active=False)
-        assert role.is_active is False
-
-
-class TestRoleIsSystem:
-    def test_system_role(self) -> None:
-        role = make_role(is_system=True)
-        assert role.is_system is True
-
-    def test_non_system_role(self) -> None:
-        role = make_role(is_system=False)
-        assert role.is_system is False
-
-
-class TestRoleActivateDeactivate:
-    def test_activate_sets_is_active_true(self) -> None:
-        role = make_role(is_active=False)
-        role.activate()
-        assert role.is_active is True
-
-    def test_deactivate_sets_is_active_false(self) -> None:
-        role = make_role(is_active=True)
-        role.deactivate()
-        assert role.is_active is False
-
-
-class TestRoleRepr:
-    def test_repr_non_empty(self) -> None:
-        role = make_role()
-        assert isinstance(repr(role), str) and len(repr(role)) > 0
-
-    def test_repr_contains_class_name(self) -> None:
-        role = make_role()
-        assert "Role" in repr(role)
-
-
-# ---------------------------------------------------------------------------
-# UserRole
-# ---------------------------------------------------------------------------
-
-def make_user_role(**kwargs: object) -> UserRole:
-    defaults: dict[str, object] = dict(
-        user_id=uuid.uuid4(),
-        role_id=uuid.uuid4(),
-        assigned_at=datetime.now(UTC),
-        assigned_by=None,
-    )
-    defaults.update(kwargs)
-    return UserRole(**defaults)
-
-
-class TestUserRoleRepr:
-    def test_repr_non_empty(self) -> None:
-        ur = make_user_role()
-        assert isinstance(repr(ur), str) and len(repr(ur)) > 0
 
 
 # ===========================================================================

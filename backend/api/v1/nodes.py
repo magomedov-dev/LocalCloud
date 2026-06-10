@@ -1,3 +1,4 @@
+from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Query, Request, Response, status
@@ -14,6 +15,7 @@ from schemas.files import FileDownloadRequest, FileDownloadResponse
 from schemas.folders import FolderContentRead
 from schemas.nodes import (
     NodeBreadcrumbItem,
+    NodeCopyRequest,
     NodeListItem,
     NodeMoveRequest,
     NodeOperationResponse,
@@ -333,6 +335,50 @@ async def move_node(
     )
 
 
+@router.post(
+    "/{node_id}/copy",
+    response_model=NodeOperationResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def copy_node(
+    data: NodeCopyRequest,
+    current_user: CurrentActiveUserDependency,
+    _: None = RequireReadNodeDependency,
+    node_id: UUID = Path(...),
+    nodes_service: NodesService = Depends(get_nodes_service_dependency),
+) -> NodeOperationResponse:
+    """Копирует (дублирует) узел файловой системы.
+
+    Создаёт независимую копию файла или папки от имени текущего пользователя.
+    Папка копируется рекурсивно вместе со всем содержимым, а файлы физически
+    дублируются в объектном хранилище. При необходимости копия может быть
+    помещена в другую папку и/или получить новое имя.
+
+    Args:
+        data: Данные копирования, включая целевую папку и необязательное новое
+            имя.
+        current_user: Текущий активный пользователь, выполняющий копирование.
+        _: Зависимость проверки права чтения узла. Используется только для
+            авторизации и не применяется внутри функции напрямую.
+        node_id: Уникальный идентификатор копируемого узла.
+        nodes_service: Сервис узлов, выполняющий копирование узла.
+
+    Returns:
+        Результат операции копирования узла с корневым узлом созданной копии.
+
+    Raises:
+        HTTPException: Если пользователь не аутентифицирован, узел или целевая
+            папка не найдены, у пользователя нет нужных прав либо превышена
+            квота.
+    """
+
+    return await nodes_service.copy_node(
+        node_id,
+        data,
+        actor_id=current_user.id,
+    )
+
+
 @router.delete(
     "/{node_id}",
     response_model=NodeOperationResponse,
@@ -474,8 +520,16 @@ async def stream_node(
             stream.close()
             stream.release_conn()
 
+    # Заголовки HTTP кодируются latin-1, поэтому имя файла с не-ASCII символами
+    # (например кириллицей) нельзя класть в filename="..." напрямую — иначе
+    # Starlette падает с UnicodeEncodeError. Используем RFC 5987/6266: ASCII-
+    # fallback в filename и UTF-8 percent-encoding в filename*.
+    ascii_name = name.encode("ascii", "ignore").decode("ascii").strip() or "file"
+    ascii_name = ascii_name.replace('"', "'")
     headers: dict[str, str] = {
-        "Content-Disposition": f'inline; filename="{name}"',
+        "Content-Disposition": (
+            f'inline; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(name)}'
+        ),
         "Accept-Ranges": "bytes",
         "Cache-Control": "private, max-age=300",
     }

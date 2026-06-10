@@ -77,7 +77,6 @@ def make_file(**kwargs):
         processing_status=FileProcessingStatus.PENDING,
         preview_status=FilePreviewStatus.NOT_REQUIRED,
         preview_storage_key=None,
-        current_version_id=None,
     )
     defaults.update(kwargs)
     for k, v in defaults.items():
@@ -568,7 +567,6 @@ async def test_get_storage_info_returns_dict():
     assert info["storage_key"] == "files/test.txt"
     assert info["size_bytes"] == 1024
     assert info["checksum"] == "abc"
-    assert info["current_version_id"] == file_obj.current_version_id
 
 
 @pytest.mark.asyncio
@@ -608,7 +606,7 @@ async def test_update_storage_info_without_optional_values():
 
 
 # ---------------------------------------------------------------------------
-# update_metadata / update_size / update_checksum / update_current_version
+# update_metadata / update_size / update_checksum
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -659,19 +657,6 @@ async def test_update_checksum():
     )
     assert file_obj.checksum == "abc"
     assert file_obj.checksum_algorithm == "sha1"
-    assert res is file_obj
-
-
-@pytest.mark.asyncio
-async def test_update_current_version():
-    repo, session, result = make_repo()
-    file_obj = make_file()
-    version_id = uuid.uuid4()
-    result.scalar_one_or_none = MagicMock(return_value=file_obj)
-    res = await repo.update_current_version(
-        file_id=file_obj.id, current_version_id=version_id
-    )
-    assert file_obj.current_version_id == version_id
     assert res is file_obj
 
 
@@ -1284,7 +1269,6 @@ async def test_execute_file_statement_success():
     repo, session, result = make_repo()
     files = [make_file()]
     result.scalars.return_value.all.return_value = files
-    from database.models.filesystem import File
     res = await repo._execute_file_statement(
         repo.select(), operation="op"
     )

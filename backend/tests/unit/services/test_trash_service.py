@@ -44,7 +44,6 @@ from services.trash import (
     _resource_type_from_node_snapshot,
     _restored_action_from_node_snapshot,
     _validate_sort_field,
-    _version_storage_objects,
 )
 from storage import StorageError
 
@@ -151,26 +150,17 @@ def make_storage_full():
     return svc
 
 
-def make_version_mock(storage_key="versions/v1", storage_bucket="bucket"):
-    version = MagicMock()
-    version.storage_key = storage_key
-    version.storage_bucket = storage_bucket
-    return version
-
-
 def make_file_mock(
     node_id=None,
     size_bytes=100,
     storage_key="files/f1",
     storage_bucket="bucket",
-    versions=None,
 ):
     file = MagicMock()
     file.node_id = node_id or uuid.uuid4()
     file.size_bytes = size_bytes
     file.storage_key = storage_key
     file.storage_bucket = storage_bucket
-    file.versions = versions if versions is not None else []
     return file
 
 
@@ -834,7 +824,6 @@ async def test_purge_folder_collects_descendant_files():
     file = make_file_mock(
         node_id=child_file_node.id,
         size_bytes=200,
-        versions=[make_version_mock()],
     )
 
     trash_repo = AsyncMock()
@@ -868,8 +857,8 @@ async def test_purge_folder_collects_descendant_files():
 
     assert result.purged_count == 1
     nodes_repo.get_descendants.assert_awaited_once()
-    # объект файла и объект версии оба удалены
-    assert storage.delete_file_object.await_count == 2
+    # удаляется объект файла
+    assert storage.delete_file_object.await_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1214,31 +1203,15 @@ async def test_get_trash_item_for_request_no_identifiers_raises():
         )
 
 
-def test_file_storage_objects_includes_versions():
-    file = make_file_mock(
-        storage_key="files/main",
-        versions=[make_version_mock("v/a"), make_version_mock(None)],
-    )
+def test_file_storage_objects_returns_file_object():
+    file = make_file_mock(storage_key="files/main", storage_bucket="buck")
     refs = _file_storage_objects(file)
-    keys = {ref.object_key for ref in refs}
-    assert "files/main" in keys
-    assert "v/a" in keys
-    # версия без storage_key пропускается
-    assert len(refs) == 2
+    assert refs == [StorageObjectRef(bucket="buck", object_key="files/main")]
 
 
 def test_file_storage_objects_no_storage_key():
-    file = make_file_mock(storage_key=None, versions=[])
+    file = make_file_mock(storage_key=None)
     assert _file_storage_objects(file) == []
-
-
-def test_version_storage_objects_empty_when_no_key():
-    assert _version_storage_objects(make_version_mock(None)) == []
-
-
-def test_version_storage_objects_returns_ref():
-    refs = _version_storage_objects(make_version_mock("v/x", "buck"))
-    assert refs == [StorageObjectRef(bucket="buck", object_key="v/x")]
 
 
 @pytest.mark.asyncio

@@ -16,7 +16,6 @@ from database.models import links as _links_models  # noqa: F401
 from database.models import permissions as _permissions_models  # noqa: F401
 from database.models import quotas as _quotas_models  # noqa: F401
 from database.models import registration as _registration_models  # noqa: F401
-from database.models import roles as _roles_models  # noqa: F401
 from database.models import tasks as _tasks_models  # noqa: F401
 from database.models import tokens as _tokens_models  # noqa: F401
 from database.models import uploads as _uploads_models  # noqa: F401

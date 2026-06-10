@@ -17,6 +17,7 @@ dependencies = [
     "alembic>=1.17.2",
     "asyncpg>=0.31.0",
     "pillow>=12.2.0",
+    "pymupdf>=1.24.0",
     "minio>=7.2.20",
     "ruff",
     "ty",

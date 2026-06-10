@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from database.models.enums import UserStatus
+from database.models.enums import SystemRole, UserStatus
 from security.dependencies.auth import SecurityDependencyError
 from security.dependencies.nodes import (
     get_accessible_node_dependency,
@@ -56,12 +56,12 @@ def make_node(owner_id: uuid.UUID | None = None, is_deleted: bool = False) -> Ma
 
 def make_user(
     status: UserStatus = UserStatus.ACTIVE,
-    roles: list | None = None,
+    role: SystemRole = SystemRole.USER,
 ) -> MagicMock:
     user = MagicMock()
     user.id = uuid.uuid4()
     user.status = status
-    user.roles = roles if roles is not None else []
+    user.role = role
     return user
 
 
@@ -184,10 +184,7 @@ class TestRequireNodePermissionDependency:
     @pytest.mark.asyncio
     async def test_admin_user_can_access_any_node(self) -> None:
         """Администратору всегда должен предоставляться доступ."""
-        role = MagicMock()
-        role.code = "admin"
-        role.name = "admin"
-        admin = make_user(roles=[role])
+        admin = make_user(role=SystemRole.ADMIN)
 
         node = make_node()
         dep = require_node_permission_dependency(PermissionAction.READ)
@@ -211,6 +208,74 @@ class TestRequireNodePermissionDependency:
         with pytest.raises(SecurityDependencyError) as exc_info:
             await dep(node_id=node.id, user=user, session=session)
 
+        assert exc_info.value.status_code == 403
+
+    @staticmethod
+    def _ancestor_session(file_node: object, parent: object) -> AsyncMock:
+        """Сессия, отдающая сперва файл, затем его родителя (для наследования)."""
+        session = AsyncMock()
+        r_file = MagicMock()
+        r_file.scalar_one_or_none.return_value = file_node
+        r_parent = MagicMock()
+        r_parent.scalar_one_or_none.return_value = parent
+        session.execute = AsyncMock(side_effect=[r_file, r_parent])
+        return session
+
+    @staticmethod
+    def _grant(user_id: uuid.UUID, level: object) -> MagicMock:
+        from database.models.enums import PermissionLevel
+
+        perm = MagicMock()
+        perm.user_id = user_id
+        perm.permission_level = level
+        perm.can_read = True
+        perm.can_download = True
+        perm.can_write = level == PermissionLevel.WRITE
+        perm.can_delete = False
+        perm.can_share = False
+        perm.expires_at = None
+        perm.revoked_at = None
+        return perm
+
+    @pytest.mark.asyncio
+    async def test_inherits_read_from_ancestor_folder(self) -> None:
+        """Грант на папку-предка открывает чтение файла внутри неё."""
+        from database.models.enums import NodeVisibility, PermissionLevel
+
+        user = make_user()
+        parent = make_node()
+        parent.parent_id = None
+        parent.permissions = [self._grant(user.id, PermissionLevel.DOWNLOAD)]
+        file_node = make_node()  # другой владелец, без прямых прав
+        file_node.parent_id = parent.id
+        file_node.permissions = []
+        file_node.visibility = NodeVisibility.PRIVATE
+
+        dep = require_node_permission_dependency(PermissionAction.READ)
+        session = self._ancestor_session(file_node, parent)
+
+        result = await dep(node_id=file_node.id, user=user, session=session)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_inherited_read_does_not_grant_write(self) -> None:
+        """Наследованный read-доступ не разрешает запись."""
+        from database.models.enums import NodeVisibility, PermissionLevel
+
+        user = make_user()
+        parent = make_node()
+        parent.parent_id = None
+        parent.permissions = [self._grant(user.id, PermissionLevel.DOWNLOAD)]
+        file_node = make_node()
+        file_node.parent_id = parent.id
+        file_node.permissions = []
+        file_node.visibility = NodeVisibility.PRIVATE
+
+        dep = require_node_permission_dependency(PermissionAction.WRITE)
+        session = self._ancestor_session(file_node, parent)
+
+        with pytest.raises(SecurityDependencyError) as exc_info:
+            await dep(node_id=file_node.id, user=user, session=session)
         assert exc_info.value.status_code == 403
 
 
@@ -246,10 +311,7 @@ class TestGetAccessibleNodeDependency:
 
     @pytest.mark.asyncio
     async def test_admin_gets_node_back(self) -> None:
-        role = MagicMock()
-        role.code = "admin"
-        role.name = "admin"
-        admin = make_user(roles=[role])
+        admin = make_user(role=SystemRole.ADMIN)
         node = make_node()
         dep = get_accessible_node_dependency(PermissionAction.READ)
         session = make_session_returning(node)

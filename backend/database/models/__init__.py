@@ -11,7 +11,6 @@ from database.models.enums import (
     BackgroundTaskType,
     FilePreviewStatus,
     FileProcessingStatus,
-    FileVersionStatus,
     HealthStatus,
     NodeType,
     NodeVisibility,
@@ -34,7 +33,6 @@ from database.models.enums import (
 from database.models.filesystem import (
     File,
     FileSystemNode,
-    FileVersion,
     Folder,
     TrashItem,
 )
@@ -48,7 +46,6 @@ from database.models.mixins import (
 from database.models.permissions import NodePermission
 from database.models.quotas import UserQuota
 from database.models.registration import RegistrationRequest
-from database.models.roles import Role, UserRole
 from database.models.tasks import BackgroundTask
 from database.models.tokens import RefreshToken
 from database.models.uploads import UploadPart, UploadSession
@@ -69,8 +66,6 @@ __all__ = [
     "FilePreviewStatus",
     "FileProcessingStatus",
     "FileSystemNode",
-    "FileVersion",
-    "FileVersionStatus",
     "Folder",
     "HealthStatus",
     "NAMING_CONVENTION",
@@ -86,7 +81,6 @@ __all__ = [
     "RefreshToken",
     "RegistrationRequest",
     "RegistrationRequestStatus",
-    "Role",
     "SessionStatus",
     "SoftDeleteMixin",
     "StorageObjectStatus",
@@ -103,6 +97,5 @@ __all__ = [
     "UploadSessionStatus",
     "User",
     "UserQuota",
-    "UserRole",
     "UserStatus",
 ]

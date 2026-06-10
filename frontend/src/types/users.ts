@@ -4,17 +4,9 @@
 export type UserStatus = "pending" | "active" | "blocked" | "rejected" | "deleted";
 
 /**
- * Краткое представление роли для списков.
+ * Роль пользователя.
  */
-export interface RoleListItem {
-  id: string;
-  name: string;
-  code: string;
-  display_name: string;
-  is_system: boolean;
-  is_active: boolean;
-  created_at: string;
-}
+export type UserRole = "admin" | "user";
 
 /**
  * Текущий аутентифицированный пользователь.
@@ -24,11 +16,19 @@ export interface CurrentUser {
   email: string;
   username: string;
   status: UserStatus;
-  is_email_verified: boolean;
   last_login_at: string | null;
   created_at: string;
   updated_at: string;
-  roles: RoleListItem[];
+  role: UserRole;
+}
+
+/**
+ * Минимальное представление пользователя для автопоиска при шеринге.
+ */
+export interface UserLookupItem {
+  id: string;
+  username: string;
+  email: string;
 }
 
 /**
@@ -39,7 +39,6 @@ export interface UserRead {
   email: string;
   username: string;
   status: UserStatus;
-  is_email_verified: boolean;
   last_login_at: string | null;
   approved_at: string | null;
   blocked_at: string | null;
@@ -61,7 +60,6 @@ export interface UserListItem {
   email: string;
   username: string;
   status: UserStatus;
-  is_email_verified: boolean;
   last_login_at: string | null;
   created_at: string;
   /** Признак учётной записи первичного администратора (нельзя удалить). */

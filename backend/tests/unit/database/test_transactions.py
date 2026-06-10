@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy.exc import SQLAlchemyError, TimeoutError as SATimeoutError
 
 from database.transactions import (

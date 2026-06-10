@@ -14,7 +14,6 @@ from database.models.enums import (
     BackgroundTaskType,
     FilePreviewStatus,
     FileProcessingStatus,
-    FileVersionStatus,
     NodeType,
     NodeVisibility,
     StorageObjectStatus,
@@ -40,7 +39,6 @@ from services.downloads import (
     _optional_str,
     _presigned_expires_at,
     _require_file_node,
-    _resolve_download_version,
     get_downloads_service,
 )
 from services.exceptions import (
@@ -134,7 +132,6 @@ def make_file_mock(file_id=None, node_id=None, owner_id=None):
     file.storage_status = StorageObjectStatus.AVAILABLE
     file.processing_status = FileProcessingStatus.READY
     file.preview_status = FilePreviewStatus.NOT_REQUIRED
-    file.current_version_id = uuid.uuid4()
     file.storage_bucket = "files"
     file.storage_key = "key/file.txt"
     file.preview_storage_key = None
@@ -320,25 +317,6 @@ async def test_request_folder_archive_non_folder_raises_validation_error():
 # ---------------------------------------------------------------------------
 
 
-def make_version_mock(version_id=None, file_id=None, status=FileVersionStatus.ACTIVE):
-    version = MagicMock()
-    version.id = version_id or uuid.uuid4()
-    version.file_id = file_id or uuid.uuid4()
-    version.version_number = 2
-    version.status = status
-    version.storage_bucket = "files"
-    version.storage_key = "key/version.txt"
-    version.size_bytes = 2048
-    version.checksum = "abc"
-    version.checksum_algorithm = "sha256"
-    version.mime_type = "text/markdown"
-    version.created_at = datetime.now(UTC)
-    version.created_by = uuid.uuid4()
-    version.change_comment = "comment"
-    version.is_current = False
-    return version
-
-
 def make_completed_task_mock(task_id=None, related_entity_id=None, result_data=None):
     task = make_task_mock(task_id=task_id, status=BackgroundTaskStatus.COMPLETED)
     task.related_entity_id = related_entity_id
@@ -375,77 +353,6 @@ async def test_create_file_download_url_logs_audit_event():
     audit.log_success.assert_awaited_once()
     kwargs = audit.log_success.await_args.kwargs
     assert kwargs["action"] == AuditAction.FILE_DOWNLOADED
-
-
-@pytest.mark.asyncio
-async def test_create_file_download_url_with_version():
-    """create_file_download_url разрешает версию и использует её объект хранилища."""
-    user_id = uuid.uuid4()
-    file_id = uuid.uuid4()
-    version_id = uuid.uuid4()
-    file = make_file_mock(file_id=file_id)
-    version = make_version_mock(version_id=version_id, file_id=file_id)
-
-    files_repo = AsyncMock()
-    files_repo.get_required_by_id = AsyncMock(return_value=file)
-    versions_repo = AsyncMock()
-    versions_repo.get_required_by_id = AsyncMock(return_value=version)
-
-    access = make_access(node=file.node)
-    uow = make_uow(files=files_repo, versions=versions_repo)
-    service = make_downloads_service(uow, access_svc=access)
-
-    data = FileDownloadRequest(file_id=file_id, version_id=version_id)
-    result = await service.create_file_download_url(data, user_id=user_id)
-
-    assert result.version_id == version_id
-    assert result.size_bytes == 2048
-
-
-@pytest.mark.asyncio
-async def test_create_file_download_url_version_mismatch_raises_validation():
-    """create_file_download_url вызывает ValidationServiceError при несовпадении версии."""
-    user_id = uuid.uuid4()
-    file_id = uuid.uuid4()
-    file = make_file_mock(file_id=file_id)
-    version = make_version_mock(file_id=uuid.uuid4())  # принадлежит другому файлу
-
-    files_repo = AsyncMock()
-    files_repo.get_required_by_id = AsyncMock(return_value=file)
-    versions_repo = AsyncMock()
-    versions_repo.get_required_by_id = AsyncMock(return_value=version)
-
-    access = make_access(node=file.node)
-    uow = make_uow(files=files_repo, versions=versions_repo)
-    service = make_downloads_service(uow, access_svc=access)
-
-    data = FileDownloadRequest(file_id=file_id, version_id=version.id)
-
-    with pytest.raises(ValidationServiceError):
-        await service.create_file_download_url(data, user_id=user_id)
-
-
-@pytest.mark.asyncio
-async def test_create_file_download_url_inactive_version_raises_download_error():
-    """create_file_download_url вызывает DownloadServiceError для неактивной версии."""
-    user_id = uuid.uuid4()
-    file_id = uuid.uuid4()
-    file = make_file_mock(file_id=file_id)
-    version = make_version_mock(file_id=file_id, status=FileVersionStatus.ARCHIVED)
-
-    files_repo = AsyncMock()
-    files_repo.get_required_by_id = AsyncMock(return_value=file)
-    versions_repo = AsyncMock()
-    versions_repo.get_required_by_id = AsyncMock(return_value=version)
-
-    access = make_access(node=file.node)
-    uow = make_uow(files=files_repo, versions=versions_repo)
-    service = make_downloads_service(uow, access_svc=access)
-
-    data = FileDownloadRequest(file_id=file_id, version_id=version.id)
-
-    with pytest.raises(DownloadServiceError):
-        await service.create_file_download_url(data, user_id=user_id)
 
 
 @pytest.mark.asyncio
@@ -1452,15 +1359,6 @@ def test_ensure_archive_task_downloadable_ok():
     task = make_completed_task_mock(result_data={"k": "v"})
     task.created_by = user_id
     _ensure_archive_task_downloadable(task, user_id=user_id, operation="op")
-
-
-@pytest.mark.asyncio
-async def test_resolve_download_version_returns_none_without_id():
-    file = make_file_mock()
-    result = await _resolve_download_version(
-        make_uow(), file=file, version_id=None, operation="op"
-    )
-    assert result is None
 
 
 # ---------------------------------------------------------------------------

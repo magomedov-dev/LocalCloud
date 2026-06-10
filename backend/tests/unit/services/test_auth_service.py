@@ -2,18 +2,16 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from database.models.enums import SessionStatus, UserStatus
+from database.models.enums import SessionStatus, SystemRole, UserStatus
 from schemas.auth import (
     LoginRequest,
     LoginResponse,
     LogoutResponse,
-    PasswordResetRequest,
-    PasswordResetRequestResponse,
 )
 from security.password.service import hash_password
 from services.auth import AuthService
@@ -88,10 +86,8 @@ async def test_login_success(audit_service, settings):
     tokens_repo = AsyncMock()
     tokens_repo.create_token = AsyncMock(return_value=token)
 
-    roles_repo = AsyncMock()
-    roles_repo.get_user_roles = AsyncMock(return_value=[])
 
-    uow = make_uow_mock(users=users_repo, refresh_tokens=tokens_repo, roles=roles_repo)
+    uow = make_uow_mock(users=users_repo, refresh_tokens=tokens_repo)
     service = _make_service(uow, audit_service, settings)
 
     data = LoginRequest(email_or_username="user@example.com", password=PASSWORD)
@@ -348,60 +344,6 @@ async def test_refresh_session_invalid_jwt_raises(audit_service, settings):
 
 
 # ---------------------------------------------------------------------------
-# request_password_reset
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_request_password_reset_unknown_email(audit_service, settings):
-    """request_password_reset возвращает пустой reset_token для неизвестного email."""
-    users_repo = AsyncMock()
-    users_repo.get_by_email = AsyncMock(return_value=None)
-
-    uow = make_uow_mock(users=users_repo)
-    service = _make_service(uow, audit_service, settings)
-
-    data = PasswordResetRequest(email="ghost@example.com")
-    result = await service.request_password_reset(data)
-
-    assert isinstance(result, PasswordResetRequestResponse)
-    assert result.reset_token == ""
-
-
-@pytest.mark.asyncio
-async def test_request_password_reset_active_user_returns_token(audit_service, settings):
-    """request_password_reset возвращает непустой reset_token для активного пользователя."""
-    user = make_user_mock(user_id=USER_ID, email="active@example.com", status=UserStatus.ACTIVE)
-    users_repo = AsyncMock()
-    users_repo.get_by_email = AsyncMock(return_value=user)
-
-    uow = make_uow_mock(users=users_repo)
-    service = _make_service(uow, audit_service, settings)
-
-    data = PasswordResetRequest(email="active@example.com")
-    result = await service.request_password_reset(data)
-
-    assert isinstance(result, PasswordResetRequestResponse)
-    assert result.reset_token != ""
-
-
-@pytest.mark.asyncio
-async def test_request_password_reset_inactive_user_returns_empty(audit_service, settings):
-    """request_password_reset возвращает пустой токен для пользователя PENDING (не активного)."""
-    user = make_user_mock(user_id=USER_ID, email="pending@example.com", status=UserStatus.PENDING)
-    users_repo = AsyncMock()
-    users_repo.get_by_email = AsyncMock(return_value=user)
-
-    uow = make_uow_mock(users=users_repo)
-    service = _make_service(uow, audit_service, settings)
-
-    data = PasswordResetRequest(email="pending@example.com")
-    result = await service.request_password_reset(data)
-
-    assert result.reset_token == ""
-
-
-# ---------------------------------------------------------------------------
 # проброс ошибки базы данных
 # ---------------------------------------------------------------------------
 
@@ -452,18 +394,6 @@ async def test_logout_all_revokes_all_sessions(audit_service, settings):
 # ---------------------------------------------------------------------------
 
 
-def _make_role_mock():
-    """Вернуть мок, имитирующий ORM-модель Role."""
-    role = MagicMock()
-    role.id = uuid.uuid4()
-    role.name = "user"
-    role.code = "user"
-    role.display_name = "User"
-    role.is_system = True
-    role.is_active = True
-    return role
-
-
 def _make_response_mock():
     """Вернуть мок, похожий на Response, который фиксирует операции с cookie."""
     response = MagicMock()
@@ -472,13 +402,14 @@ def _make_response_mock():
     return response
 
 
-def _login_uow(audit_service, settings, *, status=UserStatus.ACTIVE, roles=None):
+def _login_uow(audit_service, settings, *, status=UserStatus.ACTIVE, role=SystemRole.USER):
     user = make_user_mock(
         user_id=USER_ID,
         email="user@example.com",
         username="testuser",
         status=status,
         password_hash=PASSWORD_HASH,
+        role=role,
     )
     token = make_token_mock(user_id=USER_ID, token_id=SESSION_ID)
 
@@ -490,13 +421,8 @@ def _login_uow(audit_service, settings, *, status=UserStatus.ACTIVE, roles=None)
     tokens_repo = AsyncMock()
     tokens_repo.create_token = AsyncMock(return_value=token)
 
-    roles_repo = AsyncMock()
-    roles_repo.get_user_roles = AsyncMock(return_value=roles or [])
-
-    uow = make_uow_mock(
-        users=users_repo, refresh_tokens=tokens_repo, roles=roles_repo
-    )
-    return uow, users_repo, tokens_repo, roles_repo
+    uow = make_uow_mock(users=users_repo, refresh_tokens=tokens_repo)
+    return uow, users_repo, tokens_repo
 
 
 # ---------------------------------------------------------------------------
@@ -506,16 +432,14 @@ def _login_uow(audit_service, settings, *, status=UserStatus.ACTIVE, roles=None)
 
 @pytest.mark.asyncio
 async def test_login_with_roles_builds_current_user(audit_service, settings):
-    """Вход возвращает роли в DTO CurrentUserRead (покрывает снимок ролей)."""
-    role = _make_role_mock()
-    uow, *_ = _login_uow(audit_service, settings, roles=[role])
+    """Вход возвращает системную роль в DTO CurrentUserRead."""
+    uow, *_ = _login_uow(audit_service, settings, role=SystemRole.ADMIN)
     service = _make_service(uow, audit_service, settings)
 
     data = LoginRequest(email_or_username="user@example.com", password=PASSWORD)
     result = await service.login(data)
 
-    assert len(result.user.roles) == 1
-    assert result.user.roles[0].code == "user"
+    assert result.user.role == SystemRole.ADMIN
     audit_service.log_user_event.assert_awaited()
 
 
@@ -536,12 +460,8 @@ async def test_login_username_lookup_path(audit_service, settings):
     users_repo.update_last_login = AsyncMock(return_value=user)
     tokens_repo = AsyncMock()
     tokens_repo.create_token = AsyncMock(return_value=token)
-    roles_repo = AsyncMock()
-    roles_repo.get_user_roles = AsyncMock(return_value=[])
 
-    uow = make_uow_mock(
-        users=users_repo, refresh_tokens=tokens_repo, roles=roles_repo
-    )
+    uow = make_uow_mock(users=users_repo, refresh_tokens=tokens_repo)
     service = _make_service(uow, audit_service, settings)
 
     data = LoginRequest(email_or_username="bob", password=PASSWORD)
@@ -565,12 +485,8 @@ async def test_login_email_then_username_fallback(audit_service, settings):
     users_repo.update_last_login = AsyncMock(return_value=user)
     tokens_repo = AsyncMock()
     tokens_repo.create_token = AsyncMock(return_value=token)
-    roles_repo = AsyncMock()
-    roles_repo.get_user_roles = AsyncMock(return_value=[])
 
-    uow = make_uow_mock(
-        users=users_repo, refresh_tokens=tokens_repo, roles=roles_repo
-    )
+    uow = make_uow_mock(users=users_repo, refresh_tokens=tokens_repo)
     service = _make_service(uow, audit_service, settings)
 
     data = LoginRequest(email_or_username="user@example.com", password=PASSWORD)
@@ -649,12 +565,8 @@ async def test_refresh_session_success_rotates(audit_service, settings):
     tokens_repo.rotate_token = AsyncMock(return_value=new_token)
     users_repo = AsyncMock()
     users_repo.get_required_user_by_id = AsyncMock(return_value=user)
-    roles_repo = AsyncMock()
-    roles_repo.get_user_roles = AsyncMock(return_value=[_make_role_mock()])
 
-    uow = make_uow_mock(
-        users=users_repo, refresh_tokens=tokens_repo, roles=roles_repo
-    )
+    uow = make_uow_mock(users=users_repo, refresh_tokens=tokens_repo)
     service = _make_service(uow, audit_service, settings)
 
     response = _make_response_mock()
@@ -878,22 +790,22 @@ def _valid_access_token(settings):
 
 @pytest.mark.asyncio
 async def test_get_current_user_success(audit_service, settings):
-    """get_current_user_from_access_token возвращает CurrentUserRead с ролями."""
+    """get_current_user_from_access_token возвращает CurrentUserRead с ролью."""
     from schemas.users import CurrentUserRead
 
     access_token = _valid_access_token(settings)
-    user = make_user_mock(user_id=USER_ID, status=UserStatus.ACTIVE)
+    user = make_user_mock(
+        user_id=USER_ID, status=UserStatus.ACTIVE, role=SystemRole.ADMIN
+    )
     users_repo = AsyncMock()
     users_repo.get_required_user_by_id = AsyncMock(return_value=user)
-    roles_repo = AsyncMock()
-    roles_repo.get_user_roles = AsyncMock(return_value=[_make_role_mock()])
-    uow = make_uow_mock(users=users_repo, roles=roles_repo)
+    uow = make_uow_mock(users=users_repo)
     service = _make_service(uow, audit_service, settings)
 
     result = await service.get_current_user_from_access_token(access_token)
     assert isinstance(result, CurrentUserRead)
     assert result.id == USER_ID
-    assert len(result.roles) == 1
+    assert result.role == SystemRole.ADMIN
 
 
 @pytest.mark.asyncio
@@ -1011,139 +923,6 @@ async def test_revoke_session_unexpected_error_wrapped(audit_service, settings):
 
     with pytest.raises(ServiceError):
         await service.revoke_session(user_id=USER_ID, session_id=SESSION_ID)
-
-
-# ---------------------------------------------------------------------------
-# request_password_reset — оборачивание ошибок и логирование активного токена
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_request_password_reset_logs_event(audit_service, settings):
-    """request_password_reset для активного пользователя логирует событие аудита."""
-    user = make_user_mock(
-        user_id=USER_ID, email="active@example.com", status=UserStatus.ACTIVE
-    )
-    users_repo = AsyncMock()
-    users_repo.get_by_email = AsyncMock(return_value=user)
-    uow = make_uow_mock(users=users_repo)
-    service = _make_service(uow, audit_service, settings)
-
-    data = PasswordResetRequest(email="active@example.com")
-    result = await service.request_password_reset(data)
-    assert result.reset_token != ""
-    audit_service.log_user_event.assert_awaited()
-
-
-@pytest.mark.asyncio
-async def test_request_password_reset_database_error_wrapped(audit_service, settings):
-    """DatabaseError при request_password_reset оборачивается."""
-    from database.exceptions import DatabaseError as DBError
-
-    users_repo = AsyncMock()
-    users_repo.get_by_email = AsyncMock(side_effect=DBError("db down"))
-    uow = make_uow_mock(users=users_repo)
-    service = _make_service(uow, audit_service, settings)
-
-    data = PasswordResetRequest(email="active@example.com")
-    with pytest.raises(ServiceError):
-        await service.request_password_reset(data)
-
-
-@pytest.mark.asyncio
-async def test_request_password_reset_unexpected_error_wrapped(audit_service, settings):
-    """Не-DatabaseError при request_password_reset оборачивается."""
-    users_repo = AsyncMock()
-    users_repo.get_by_email = AsyncMock(side_effect=RuntimeError("boom"))
-    uow = make_uow_mock(users=users_repo)
-    service = _make_service(uow, audit_service, settings)
-
-    data = PasswordResetRequest(email="active@example.com")
-    with pytest.raises(ServiceError):
-        await service.request_password_reset(data)
-
-
-# ---------------------------------------------------------------------------
-# confirm_password_reset
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_confirm_password_reset_success(audit_service, settings):
-    """confirm_password_reset проверяет токен и делегирует в UsersService."""
-    from datetime import timedelta
-
-    from schemas.auth import (
-        PasswordResetConfirmRequest,
-        PasswordResetConfirmResponse,
-    )
-    from security.jwt import create_token
-
-    reset_token = create_token(
-        USER_ID,
-        token_type="password_reset",
-        expires_delta=timedelta(minutes=30),
-        settings=settings,
-    )
-
-    uow = make_uow_mock()
-    service = _make_service(uow, audit_service, settings)
-
-    users_service = MagicMock()
-    users_service.change_password = AsyncMock()
-
-    data = PasswordResetConfirmRequest(token=reset_token, new_password="NewPass123!")
-    result = await service.confirm_password_reset(data, users_service=users_service)
-
-    assert isinstance(result, PasswordResetConfirmResponse)
-    users_service.change_password.assert_awaited_once()
-    args, kwargs = users_service.change_password.await_args
-    assert args[0] == USER_ID
-    assert args[1] == "NewPass123!"
-    assert kwargs.get("actor_id") == USER_ID
-
-
-@pytest.mark.asyncio
-async def test_confirm_password_reset_invalid_token_raises(audit_service, settings):
-    """Невалидный токен сброса вызывает AuthenticationServiceError."""
-    from schemas.auth import PasswordResetConfirmRequest
-
-    uow = make_uow_mock()
-    service = _make_service(uow, audit_service, settings)
-    users_service = MagicMock()
-    users_service.change_password = AsyncMock()
-
-    data = PasswordResetConfirmRequest(token="not-a-jwt", new_password="NewPass123!")
-    with pytest.raises(AuthenticationServiceError) as exc_info:
-        await service.confirm_password_reset(data, users_service=users_service)
-    assert exc_info.value.details.get("reason") == "invalid_token"
-    users_service.change_password.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_confirm_password_reset_expired_token_raises(audit_service, settings):
-    """Просроченный токен сброса вызывает AuthenticationServiceError с token_expired."""
-    from datetime import timedelta
-
-    from schemas.auth import PasswordResetConfirmRequest
-    from security.jwt import create_token
-
-    expired_token = create_token(
-        USER_ID,
-        token_type="password_reset",
-        expires_delta=timedelta(minutes=-5),
-        settings=settings,
-    )
-
-    uow = make_uow_mock()
-    service = _make_service(uow, audit_service, settings)
-    users_service = MagicMock()
-    users_service.change_password = AsyncMock()
-
-    data = PasswordResetConfirmRequest(token=expired_token, new_password="NewPass123!")
-    with pytest.raises(AuthenticationServiceError) as exc_info:
-        await service.confirm_password_reset(data, users_service=users_service)
-    assert exc_info.value.details.get("reason") == "token_expired"
 
 
 # ---------------------------------------------------------------------------

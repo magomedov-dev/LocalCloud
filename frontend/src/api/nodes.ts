@@ -1,6 +1,6 @@
 import api from "@/lib/api";
 import type { PageResponse } from "@/types/common";
-import type { NodeListItem, NodeMoveRequest } from "@/types/nodes";
+import type { NodeListItem, NodeMoveRequest, NodeCopyRequest } from "@/types/nodes";
 import type { FolderContent } from "@/types/folders";
 import type { FileDownloadResponse } from "@/types/files";
 
@@ -132,6 +132,20 @@ export const nodesApi = {
    */
   move: (id: string, data: NodeMoveRequest) =>
     api.post(`/nodes/${id}/move`, data).then((r) => r.data),
+
+  /**
+   * Копирует node в другую папку.
+   *
+   * Args:
+   *   id: Идентификатор node.
+   *   data: Целевая родительская папка и опциональное новое имя копии.
+   *     При отсутствии `new_name` backend сам добавляет суффикс «(копия)».
+   *
+   * Returns:
+   *   Promise с ответом API.
+   */
+  copy: (id: string, data: NodeCopyRequest) =>
+    api.post(`/nodes/${id}/copy`, data).then((r) => r.data),
 
   /**
    * Формирует URL для streaming-доступа к node.

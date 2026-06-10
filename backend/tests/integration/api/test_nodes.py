@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -22,16 +21,11 @@ from security.dependencies.nodes import (
     RequireReadNodeDependency,
     RequireWriteNodeDependency,
     RequireDeleteNodeDependency,
-    get_accessible_node_dependency,
-    get_node_by_id,
-    get_node_permissions,
-    require_node_permission_dependency,
 )
 from services.exceptions import (
     ConflictServiceError,
     NotFoundServiceError,
     PermissionServiceError,
-    ValidationServiceError,
 )
 from tests.integration.conftest import API_V1, _make_mock_user
 
@@ -267,7 +261,6 @@ class TestDeleteNode:
         from security.dependencies.nodes import RequireDeleteNodeDependency
         mock_user = _make_mock_user()
         node_id = uuid.uuid4()
-        now = datetime.now(tz=timezone.utc).isoformat()
         op_response = {
             "node_id": str(node_id),
             "success": True,
@@ -338,7 +331,6 @@ def _file_download_response_dict() -> dict[str, Any]:
         "method": "GET",
         "headers": {},
         "file_id": str(uuid.uuid4()),
-        "version_id": None,
         "filename": "file.bin",
         "size_bytes": 10,
         "mime_type": "application/octet-stream",
@@ -1068,6 +1060,39 @@ class TestStreamNode:
             assert response.content == payload
             assert response.headers["Accept-Ranges"] == "bytes"
             assert 'inline; filename="f.txt"' in response.headers["Content-Disposition"]
+        finally:
+            app.dependency_overrides.pop(get_current_active_user, None)
+            app.dependency_overrides.pop(get_downloads_service_dependency, None)
+            _clear_node_perm_overrides()
+
+    def test_stream_non_ascii_filename_does_not_crash(self) -> None:
+        """Кириллическое имя файла не должно ронять stream (latin-1 заголовки)."""
+        mock_user = _make_mock_user()
+        node_id = uuid.uuid4()
+        payload = b"data"
+        cyrillic = "Книга — Имран.pdf"
+
+        mock_downloads_svc = AsyncMock()
+        mock_downloads_svc.stream_file = AsyncMock(
+            return_value=(_FakeStream([payload]), "application/pdf", cyrillic, len(payload))
+        )
+
+        app.dependency_overrides[get_current_active_user] = lambda: mock_user
+        app.dependency_overrides[get_downloads_service_dependency] = (
+            lambda: mock_downloads_svc
+        )
+        _override_read()
+        try:
+            with TestClient(app, raise_server_exceptions=False) as c:
+                response = c.get(f"{API_V1}/nodes/{node_id}/stream")
+            assert response.status_code == 200
+            assert response.content == payload
+            disposition = response.headers["Content-Disposition"]
+            # ASCII-fallback + RFC 5987 кодирование UTF-8 имени.
+            assert "filename=" in disposition
+            assert "filename*=UTF-8''" in disposition
+            # Заголовок должен быть полностью latin-1-кодируемым.
+            disposition.encode("latin-1")
         finally:
             app.dependency_overrides.pop(get_current_active_user, None)
             app.dependency_overrides.pop(get_downloads_service_dependency, None)

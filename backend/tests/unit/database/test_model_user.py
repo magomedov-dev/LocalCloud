@@ -7,24 +7,11 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
-import pytest
 
 from database.models.enums import SystemRole, UserStatus
-from database.models.roles import Role
 from database.models.users import User
-
-
-def make_role(code: str, *, is_active: bool = True) -> Role:
-    return Role(
-        id=uuid.uuid4(),
-        code=code,
-        name=code,
-        description=None,
-        is_active=is_active,
-        is_system=True,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -38,7 +25,6 @@ def make_user(**kwargs: object) -> User:
         username="testuser",
         password_hash="hashed_pw",
         status=UserStatus.ACTIVE,
-        is_email_verified=False,
         last_login_at=None,
         approved_at=None,
         blocked_at=None,
@@ -46,7 +32,7 @@ def make_user(**kwargs: object) -> User:
         deleted_at=None,
         block_reason=None,
         rejection_reason=None,
-        roles=[],
+        role=SystemRole.USER,
     )
     defaults.update(kwargs)
     return User(**defaults)
@@ -294,17 +280,6 @@ class TestMarkDeleted:
 
 
 # ---------------------------------------------------------------------------
-# verify_email()
-# ---------------------------------------------------------------------------
-
-class TestVerifyEmail:
-    def test_sets_is_email_verified_true(self) -> None:
-        user = make_user(is_email_verified=False)
-        user.verify_email()
-        assert user.is_email_verified is True
-
-
-# ---------------------------------------------------------------------------
 # mark_login()
 # ---------------------------------------------------------------------------
 
@@ -337,51 +312,46 @@ class TestChangePasswordHash:
 # ---------------------------------------------------------------------------
 
 class TestRoleCodes:
-    def test_role_codes_only_active(self) -> None:
-        user = make_user(
-            roles=[
-                make_role("admin", is_active=True),
-                make_role("inactive", is_active=False),
-            ]
-        )
+    def test_role_codes_admin(self) -> None:
+        user = make_user(role=SystemRole.ADMIN)
         assert user.role_codes == {"admin"}
 
-    def test_role_codes_empty(self) -> None:
-        user = make_user(roles=[])
-        assert user.role_codes == set()
+    def test_role_codes_user(self) -> None:
+        user = make_user(role=SystemRole.USER)
+        assert user.role_codes == {"user"}
 
 
 class TestIsAdmin:
     def test_is_admin_true(self) -> None:
-        user = make_user(roles=[make_role(SystemRole.ADMIN.value)])
+        user = make_user(role=SystemRole.ADMIN)
         assert user.is_admin is True
 
     def test_is_admin_false(self) -> None:
-        user = make_user(roles=[make_role(SystemRole.USER.value)])
+        user = make_user(role=SystemRole.USER)
         assert user.is_admin is False
 
 
 class TestIsRegularUser:
     def test_is_regular_user_true(self) -> None:
-        user = make_user(roles=[make_role(SystemRole.USER.value)])
+        user = make_user(role=SystemRole.USER)
         assert user.is_regular_user is True
 
     def test_is_regular_user_false(self) -> None:
-        user = make_user(roles=[make_role(SystemRole.ADMIN.value)])
+        user = make_user(role=SystemRole.ADMIN)
         assert user.is_regular_user is False
 
 
 class TestHasRole:
     def test_has_role_with_string(self) -> None:
-        user = make_user(roles=[make_role(SystemRole.ADMIN.value)])
+        user = make_user(role=SystemRole.ADMIN)
         assert user.has_role(SystemRole.ADMIN.value) is True
 
     def test_has_role_with_enum(self) -> None:
-        user = make_user(roles=[make_role(SystemRole.ADMIN.value)])
+        user = make_user(role=SystemRole.ADMIN)
         assert user.has_role(SystemRole.ADMIN) is True
 
     def test_has_role_missing(self) -> None:
-        user = make_user(roles=[make_role(SystemRole.USER.value)])
+        user = make_user(role=SystemRole.USER)
         assert user.has_role(SystemRole.ADMIN) is False
 
 
