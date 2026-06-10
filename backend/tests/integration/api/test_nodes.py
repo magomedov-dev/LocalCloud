@@ -338,7 +338,6 @@ def _file_download_response_dict() -> dict[str, Any]:
         "method": "GET",
         "headers": {},
         "file_id": str(uuid.uuid4()),
-        "version_id": None,
         "filename": "file.bin",
         "size_bytes": 10,
         "mime_type": "application/octet-stream",

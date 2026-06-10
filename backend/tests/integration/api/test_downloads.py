@@ -27,7 +27,6 @@ def _file_download_dict() -> dict[str, Any]:
         "method": "GET",
         "headers": {},
         "file_id": str(uuid.uuid4()),
-        "version_id": None,
         "filename": "archive.zip",
         "size_bytes": 100,
         "mime_type": "application/zip",

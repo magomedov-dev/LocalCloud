@@ -15,12 +15,11 @@ from database.models.enums import (
     AuditResult,
     FilePreviewStatus,
     FileProcessingStatus,
-    FileVersionStatus,
     NodeType,
     NodeVisibility,
     StorageObjectStatus,
 )
-from database.models.filesystem import File, FileSystemNode, FileVersion
+from database.models.filesystem import File, FileSystemNode
 from schemas.common import PageMeta, PageResponse
 from schemas.files import (
     FileListItem,
@@ -30,9 +29,6 @@ from schemas.files import (
     FileRenameRequest,
     FileSearchQuery,
     FileUpdateRequest,
-    FileVersionListItem,
-    FileVersionRead,
-    FileVersionRestoreRequest,
 )
 from security.permissions import PermissionAction
 from services.access import AccessService, get_access_service
@@ -94,40 +90,13 @@ class FileMetadataCreate:
     change_comment: str | None = None
 
 
-@dataclass(frozen=True, slots=True)
-class FileVersionCreate:
-    """Входные данные для добавления новой физической версии файла.
-
-    Attributes:
-        storage_bucket: Имя storage bucket, где лежит объект версии.
-        storage_key: Ключ объекта версии в storage.
-        size_bytes: Размер версии в байтах.
-        checksum: Контрольная сумма версии.
-        checksum_algorithm: Алгоритм контрольной суммы.
-        mime_type: MIME-тип версии.
-        extension: Расширение версии.
-        change_comment: Комментарий к версии.
-        make_current: Нужно ли сделать новую версию текущей.
-    """
-
-    storage_bucket: str
-    storage_key: str
-    size_bytes: int
-    checksum: str | None = None
-    checksum_algorithm: str | None = None
-    mime_type: str | None = None
-    extension: str | None = None
-    change_comment: str | None = None
-    make_current: bool = True
-
-
 class FilesService:
-    """Бизнес-сервис для файловых метаданных, версий, перемещений и preview.
+    """Бизнес-сервис для файловых метаданных, перемещений и preview.
 
     Сервис отвечает за операции над файловыми узлами и связанными строками
-    `File`/`FileVersion`. Перед изменением или чтением данных сервис проверяет
-    доступ к узлам через `AccessService`, а после успешных изменений пытается
-    записать событие аудита.
+    `File`. Перед изменением или чтением данных сервис проверяет доступ к узлам
+    через `AccessService`, а после успешных изменений пытается записать событие
+    аудита.
 
     Attributes:
         uow_factory: Фабрика UnitOfWork для создания транзакционных контекстов.
@@ -168,7 +137,7 @@ class FilesService:
         owner_id: UUID,
         actor_id: UUID | None = None,
     ) -> FileRead:
-        """Создаёт файловый узел, метаданные файла и начальную версию.
+        """Создаёт файловый узел и метаданные файла.
 
         Args:
             data: Данные создаваемого файла и его физического объекта.
@@ -189,7 +158,6 @@ class FilesService:
 
         operation = "create_file_metadata"
         snapshot: dict[str, Any] | None = None
-        version_snapshot: dict[str, Any] | None = None
         resolved_actor_id = actor_id or owner_id
 
         try:
@@ -242,31 +210,8 @@ class FilesService:
                     flush=True,
                     refresh=True,
                 )
-                version = await uow.versions.create_version(
-                    file_id=file.id,
-                    storage_bucket=data.storage_bucket,
-                    storage_key=_version_storage_key(data.storage_key),
-                    size_bytes=data.size_bytes,
-                    checksum=data.checksum,
-                    mime_type=data.mime_type,
-                    created_by=resolved_actor_id,
-                    change_comment=data.change_comment,
-                    is_current=True,
-                    update_file_current_version=True,
-                    check_file_exists=False,
-                    flush=True,
-                    refresh=True,
-                )
-                version.checksum_algorithm = data.checksum_algorithm
-                await uow.files.update_current_version(
-                    file_id=file.id,
-                    current_version_id=version.id,
-                    flush=True,
-                    refresh=False,
-                )
                 file = await uow.files.get_required_by_id(file.id)
                 snapshot = _file_snapshot(file)
-                version_snapshot = _file_version_snapshot(version)
                 await uow.commit()
 
             if snapshot is None:
@@ -277,7 +222,6 @@ class FilesService:
                 action=AuditAction.FILE_UPLOADED,
                 snapshot=snapshot,
                 message="Созданы метаданные файла.",
-                metadata={"version": _jsonable(version_snapshot)},
             )
             return FileRead.model_validate(snapshot)
 
@@ -817,7 +761,6 @@ class FilesService:
                     include_deleted_node=True,
                 )
                 snapshot = _file_snapshot(file)
-                await uow.versions.delete_versions_by_file_id(file.id, flush=False)
                 await uow.files.delete_by_node_id(node.id, flush=False, required=True)
                 await uow.nodes.mark_purged(node_id=node.id, flush=True)
                 await uow.commit()
@@ -985,305 +928,6 @@ class FilesService:
                 exc,
                 operation=operation,
                 message="Не удалось выполнить поиск по файлам.",
-            ) from exc
-
-    async def create_file_version(
-        self,
-        node_id: UUID,
-        data: FileVersionCreate,
-        *,
-        actor_id: UUID,
-    ) -> FileVersionRead:
-        """Создаёт новую версию существующего файла.
-
-        Если `data.make_current` равен `True`, новая версия становится текущей,
-        а основные метаданные и storage-информация файла обновляются данными
-        этой версии.
-
-        Args:
-            node_id: Идентификатор файлового узла.
-            data: Данные создаваемой версии.
-            actor_id: Идентификатор пользователя, создающего версию.
-
-        Returns:
-            DTO созданной версии файла.
-
-        Raises:
-            ValidationServiceError: Если узел не является файлом.
-            PermissionServiceError: Если у пользователя нет права записи.
-            ServiceError: Если версию файла не удалось создать.
-        """
-
-        operation = "create_file_version"
-        snapshot: dict[str, Any] | None = None
-        file_snapshot: dict[str, Any] | None = None
-
-        try:
-            async with self.uow_factory() as uow:
-                node = await self.access_service.get_accessible_node(
-                    node_id=node_id,
-                    user_id=actor_id,
-                    action=PermissionAction.WRITE,
-                    uow=uow,
-                )
-                _ensure_file_node(node, operation=operation)
-                file = await uow.files.get_required_by_node_id(node.id)
-                version = await uow.versions.create_version(
-                    file_id=file.id,
-                    storage_bucket=data.storage_bucket,
-                    storage_key=data.storage_key,
-                    size_bytes=data.size_bytes,
-                    checksum=data.checksum,
-                    mime_type=data.mime_type,
-                    created_by=actor_id,
-                    change_comment=data.change_comment,
-                    is_current=data.make_current,
-                    update_file_current_version=data.make_current,
-                    flush=True,
-                    refresh=True,
-                    check_file_exists=False,
-                )
-                version.checksum_algorithm = data.checksum_algorithm
-                if data.make_current:
-                    file = await uow.files.update_metadata(
-                        file_id=file.id,
-                        size_bytes=data.size_bytes,
-                        mime_type=data.mime_type,
-                        extension=data.extension,
-                        checksum=data.checksum,
-                        checksum_algorithm=data.checksum_algorithm,
-                        flush=False,
-                        refresh=False,
-                    )
-                    await uow.files.update_storage_info(
-                        file_id=file.id,
-                        storage_bucket=data.storage_bucket,
-                        storage_key=data.storage_key,
-                        size_bytes=data.size_bytes,
-                        checksum=data.checksum,
-                        checksum_algorithm=data.checksum_algorithm,
-                        storage_status=StorageObjectStatus.AVAILABLE,
-                        flush=True,
-                        refresh=True,
-                    )
-                file = await uow.files.get_required_by_id(file.id)
-                snapshot = _file_version_snapshot(version)
-                file_snapshot = _file_snapshot(file)
-                await uow.commit()
-
-            if snapshot is None:
-                raise _empty_result_error(operation)
-
-            if file_snapshot is not None:
-                await self._safe_log_file_event(
-                    user_id=actor_id,
-                    action=AuditAction.FILE_VERSION_CREATED,
-                    snapshot=file_snapshot,
-                    message="Версия файла создана.",
-                    metadata={"version": _jsonable(snapshot)},
-                )
-            return FileVersionRead.model_validate(snapshot)
-
-        except DatabaseError as exc:
-            raise self._database_error(
-                exc, operation=operation, message="Не удалось создать версию файла."
-            ) from exc
-        except ServiceError:
-            raise
-        except Exception as exc:
-            raise self._unexpected_error(
-                exc, operation=operation, message="Не удалось создать версию файла."
-            ) from exc
-
-    async def list_versions(
-        self,
-        node_id: UUID,
-        *,
-        user_id: UUID | None,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> PageResponse[FileVersionListItem]:
-        """Возвращает версии файла с пагинацией.
-
-        Args:
-            node_id: Идентификатор файлового узла.
-            user_id: Идентификатор пользователя, запрашивающего версии.
-            limit: Максимальное количество версий в ответе.
-            offset: Смещение первой версии.
-
-        Returns:
-            Страница версий файла.
-
-        Raises:
-            ValidationServiceError: Если пагинация некорректна или узел не
-                является файлом.
-            PermissionServiceError: Если у пользователя нет права чтения.
-            ServiceError: Если версии файла не удалось получить.
-        """
-
-        operation = "list_versions"
-        page: PageResponse[FileVersionListItem] | None = None
-
-        try:
-            _validate_pagination(limit=limit, offset=offset)
-            async with self.uow_factory() as uow:
-                node = await self.access_service.get_accessible_node(
-                    node_id=node_id,
-                    user_id=user_id,
-                    action=PermissionAction.READ,
-                    uow=uow,
-                )
-                _ensure_file_node(node, operation=operation)
-                file = await uow.files.get_required_by_node_id(node.id)
-                versions = await uow.versions.get_versions_by_file_id(
-                    file.id,
-                    offset=0,
-                    limit=REPOSITORY_PAGE_LIMIT,
-                    newest_first=True,
-                )
-                page = _versions_page(versions, limit=limit, offset=offset)
-
-            if page is None:
-                raise _empty_result_error(operation)
-            return page
-
-        except DatabaseError as exc:
-            raise self._database_error(
-                exc,
-                operation=operation,
-                message="Не удалось вывести список версий файлов.",
-            ) from exc
-        except ServiceError:
-            raise
-        except Exception as exc:
-            raise self._unexpected_error(
-                exc,
-                operation=operation,
-                message="Не удалось вывести список версий файлов.",
-            ) from exc
-
-    async def restore_version(
-        self,
-        node_id: UUID,
-        data: FileVersionRestoreRequest,
-        *,
-        actor_id: UUID,
-    ) -> FileRead:
-        """Делает указанную версию файла текущей.
-
-        Метод проверяет, что версия принадлежит запрошенному файлу и не имеет
-        статус `DELETED`, затем обновляет текущую версию, storage-информацию и
-        метаданные файла.
-
-        Args:
-            node_id: Идентификатор файлового узла.
-            data: Данные восстановления версии.
-            actor_id: Идентификатор пользователя, выполняющего восстановление.
-
-        Returns:
-            DTO файла после восстановления версии.
-
-        Raises:
-            ValidationServiceError: Если версия не принадлежит файлу или
-                удалённая версия не может быть восстановлена.
-            PermissionServiceError: Если у пользователя нет права записи.
-            ServiceError: Если версию файла не удалось восстановить.
-        """
-
-        operation = "restore_version"
-        snapshot: dict[str, Any] | None = None
-        version_snapshot: dict[str, Any] | None = None
-
-        try:
-            async with self.uow_factory() as uow:
-                node = await self.access_service.get_accessible_node(
-                    node_id=node_id,
-                    user_id=actor_id,
-                    action=PermissionAction.WRITE,
-                    uow=uow,
-                )
-                _ensure_file_node(node, operation=operation)
-                file = await uow.files.get_required_by_node_id(node.id)
-                version = await uow.versions.get_required_by_id(data.version_id)
-                if version.file_id != file.id:
-                    raise ValidationServiceError(
-                        "Версия файла не принадлежит запрошенному файлу.",
-                        field="version_id",
-                        value=data.version_id,
-                        reason="file_version_mismatch",
-                        details={"service": SERVICE_NAME, "operation": operation},
-                    )
-                if version.status == FileVersionStatus.DELETED:
-                    raise ValidationServiceError(
-                        "Удаленная версия файла не может быть восстановлена.",
-                        field="version_id",
-                        value=data.version_id,
-                        reason="deleted_version",
-                        details={"service": SERVICE_NAME, "operation": operation},
-                    )
-
-                version = await uow.versions.set_current_version(
-                    version_id=version.id,
-                    update_file_current_version=True,
-                    flush=False,
-                    refresh=True,
-                )
-                if data.change_comment is not None:
-                    version = await uow.versions.update_change_comment(
-                        version_id=version.id,
-                        change_comment=data.change_comment,
-                        flush=False,
-                        refresh=True,
-                    )
-                await uow.files.update_storage_info(
-                    file_id=file.id,
-                    storage_bucket=version.storage_bucket,
-                    storage_key=version.storage_key,
-                    size_bytes=version.size_bytes,
-                    checksum=version.checksum,
-                    checksum_algorithm=version.checksum_algorithm,
-                    storage_status=StorageObjectStatus.AVAILABLE,
-                    flush=False,
-                    refresh=False,
-                )
-                file = await uow.files.update_metadata(
-                    file_id=file.id,
-                    size_bytes=version.size_bytes,
-                    mime_type=version.mime_type,
-                    checksum=version.checksum,
-                    checksum_algorithm=version.checksum_algorithm,
-                    flush=True,
-                    refresh=True,
-                )
-                snapshot = _file_snapshot(file)
-                version_snapshot = _file_version_snapshot(version)
-                await uow.commit()
-
-            if snapshot is None:
-                raise _empty_result_error(operation)
-
-            await self._safe_log_file_event(
-                user_id=actor_id,
-                action=AuditAction.FILE_VERSION_RESTORED,
-                snapshot=snapshot,
-                message="Версия файла восстановлена как текущая.",
-                metadata={"version": _jsonable(version_snapshot)},
-            )
-            return FileRead.model_validate(snapshot)
-
-        except DatabaseError as exc:
-            raise self._database_error(
-                exc,
-                operation=operation,
-                message="Не удалось восстановить версию файла.",
-            ) from exc
-        except ServiceError:
-            raise
-        except Exception as exc:
-            raise self._unexpected_error(
-                exc,
-                operation=operation,
-                message="Не удалось восстановить версию файла.",
             ) from exc
 
     async def get_preview(
@@ -1716,36 +1360,9 @@ def _file_snapshot(file: File) -> dict[str, Any]:
         "storage_status": file.storage_status,
         "processing_status": file.processing_status,
         "preview_status": file.preview_status,
-        "current_version_id": file.current_version_id,
         "created_at": file.created_at,
         "updated_at": file.updated_at,
         "node": _node_snapshot(file.node) if file.node is not None else None,
-    }
-
-
-def _file_version_snapshot(version: FileVersion) -> dict[str, Any]:
-    """Создаёт словарный снимок версии файла для DTO.
-
-    Args:
-        version: ORM-модель версии файла.
-
-    Returns:
-        Словарь с полями версии файла.
-    """
-
-    return {
-        "id": version.id,
-        "file_id": version.file_id,
-        "version_number": version.version_number,
-        "status": version.status,
-        "size_bytes": version.size_bytes,
-        "checksum": version.checksum,
-        "checksum_algorithm": version.checksum_algorithm,
-        "mime_type": version.mime_type,
-        "created_at": version.created_at,
-        "created_by": version.created_by,
-        "change_comment": version.change_comment,
-        "is_current": version.is_current,
     }
 
 
@@ -1803,39 +1420,6 @@ def _files_page(
             limit=limit,
             offset=offset,
             total=len(files),
-            count=len(items),
-        ),
-    )
-
-
-def _versions_page(
-    versions: list[FileVersion],
-    *,
-    limit: int,
-    offset: int,
-) -> PageResponse[FileVersionListItem]:
-    """Создаёт страницу версий файла из полного списка результатов.
-
-    Args:
-        versions: Полный список версий файла.
-        limit: Максимальное количество элементов на странице.
-        offset: Смещение первой записи.
-
-    Returns:
-        DTO страницы версий с метаданными пагинации.
-    """
-
-    page_versions = versions[offset : offset + limit]
-    items = [
-        FileVersionListItem.model_validate(_file_version_snapshot(version))
-        for version in page_versions
-    ]
-    return PageResponse(
-        items=items,
-        meta=PageMeta(
-            limit=limit,
-            offset=offset,
-            total=len(versions),
             count=len(items),
         ),
     )
@@ -1953,19 +1537,6 @@ def _validate_pagination(*, limit: int, offset: int) -> None:
         )
 
 
-def _version_storage_key(storage_key: str) -> str:
-    """Создаёт storage key для первой версии файла.
-
-    Args:
-        storage_key: Базовый storage key файла.
-
-    Returns:
-        Storage key первой версии файла.
-    """
-
-    return f"{storage_key}.v1"
-
-
 def _preview_message(file: File) -> str:
     """Возвращает человекочитаемое сообщение для статуса preview.
 
@@ -2008,7 +1579,6 @@ def _audit_metadata(snapshot: dict[str, Any]) -> dict[str, Any]:
         "storage_status": _jsonable(snapshot.get("storage_status")),
         "processing_status": _jsonable(snapshot.get("processing_status")),
         "preview_status": _jsonable(snapshot.get("preview_status")),
-        "current_version_id": _jsonable(snapshot.get("current_version_id")),
     }
     if isinstance(node, dict):
         metadata.update(

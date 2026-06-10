@@ -10,7 +10,6 @@ from database.models.enums import (
     BackgroundTaskType,
     FilePreviewStatus,
     FileProcessingStatus,
-    FileVersionStatus,
     HealthStatus,
     NodeType,
     NodeVisibility,

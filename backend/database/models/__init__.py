@@ -11,7 +11,6 @@ from database.models.enums import (
     BackgroundTaskType,
     FilePreviewStatus,
     FileProcessingStatus,
-    FileVersionStatus,
     HealthStatus,
     NodeType,
     NodeVisibility,
@@ -34,7 +33,6 @@ from database.models.enums import (
 from database.models.filesystem import (
     File,
     FileSystemNode,
-    FileVersion,
     Folder,
     TrashItem,
 )
@@ -68,8 +66,6 @@ __all__ = [
     "FilePreviewStatus",
     "FileProcessingStatus",
     "FileSystemNode",
-    "FileVersion",
-    "FileVersionStatus",
     "Folder",
     "HealthStatus",
     "NAMING_CONVENTION",

@@ -1050,12 +1050,6 @@ def build_complete_service(
     file = file or make_file_with_node()
     files_repo = AsyncMock()
     files_repo.create_file_with_node = AsyncMock(return_value=file)
-    files_repo.update_current_version = AsyncMock()
-
-    versions_repo = AsyncMock()
-    version = MagicMock()
-    version.id = uuid.uuid4()
-    versions_repo.create_version = AsyncMock(return_value=version)
 
     tasks_repo = AsyncMock()
     task = MagicMock()
@@ -1067,17 +1061,16 @@ def build_complete_service(
         upload_sessions=sessions_repo,
         upload_parts=parts_repo,
         files=files_repo,
-        versions=versions_repo,
         tasks=tasks_repo,
         quotas=quotas,
     )
-    return uow, session, file, version, tasks_repo, quotas
+    return uow, session, file, tasks_repo, quotas
 
 
 @pytest.mark.asyncio
 async def test_complete_upload_success():
     user_id = uuid.uuid4()
-    uow, session, file, version, tasks_repo, quotas = build_complete_service(user_id=user_id)
+    uow, session, file, tasks_repo, quotas = build_complete_service(user_id=user_id)
     storage = make_storage()
     audit = make_audit()
     service = make_service(uow, storage=storage, audit=audit)
@@ -1099,7 +1092,7 @@ async def test_complete_upload_success():
 @pytest.mark.asyncio
 async def test_complete_upload_with_preview_creates_task():
     user_id = uuid.uuid4()
-    uow, session, file, version, tasks_repo, quotas = build_complete_service(
+    uow, session, file, tasks_repo, quotas = build_complete_service(
         user_id=user_id, needs_preview=True
     )
     storage = make_storage()
@@ -1120,7 +1113,7 @@ async def test_complete_upload_confirms_not_yet_uploaded_part():
         uploaded_parts_count=0, uploaded_bytes=0,
     )
     pending_part.upload_session_id = session.id
-    uow, session, file, version, tasks_repo, quotas = build_complete_service(
+    uow, session, file, tasks_repo, quotas = build_complete_service(
         user_id=user_id, session=session, parts_db=[pending_part]
     )
     storage = make_storage()
@@ -1177,7 +1170,7 @@ async def test_complete_upload_invalid_part_numbers_raises_validation():
 @pytest.mark.asyncio
 async def test_complete_upload_storage_error_marks_failed():
     user_id = uuid.uuid4()
-    uow, session, file, version, tasks_repo, quotas = build_complete_service(user_id=user_id)
+    uow, session, file, tasks_repo, quotas = build_complete_service(user_id=user_id)
     storage = make_storage()
     storage.complete_multipart_upload = AsyncMock(side_effect=StorageError("boom"))
     # путь mark_failed использует новый uow из фабрики; переиспользуем тот же uow

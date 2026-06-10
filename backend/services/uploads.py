@@ -792,28 +792,6 @@ class UploadsService:
                         refresh=False,
                     )
                     preview_task.payload = {"file_id": str(file.id)}
-                version = await uow.versions.create_version(
-                    file_id=file.id,
-                    storage_bucket=upload_session.storage_bucket,
-                    storage_key=f"{upload_session.storage_key}.v1",
-                    size_bytes=upload_session.file_size_bytes,
-                    checksum=data.checksum or upload_session.checksum,
-                    mime_type=upload_session.mime_type,
-                    created_by=user_id,
-                    change_comment="Начальная версия multipart-загрузки.",
-                    is_current=True,
-                    update_file_current_version=True,
-                    check_file_exists=False,
-                    flush=True,
-                    refresh=True,
-                )
-                version.checksum_algorithm = upload_session.checksum_algorithm
-                await uow.files.update_current_version(
-                    file_id=file.id,
-                    current_version_id=version.id,
-                    flush=True,
-                    refresh=False,
-                )
 
                 upload_session = await uow.upload_sessions.mark_completed(
                     upload_session.id,

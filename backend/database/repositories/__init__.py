@@ -18,7 +18,6 @@ from database.repositories.tasks import BackgroundTasksRepository
 from database.repositories.tokens import RefreshTokensRepository
 from database.repositories.trash import TrashItemRepository
 from database.repositories.users import UsersRepository
-from database.repositories.versions import FileVersionRepository, FileVersionStorageInfo
 
 __all__ = [
     "AuditLogRepository",
@@ -38,6 +37,4 @@ __all__ = [
     "RefreshTokensRepository",
     "TrashItemRepository",
     "UsersRepository",
-    "FileVersionRepository",
-    "FileVersionStorageInfo",
 ]

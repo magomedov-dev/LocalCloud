@@ -41,9 +41,6 @@ from schemas.files import (
     FileRenameRequest,
     FileSearchQuery,
     FileUpdateRequest,
-    FileVersionListItem,
-    FileVersionRead,
-    FileVersionRestoreRequest,
 )
 from schemas.folders import (
     BulkArchiveRequest,
@@ -252,9 +249,6 @@ __all__ = [
     "FileDownloadRequest",
     "FileDownloadResponse",
     "FilePreviewRead",
-    "FileVersionRead",
-    "FileVersionListItem",
-    "FileVersionRestoreRequest",
     "FileSearchQuery",
     "UploadSessionCreateRequest",
     "UploadSessionRead",

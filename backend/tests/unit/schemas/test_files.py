@@ -99,7 +99,6 @@ class TestFileDownloadRequest:
     def test_valid_minimal(self):
         r = FileDownloadRequest(file_id=uuid4())
         assert r.force_download is True
-        assert r.version_id is None
         assert r.filename is None
 
     def test_file_id_required(self):
@@ -113,11 +112,6 @@ class TestFileDownloadRequest:
     def test_filename_with_slash_raises(self):
         with pytest.raises(ValidationError):
             FileDownloadRequest(file_id=uuid4(), filename="bad/file.pdf")
-
-    def test_version_id_optional(self):
-        vid = uuid4()
-        r = FileDownloadRequest(file_id=uuid4(), version_id=vid)
-        assert r.version_id == vid
 
 
 class TestFileDownloadResponse:
@@ -160,7 +154,6 @@ class TestFileDownloadResponse:
     def test_optional_fields_default(self):
         r = self._make()
         assert r.file_id is None
-        assert r.version_id is None
         assert r.filename is None
         assert r.size_bytes is None
         assert r.mime_type is None
@@ -267,19 +260,3 @@ class TestFileDownloadRequestNone:
     def test_explicit_none_filename(self):
         r = FileDownloadRequest(file_id=uuid4(), filename=None)
         assert r.filename is None
-
-
-class TestFileVersionRestoreRequestComment:
-    """Тесты комментария в запросе восстановления версии файла."""
-
-    def test_explicit_none_comment(self):
-        from schemas.files import FileVersionRestoreRequest
-
-        r = FileVersionRestoreRequest(version_id=uuid4(), change_comment=None)
-        assert r.change_comment is None
-
-    def test_whitespace_comment_becomes_none(self):
-        from schemas.files import FileVersionRestoreRequest
-
-        r = FileVersionRestoreRequest(version_id=uuid4(), change_comment="   ")
-        assert r.change_comment is None

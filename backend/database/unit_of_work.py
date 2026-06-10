@@ -22,7 +22,6 @@ from database.repositories.tasks import BackgroundTasksRepository
 from database.repositories.tokens import RefreshTokensRepository
 from database.repositories.trash import TrashItemRepository
 from database.repositories.users import UsersRepository
-from database.repositories.versions import FileVersionRepository
 from database.transactions import (
     ensure_transaction_closed,
     safe_commit,
@@ -103,7 +102,6 @@ class UnitOfWork:
         self._nodes: FileSystemNodeRepository | None = None
         self._files: FileRepository | None = None
         self._folders: FolderRepository | None = None
-        self._versions: FileVersionRepository | None = None
         self._trash: TrashItemRepository | None = None
 
         self._permissions: NodePermissionsRepository | None = None
@@ -339,22 +337,6 @@ class UnitOfWork:
         if self._folders is None:
             self._folders = FolderRepository(self.session)
         return self._folders
-
-    @property
-    def versions(self) -> FileVersionRepository:
-        """Возвращает репозиторий версий файлов.
-
-        Returns:
-            Экземпляр FileVersionRepository.
-
-        Raises:
-            UnitOfWorkError: Если UnitOfWork используется вне активного
-                контекста.
-        """
-
-        if self._versions is None:
-            self._versions = FileVersionRepository(self.session)
-        return self._versions
 
     @property
     def trash(self) -> TrashItemRepository:
@@ -723,7 +705,6 @@ class UnitOfWork:
         self._nodes = None
         self._files = None
         self._folders = None
-        self._versions = None
         self._trash = None
 
         self._permissions = None

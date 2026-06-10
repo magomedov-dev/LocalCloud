@@ -162,22 +162,6 @@ class FilePreviewStatus(StrEnum):
     FAILED = "failed"
 
 
-class FileVersionStatus(StrEnum):
-    """Статус версии файла.
-
-    Описывает состояние конкретной версии файла в системе версионирования.
-
-    Attributes:
-        ACTIVE: Версия файла активна.
-        ARCHIVED: Версия файла архивирована.
-        DELETED: Версия файла удалена или помечена как удалённая.
-    """
-
-    ACTIVE = "active"
-    ARCHIVED = "archived"
-    DELETED = "deleted"
-
-
 class UploadSessionStatus(StrEnum):
     """Статус сессии многокомпонентной загрузки.
 

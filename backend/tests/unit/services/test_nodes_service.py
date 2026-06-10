@@ -1626,12 +1626,6 @@ def make_quotas_repo(quota):
     return repo
 
 
-def make_versions_repo():
-    repo = AsyncMock()
-    repo.create_version = AsyncMock()
-    return repo
-
-
 def make_storage():
     svc = MagicMock()
     svc.copy_file_object = AsyncMock()
@@ -1650,7 +1644,7 @@ def make_copy_service(uow, storage, access_svc=None, audit_svc=None):
 
 @pytest.mark.asyncio
 async def test_copy_node_single_file():
-    """copy_node для одиночного файла копирует объект и создаёт файл с версией."""
+    """copy_node для одиночного файла копирует объект и создаёт файл."""
     actor_id = uuid.uuid4()
     file_node_id = uuid.uuid4()
     file_node = make_file_node_mock(
@@ -1669,14 +1663,12 @@ async def test_copy_node_single_file():
         file_rows={file_node_id: file_row}, created_node_id=new_file_node_id
     )
     quotas_repo = make_quotas_repo(make_quota_mock(available=1000))
-    versions_repo = make_versions_repo()
     storage = make_storage()
 
     uow = make_uow(
         nodes=nodes_repo,
         files=files_repo,
         quotas=quotas_repo,
-        versions=versions_repo,
     )
     audit = make_audit()
     service = make_copy_service(uow, storage, audit_svc=audit)
@@ -1688,7 +1680,6 @@ async def test_copy_node_single_file():
     assert result.success is True
     storage.copy_file_object.assert_awaited_once()
     files_repo.create_file_with_node.assert_awaited_once()
-    versions_repo.create_version.assert_awaited_once()
     quotas_repo.increase_used_space.assert_awaited_once()
     quotas_repo.increase_files_used.assert_awaited_once()
     audit.log_user_event.assert_awaited_once()
@@ -1723,7 +1714,6 @@ async def test_copy_node_folder_with_child_file():
 
     files_repo = make_files_repo(file_rows={child_id: file_row})
     quotas_repo = make_quotas_repo(make_quota_mock(available=1000))
-    versions_repo = make_versions_repo()
     storage = make_storage()
 
     uow = make_uow(
@@ -1731,7 +1721,6 @@ async def test_copy_node_folder_with_child_file():
         folders=folders_repo,
         files=files_repo,
         quotas=quotas_repo,
-        versions=versions_repo,
     )
     service = make_copy_service(uow, storage)
 
@@ -1761,14 +1750,12 @@ async def test_copy_node_quota_exceeded():
 
     files_repo = make_files_repo(file_rows={file_node_id: file_row})
     quotas_repo = make_quotas_repo(make_quota_mock(available=100))
-    versions_repo = make_versions_repo()
     storage = make_storage()
 
     uow = make_uow(
         nodes=nodes_repo,
         files=files_repo,
         quotas=quotas_repo,
-        versions=versions_repo,
     )
     service = make_copy_service(uow, storage)
 
@@ -1807,7 +1794,6 @@ async def test_copy_node_name_conflict_renames_root():
 
     files_repo = make_files_repo(file_rows={})
     quotas_repo = make_quotas_repo(make_quota_mock(available=1000))
-    versions_repo = make_versions_repo()
     storage = make_storage()
 
     uow = make_uow(
@@ -1815,7 +1801,6 @@ async def test_copy_node_name_conflict_renames_root():
         folders=folders_repo,
         files=files_repo,
         quotas=quotas_repo,
-        versions=versions_repo,
     )
     service = make_copy_service(uow, storage)
 
@@ -1854,7 +1839,6 @@ async def test_copy_node_storage_failure_rolls_back_objects():
 
     files_repo = make_files_repo(file_rows={child1_id: row1, child2_id: row2})
     quotas_repo = make_quotas_repo(make_quota_mock(available=1000))
-    versions_repo = make_versions_repo()
     storage = make_storage()
     # Первый файл копируется успешно, второй падает.
     storage.copy_file_object = AsyncMock(side_effect=[None, RuntimeError("boom")])
@@ -1863,7 +1847,6 @@ async def test_copy_node_storage_failure_rolls_back_objects():
         nodes=nodes_repo,
         files=files_repo,
         quotas=quotas_repo,
-        versions=versions_repo,
     )
     service = make_copy_service(uow, storage)
 

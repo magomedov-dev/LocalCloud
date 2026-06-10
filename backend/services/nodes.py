@@ -977,21 +977,6 @@ class NodesService:
                                 refresh=False,
                             )
                             preview_task.payload = {"file_id": str(new_file.id)}
-                        await uow.versions.create_version(
-                            file_id=new_file.id,
-                            storage_bucket=src.storage_bucket,
-                            storage_key=f"{new_key}.v1",
-                            size_bytes=src.size_bytes,
-                            checksum=src.checksum,
-                            mime_type=src.mime_type,
-                            created_by=actor_id,
-                            change_comment="Копия файла.",
-                            is_current=True,
-                            update_file_current_version=True,
-                            check_file_exists=False,
-                            flush=True,
-                            refresh=True,
-                        )
                         id_map[current.id] = new_file.node_id
                 except Exception:
                     for bucket, object_key in copied:

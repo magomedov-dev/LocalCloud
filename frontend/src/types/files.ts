@@ -29,7 +29,6 @@ export interface FileRead {
   storage_status: StorageObjectStatus;
   processing_status: FileProcessingStatus;
   preview_status: FilePreviewStatus;
-  current_version_id: string | null;
   created_at: string;
   updated_at: string;
   node: NodeRead | null;

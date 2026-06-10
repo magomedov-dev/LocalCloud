@@ -13,7 +13,6 @@ from services.downloads import DownloadsService, get_downloads_service
 from services.files import (
     FileMetadataCreate,
     FilesService,
-    FileVersionCreate,
     get_files_service,
 )
 from services.folders import FoldersService, get_folders_service
@@ -57,7 +56,6 @@ __all__ = [
     "get_folders_service",
     "FilesService",
     "FileMetadataCreate",
-    "FileVersionCreate",
     "get_files_service",
     "UploadsService",
     "get_uploads_service",

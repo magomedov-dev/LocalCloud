@@ -1,4 +1,4 @@
-"""Модульные тесты моделей FileSystemNode, File, FileVersion, Folder и TrashItem.
+"""Модульные тесты моделей FileSystemNode, File, Folder и TrashItem.
 
 Все экземпляры создаются через ``model_construct``, поэтому сессия БД или движок
 не требуются.
@@ -14,13 +14,12 @@ import pytest
 from database.models.enums import (
     FilePreviewStatus,
     FileProcessingStatus,
-    FileVersionStatus,
     NodeType,
     NodeVisibility,
     StorageObjectStatus,
     TrashItemStatus,
 )
-from database.models.filesystem import File, FileSystemNode, FileVersion, Folder, TrashItem
+from database.models.filesystem import File, FileSystemNode, Folder, TrashItem
 
 
 # ---------------------------------------------------------------------------
@@ -62,31 +61,9 @@ def make_file(**kwargs: object) -> File:
         processing_status=FileProcessingStatus.READY,
         preview_status=FilePreviewStatus.NOT_REQUIRED,
         preview_storage_key=None,
-        current_version_id=None,
     )
     defaults.update(kwargs)
     return File(**defaults)
-
-
-def make_file_version(**kwargs: object) -> FileVersion:
-    defaults: dict[str, object] = dict(
-        id=uuid.uuid4(),
-        file_id=uuid.uuid4(),
-        version_number=1,
-        status=FileVersionStatus.ACTIVE,
-        storage_bucket="my-bucket",
-        storage_key="objects/v1/file.txt",
-        size_bytes=1024,
-        checksum=None,
-        checksum_algorithm=None,
-        mime_type="text/plain",
-        created_at=datetime.now(UTC),
-        created_by=None,
-        change_comment=None,
-        is_current=False,
-    )
-    defaults.update(kwargs)
-    return FileVersion(**defaults)
 
 
 def make_trash_item(**kwargs: object) -> TrashItem:
@@ -338,66 +315,6 @@ class TestFileRepr:
 
 
 # ===========================================================================
-# Тесты FileVersion
-# ===========================================================================
-
-class TestFileVersionIsActive:
-    def test_active_status_returns_true(self) -> None:
-        v = make_file_version(status=FileVersionStatus.ACTIVE)
-        assert v.is_active is True
-
-    def test_archived_status_returns_false(self) -> None:
-        v = make_file_version(status=FileVersionStatus.ARCHIVED)
-        assert v.is_active is False
-
-    def test_deleted_status_returns_false(self) -> None:
-        v = make_file_version(status=FileVersionStatus.DELETED)
-        assert v.is_active is False
-
-
-class TestFileVersionMakeCurrent:
-    def test_sets_is_current_true(self) -> None:
-        v = make_file_version(is_current=False)
-        v.make_current()
-        assert v.is_current is True
-
-    def test_sets_status_active(self) -> None:
-        v = make_file_version(status=FileVersionStatus.ARCHIVED)
-        v.make_current()
-        assert v.status == FileVersionStatus.ACTIVE
-
-
-class TestFileVersionArchive:
-    def test_sets_is_current_false(self) -> None:
-        v = make_file_version(is_current=True, status=FileVersionStatus.ACTIVE)
-        v.archive()
-        assert v.is_current is False
-
-    def test_sets_status_archived(self) -> None:
-        v = make_file_version(status=FileVersionStatus.ACTIVE)
-        v.archive()
-        assert v.status == FileVersionStatus.ARCHIVED
-
-
-class TestFileVersionMarkDeleted:
-    def test_sets_is_current_false(self) -> None:
-        v = make_file_version(is_current=True)
-        v.mark_deleted()
-        assert v.is_current is False
-
-    def test_sets_status_deleted(self) -> None:
-        v = make_file_version(status=FileVersionStatus.ACTIVE)
-        v.mark_deleted()
-        assert v.status == FileVersionStatus.DELETED
-
-
-class TestFileVersionRepr:
-    def test_repr_non_empty(self) -> None:
-        v = make_file_version()
-        assert isinstance(repr(v), str) and len(repr(v)) > 0
-
-
-# ===========================================================================
 # Тесты TrashItem
 # ===========================================================================
 
@@ -573,19 +490,6 @@ class TestFileSystemNodeRestoreParentBranch:
         node.restore()
         # аргумент parent_id равен None, но существующий родитель активирует ветку присваивания
         assert node.parent_id is None
-
-
-# ===========================================================================
-# File.set_current_version
-# ===========================================================================
-
-class TestFileSetCurrentVersion:
-    def test_sets_current_version_and_id(self) -> None:
-        file = make_file(current_version_id=None)
-        version = make_file_version()
-        file.set_current_version(version)
-        assert file.current_version is version
-        assert file.current_version_id == version.id
 
 
 # ===========================================================================
