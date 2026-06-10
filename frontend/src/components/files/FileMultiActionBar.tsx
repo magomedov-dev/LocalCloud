@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { nodesApi } from "@/api/nodes";
 import { removeNodesFromFolderCache } from "@/lib/folderCache";
+import { friendlyError } from "@/lib/errors";
 import { useInfoPanel } from "@/contexts/infoPanel-context";
 import { useBulkDownload } from "@/hooks/useBulkDownload";
 import { MoveDialog } from "./MoveDialog";
@@ -86,7 +87,15 @@ export function FileMultiActionBar({ items, folderQueryKey, onDeselect }: Props)
 
     if (succeededIds.length === 0) {
       setDeleting(false);
-      toast.error("Не удалось переместить в корзину");
+      const firstError = results.find(
+        (r): r is PromiseRejectedResult => r.status === "rejected",
+      )?.reason;
+      toast.error(
+        friendlyError(firstError, {
+          operation: "delete",
+          name: ids.length === 1 ? items[0]?.name : undefined,
+        }),
+      );
       return;
     }
 

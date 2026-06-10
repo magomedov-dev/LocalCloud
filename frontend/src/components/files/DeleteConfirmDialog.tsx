@@ -3,6 +3,7 @@ import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { nodesApi } from "@/api/nodes";
 import { removeNodesFromFolderCache } from "@/lib/folderCache";
+import { friendlyError } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -46,11 +47,19 @@ export function DeleteConfirmDialog({ open, onOpenChange, items, folderQueryKey 
       const succeededIds = items
         .filter((_, i) => results[i].status === "fulfilled")
         .map((i) => i.id);
-      return { succeededIds, failed: items.length - succeededIds.length };
+      const firstError = results.find(
+        (r): r is PromiseRejectedResult => r.status === "rejected",
+      )?.reason;
+      return { succeededIds, failed: items.length - succeededIds.length, firstError };
     },
-    onSuccess: ({ succeededIds, failed }) => {
+    onSuccess: ({ succeededIds, failed, firstError }) => {
       if (succeededIds.length === 0) {
-        toast.error("Не удалось удалить");
+        toast.error(
+          friendlyError(firstError, {
+            operation: "delete",
+            name: items.length === 1 ? items[0]?.name : undefined,
+          }),
+        );
         return;
       }
       removeNodesFromFolderCache(queryClient, folderQueryKey, succeededIds);
@@ -67,7 +76,13 @@ export function DeleteConfirmDialog({ open, onOpenChange, items, folderQueryKey 
       }
       onOpenChange(false);
     },
-    onError: () => toast.error("Не удалось удалить"),
+    onError: (err) =>
+      toast.error(
+        friendlyError(err, {
+          operation: "delete",
+          name: items.length === 1 ? items[0]?.name : undefined,
+        }),
+      ),
   });
 
   const label =

@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { foldersApi } from "@/api/folders";
+import { friendlyError } from "@/lib/errors";
 import { useUpload } from "@/contexts/upload-context";
 
 /**
@@ -72,8 +73,8 @@ export function useFolderUpload() {
           try {
             const folder = await foldersApi.create({ name, parent_id: pid });
             pathNodeId.set(dirPath, folder.node_id);
-          } catch {
-            toast.error(`Не удалось создать папку «${name}»`);
+          } catch (err) {
+            toast.error(friendlyError(err, { operation: "createFolder", name }));
           }
 
           done++;

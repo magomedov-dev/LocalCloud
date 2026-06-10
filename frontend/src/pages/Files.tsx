@@ -9,6 +9,7 @@ import { useBreadcrumb } from "@/contexts/breadcrumb-context";
 import { useUpload } from "@/contexts/upload-context";
 import { useFolderUpload } from "@/hooks/useFolderUpload";
 import { nodesApi } from "@/api/nodes";
+import { friendlyError } from "@/lib/errors";
 import { FileGrid, type ViewMode, type SelectOpts } from "@/components/files/FileGrid";
 import { FileFilterBar } from "@/components/files/FileFilterBar";
 import { applyFilter, sortItems, type FileFilter } from "@/components/files/fileListUtils";
@@ -217,11 +218,23 @@ export function FilesPage() {
         idsToMove.map((id) => nodesApi.move(id, { target_parent_id: targetFolderId })),
       );
 
-      const failed = results.filter((r) => r.status === "rejected").length;
+      const rejected = results.filter(
+        (r): r is PromiseRejectedResult => r.status === "rejected",
+      );
+      const failed = rejected.length;
       setSelectedIds(new Set());
       queryClient.invalidateQueries({ queryKey: folderQueryKey });
 
-      if (failed > 0) {
+      if (failed === idsToMove.length) {
+        // Все перемещения провалились — показываем конкретную причину.
+        const movedName =
+          idsToMove.length === 1
+            ? data?.items.find((i) => i.id === idsToMove[0])?.name
+            : undefined;
+        toast.error(
+          friendlyError(rejected[0]?.reason, { operation: "move", name: movedName }),
+        );
+      } else if (failed > 0) {
         toast.error(`Не удалось переместить ${failed} из ${idsToMove.length} элементов`);
       } else {
         toast.success(
@@ -229,7 +242,7 @@ export function FilesPage() {
         );
       }
     },
-    [selectedIds, folderQueryKey, queryClient],
+    [selectedIds, folderQueryKey, queryClient, data],
   );
 
   const filteredItems = applyFilter(data?.items ?? [], filter);

@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { ChevronRight, Folder, Loader2 } from "lucide-react";
 import { nodesApi } from "@/api/nodes";
 import { optimisticallyRemoveNodes } from "@/lib/folderCache";
+import { friendlyError } from "@/lib/errors";
 import type { NodeListItem } from "@/types/nodes";
 import { Button } from "@/components/ui/button";
 import {
@@ -132,11 +133,21 @@ export function MoveDialog({ open, onOpenChange, nodeIds, label, folderQueryKey,
       const results = await Promise.allSettled(
         nodeIds.map((id) => nodesApi.move(id, { target_parent_id: currentFolderId })),
       );
-      const failed = results.filter((r) => r.status === "rejected").length;
+      const rejected = results.filter(
+        (r): r is PromiseRejectedResult => r.status === "rejected",
+      );
+      const failed = rejected.length;
 
       if (failed === nodeIds.length) {
         rollback();
-        toast.error("Не удалось переместить");
+        // Показываем конкретную причину (конфликт имён, нет прав и т. д.),
+        // подставляя имя только когда перемещается один элемент.
+        toast.error(
+          friendlyError(rejected[0]?.reason, {
+            operation: "move",
+            name: nodeIds.length === 1 ? label : undefined,
+          }),
+        );
         return;
       }
 
@@ -151,9 +162,14 @@ export function MoveDialog({ open, onOpenChange, nodeIds, label, folderQueryKey,
       }
       invalidateDestination();
       onMoved?.();
-    } catch {
+    } catch (err) {
       rollback();
-      toast.error("Не удалось переместить");
+      toast.error(
+        friendlyError(err, {
+          operation: "move",
+          name: nodeIds.length === 1 ? label : undefined,
+        }),
+      );
     } finally {
       setMoving(false);
     }

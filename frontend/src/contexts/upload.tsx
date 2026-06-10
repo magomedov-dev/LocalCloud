@@ -2,6 +2,7 @@ import { useCallback, useReducer, useRef, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { uploadsApi } from "@/api/uploads";
 import { insertNodeIntoFolderCache } from "@/lib/folderCache";
+import { friendlyError, UserFacingError } from "@/lib/errors";
 import {
   UPLOAD_PART_SIZE,
   MAX_CONCURRENT_UPLOADS,
@@ -77,7 +78,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
       let sessionId: string | null = null;
       try {
         if (!parentNodeId) {
-          throw new Error("Выберите папку для загрузки файлов");
+          throw new UserFacingError("Выберите папку для загрузки файлов");
         }
 
         const partsCount = Math.max(1, Math.ceil(file.size / UPLOAD_PART_SIZE));
@@ -204,7 +205,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
             // счётчиков позже приведут состояние в порядок.
           }
         }
-        const msg = err instanceof Error ? err.message : "Ошибка загрузки";
+        const msg = friendlyError(err, { operation: "upload", name: file.name });
         dispatch({ type: "ERROR", id: task.id, error: msg });
       }
     },
