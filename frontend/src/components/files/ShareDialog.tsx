@@ -263,9 +263,9 @@ export function ShareDialog({ open, onOpenChange, nodeId, nodeName }: Props) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-sm">
-        <DialogHeader className="pr-6">
+        <DialogHeader className="min-w-0 pr-6">
           <DialogTitle className="flex items-center gap-2">
-            <Link2 className="text-muted-foreground h-4 w-4" />
+            <Link2 className="text-muted-foreground h-4 w-4 shrink-0" />
             Публичная ссылка
           </DialogTitle>
           <p className="text-muted-foreground truncate text-sm" title={nodeName}>

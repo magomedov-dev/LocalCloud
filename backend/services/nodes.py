@@ -10,6 +10,7 @@ from sqlalchemy.exc import InvalidRequestError as _SAInvalidRequestError
 
 from core.config import get_settings
 from core.logging import get_logger
+from core.preview_mime import preview_required
 from database import DatabaseError, UnitOfWorkFactory, create_unit_of_work_factory
 from database.models.enums import (
     AuditAction,
@@ -943,7 +944,7 @@ class NodesService:
                         copied.append((src.storage_bucket, new_key))
                         preview_status = (
                             FilePreviewStatus.PENDING
-                            if (src.mime_type or "").lower().startswith("image/")
+                            if preview_required(src.mime_type)
                             else FilePreviewStatus.NOT_REQUIRED
                         )
                         new_file = await uow.files.create_file_with_node(

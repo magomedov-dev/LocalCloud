@@ -1013,8 +1013,8 @@ def build_complete_service(
         parts_count=1,
         uploaded_parts_count=1,
         uploaded_bytes=1024,
-        mime_type="image/png" if needs_preview else "text/plain",
-        file_name="img.png" if needs_preview else "test.txt",
+        mime_type="image/png" if needs_preview else "application/octet-stream",
+        file_name="img.png" if needs_preview else "test.bin",
     )
     parts_db = parts_db or [
         make_part(session_id=session.id, part_number=1, status=UploadPartStatus.UPLOADED, etag="etag123", size_bytes=1024)

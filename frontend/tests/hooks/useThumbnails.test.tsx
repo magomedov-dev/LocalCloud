@@ -36,7 +36,16 @@ function imageNode(id: string): NodeListItem {
   return { id, name: id, node_type: "file", file_mime_type: "image/png" } as NodeListItem;
 }
 function fileNode(id: string): NodeListItem {
-  return { id, name: id, node_type: "file", file_mime_type: "text/plain" } as NodeListItem;
+  // Тип без поддержки превью — миниатюра не запрашивается.
+  return {
+    id,
+    name: id,
+    node_type: "file",
+    file_mime_type: "application/octet-stream",
+  } as NodeListItem;
+}
+function pdfNode(id: string): NodeListItem {
+  return { id, name: id, node_type: "file", file_mime_type: "application/pdf" } as NodeListItem;
 }
 function folderNode(id: string): NodeListItem {
   return { id, name: id, node_type: "folder" } as NodeListItem;
@@ -44,7 +53,13 @@ function folderNode(id: string): NodeListItem {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  getCache.mockReturnValue(undefined);
+  // Имитируем sessionStorage как in-memory store, чтобы set/get делали round-trip:
+  // отрицательные результаты теперь живут только здесь, не в React Query.
+  const store = new Map<string, string | null>();
+  getCache.mockImplementation((id: string) => (store.has(id) ? store.get(id) : undefined));
+  setCache.mockImplementation((id: string, value: string | null) => {
+    store.set(id, value);
+  });
 });
 
 describe("useThumbnails", () => {
@@ -99,7 +114,7 @@ describe("useThumbnails", () => {
     expect(result.current.get("have")).toBeNull();
   });
 
-  it("filters out non-image files from the fetch set", async () => {
+  it("filters out unsupported files and folders from the fetch set", async () => {
     batch.mockResolvedValue({ img: "https://x/img.png" } as never);
     const { result } = renderHook(
       () => useThumbnails([imageNode("img"), fileNode("doc"), folderNode("dir")]),
@@ -109,5 +124,14 @@ describe("useThumbnails", () => {
     expect(batch).toHaveBeenCalledWith(["img"], expect.anything());
     expect(result.current.has("doc")).toBe(false);
     expect(result.current.has("dir")).toBe(false);
+  });
+
+  it("fetches thumbnails for preview-supported non-image files (PDF)", async () => {
+    batch.mockResolvedValue({ book: "https://x/book.webp" } as never);
+    const { result } = renderHook(() => useThumbnails([pdfNode("book")]), {
+      wrapper: wrapper(),
+    });
+    await waitFor(() => expect(result.current.get("book")).toBe("https://x/book.webp"));
+    expect(batch).toHaveBeenCalledWith(["book"], expect.anything());
   });
 });

@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 
 from core.config import Settings, get_settings
 from core.logging import get_logger
+from core.preview_mime import preview_required
 from database import DatabaseError, UnitOfWorkFactory, create_unit_of_work_factory
 from database.models.enums import (
     AuditAction,
@@ -755,8 +756,7 @@ class UploadsService:
                 )
 
                 extension = _filename_extension(upload_session.file_name)
-                _mime = (upload_session.mime_type or "").lower()
-                _needs_preview = _mime.startswith("image/")
+                _needs_preview = preview_required(upload_session.mime_type)
                 file = await uow.files.create_file_with_node(
                     owner_id=upload_session.user_id,
                     parent_id=upload_session.parent_node_id,

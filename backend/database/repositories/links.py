@@ -231,7 +231,9 @@ class PublicLinksRepository(BaseRepository[PublicLink]):
                 *self._available_conditions(effective_moment),
             )
             .options(
-                selectinload(PublicLink.node),
+                # Подгружаем связанный File узла, чтобы публичная карточка ссылки
+                # знала MIME-тип/размер файла (нужно для выбора превью).
+                selectinload(PublicLink.node).selectinload(FileSystemNode.file),
                 selectinload(PublicLink.creator),
                 selectinload(PublicLink.revoker),
             )

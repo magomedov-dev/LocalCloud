@@ -36,11 +36,13 @@ from schemas.public_links import (
     PublicLinkRevokeRequest,
     PublicLinkUpdateRequest,
 )
+from core.preview_mime import preview_content_type
 from security.password import hash_password, verify_password
 from security.permissions import PermissionAction
 from services.access import AccessService, get_access_service
 from services.audit import AuditService, get_audit_service
 from services.exceptions import (
+    NotFoundServiceError,
     PermissionServiceError,
     PublicLinkServiceError,
     ServiceError,
@@ -771,6 +773,94 @@ class PublicLinksService:
                 exc, service=SERVICE_NAME, operation=operation
             ) from exc
 
+    async def create_public_thumbnail_url(
+        self,
+        data: PublicLinkAccessRequest,
+    ) -> PublicLinkDownloadResponse:
+        """Создаёт presigned URL для preview-миниатюры файла публичной ссылки.
+
+        В отличие от скачивания, требует лишь права просмотра ссылки и отдаёт
+        сгенерированный preview-объект (webp для изображений/PDF/видео), а не
+        исходный файл. Если у файла нет готового preview, возвращает ошибку
+        «пустого результата», чтобы фронт показал иконку-заглушку.
+
+        Args:
+            data: Данные публичного доступа, включая токен и опциональный пароль.
+
+        Returns:
+            Ответ с presigned URL на preview-объект и его MIME-типом.
+
+        Raises:
+            PublicLinkServiceError: Если ссылка недоступна для просмотра.
+            PermissionServiceError: Если пароль отсутствует или неверен.
+            ValidationServiceError: Если ссылка указывает на папку.
+            ServiceError: Если preview отсутствует, либо при ошибке БД/хранилища.
+        """
+
+        operation = "create_public_thumbnail_url"
+
+        try:
+            async with self.uow_factory() as uow:
+                link = await uow.links.get_required_available_link_by_token(data.token)
+                _ensure_public_access_allowed(link, operation=operation)
+                _validate_public_link_password(link, data.password, operation=operation)
+
+                node = await uow.nodes.get_required_by_id(link.node_id)
+                if node.node_type != NodeType.FILE:
+                    raise ValidationServiceError(
+                        "Миниатюра доступна только для файлов.",
+                        field="node_type",
+                        value=node.node_type.value,
+                        reason="thumbnail_for_folder_not_supported",
+                        details={"service": SERVICE_NAME, "operation": operation},
+                    )
+                file = await uow.files.get_required_by_node_id(
+                    node.id,
+                    include_deleted_node=False,
+                )
+                if not (file.preview_available and file.preview_storage_key):
+                    raise NotFoundServiceError(
+                        "Для файла нет готовой миниатюры.",
+                        entity_name="file_preview",
+                        entity_id=str(node.id),
+                        details={"service": SERVICE_NAME, "operation": operation},
+                    )
+
+                mime_type = preview_content_type(file.mime_type)
+                presigned = await self.storage_service.create_download_url(
+                    bucket=file.storage_bucket,
+                    object_key=file.preview_storage_key,
+                    response_headers={"response-content-type": mime_type},
+                )
+
+            return PublicLinkDownloadResponse(
+                presigned_url=presigned.url,
+                expires_at=_expires_at(
+                    presigned.expires_at,
+                    presigned.expires_in_seconds,
+                ),
+                method=presigned.method.value,
+                headers=presigned.headers,
+                filename=None,
+                size_bytes=None,
+                mime_type=mime_type,
+            )
+
+        except StorageError as exc:
+            raise service_error_from_storage(
+                exc, service=SERVICE_NAME, operation=operation
+            ) from exc
+        except ServiceError:
+            raise
+        except DatabaseError as exc:
+            raise service_error_from_database(
+                exc, service=SERVICE_NAME, operation=operation
+            ) from exc
+        except Exception as exc:
+            raise service_error_from_exception(
+                exc, service=SERVICE_NAME, operation=operation
+            ) from exc
+
     async def create_public_folder_archive(
         self,
         data: PublicLinkAccessRequest,
@@ -1366,6 +1456,25 @@ def _include_snapshot_by_password_filter(
     return bool(snapshot.get("has_password")) is has_password
 
 
+def _loaded_file(node: FileSystemNode) -> File | None:
+    """Возвращает связанный File узла, только если он уже загружен.
+
+    Читает значение из ``__dict__`` экземпляра: eager-загруженное отношение
+    лежит там как обычный атрибут, тогда как незагруженное доступно лишь через
+    ленивый дескриптор. Так мы избегаем ленивой подгрузки в async-сессии
+    (которая упала бы с ``MissingGreenlet``) и не зависим от типа объекта.
+
+    Args:
+        node: ORM-модель узла файловой системы.
+
+    Returns:
+        Загруженный ``File`` или ``None`` (папка либо отношение не загружено).
+    """
+
+    file = node.__dict__.get("file")
+    return file if isinstance(file, File) else None
+
+
 def _node_list_item_payload(node: FileSystemNode) -> dict[str, Any]:
     """Создает краткий payload узла для публичной ссылки.
 
@@ -1374,9 +1483,11 @@ def _node_list_item_payload(node: FileSystemNode) -> dict[str, Any]:
 
     Returns:
         Словарь с основными данными узла: идентификаторами, типом, именем,
-        путем, глубиной, признаком удаления, видимостью и временными метками.
+        путем, глубиной, признаком удаления, видимостью, временными метками,
+        а также MIME-типом и размером файла (если File загружен).
     """
 
+    file = _loaded_file(node)
     return {
         "id": node.id,
         "owner_id": node.owner_id,
@@ -1389,6 +1500,8 @@ def _node_list_item_payload(node: FileSystemNode) -> dict[str, Any]:
         "visibility": node.visibility,
         "created_at": node.created_at,
         "updated_at": node.updated_at,
+        "file_size_bytes": file.size_bytes if file is not None else None,
+        "file_mime_type": file.mime_type if file is not None else None,
     }
 
 

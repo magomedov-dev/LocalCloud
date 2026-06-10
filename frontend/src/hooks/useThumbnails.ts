@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { nodesApi } from "@/api/nodes";
 import { getThumbnailCache, setThumbnailCache } from "@/lib/thumbnailCache";
+import { thumbnailSupported } from "@/lib/preview";
 import type { NodeListItem } from "@/types/nodes";
 
 const STALE_MS = 4 * 60 * 1000;
@@ -28,12 +29,12 @@ const GC_MS = 10 * 60 * 1000;
 export function useThumbnails(items: NodeListItem[]): Map<string, string | null> {
   const qc = useQueryClient();
 
-  const imageItems = items.filter(
-    (i) => i.node_type === "file" && i.file_mime_type?.startsWith("image/"),
+  const previewItems = items.filter(
+    (i) => i.node_type === "file" && thumbnailSupported(i.file_mime_type),
   );
 
   // Пропускаем id, которые уже есть в React Query cache или sessionStorage.
-  const uncachedIds = imageItems
+  const uncachedIds = previewItems
     .map((i) => i.id)
     .filter((id) => {
       if (qc.getQueryData(["thumbnail", id]) !== undefined) return false;
@@ -47,7 +48,12 @@ export function useThumbnails(items: NodeListItem[]): Map<string, string | null>
       const batch = await nodesApi.thumbnailsBatch(uncachedIds, signal);
       for (const [id, url] of Object.entries(batch)) {
         const value = url ?? null;
-        qc.setQueryData(["thumbnail", id], value);
+        // Отрицательный результат не кладём в долгий in-memory кэш React Query:
+        // превью могло ещё генерироваться, и короткий sessionStorage-TTL должен
+        // позволить перепросить его, как только оно появится.
+        if (value !== null) {
+          qc.setQueryData(["thumbnail", id], value);
+        }
         setThumbnailCache(id, value);
       }
       return batch;
@@ -59,7 +65,7 @@ export function useThumbnails(items: NodeListItem[]): Map<string, string | null>
 
   // Собираем result map: сначала React Query cache, затем sessionStorage.
   const map = new Map<string, string | null>();
-  for (const item of imageItems) {
+  for (const item of previewItems) {
     const rq = qc.getQueryData<string | null>(["thumbnail", item.id]);
     if (rq !== undefined) {
       map.set(item.id, rq);

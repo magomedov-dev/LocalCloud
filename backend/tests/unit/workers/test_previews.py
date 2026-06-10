@@ -15,9 +15,9 @@ from storage.exceptions import StorageConnectionError, StorageError
 from workers import previews
 from workers.previews import (
     _compress_to_webp,
-    _mime_is_image,
-    _mime_is_pdf,
-    _mime_requires_preview,
+    _extract_video_frame,
+    _media_source_limit,
+    _render_pdf_first_page,
     _resolve_owner_id,
     generate_file_preview_handler,
 )
@@ -101,36 +101,60 @@ def make_ctx(payload=None, *, uow=None):
 # Чистые вспомогательные функции
 # ---------------------------------------------------------------------------
 
-class TestMimeHelpers:
-    def test_requires_preview_empty(self) -> None:
-        assert _mime_requires_preview("") is False
+class TestMediaSourceLimit:
+    def test_image_limit(self) -> None:
+        assert (
+            _media_source_limit("image/png")
+            == previews._IMAGE_PREVIEW_MAX_SOURCE_BYTES
+        )
 
-    def test_requires_preview_image_prefix(self) -> None:
-        assert _mime_requires_preview("image/png") is True
+    def test_pdf_limit(self) -> None:
+        assert (
+            _media_source_limit("application/pdf")
+            == previews._PDF_PREVIEW_MAX_SOURCE_BYTES
+        )
 
-    def test_requires_preview_text_prefix(self) -> None:
-        assert _mime_requires_preview("text/plain") is True
+    def test_video_limit(self) -> None:
+        assert (
+            _media_source_limit("video/mp4")
+            == previews._VIDEO_PREVIEW_MAX_SOURCE_BYTES
+        )
 
-    def test_requires_preview_exact_pdf(self) -> None:
-        assert _mime_requires_preview("application/pdf") is True
+    def test_text_has_no_limit(self) -> None:
+        assert _media_source_limit("text/plain") is None
 
-    def test_requires_preview_exact_json(self) -> None:
-        assert _mime_requires_preview("application/json") is True
 
-    def test_requires_preview_unsupported(self) -> None:
-        assert _mime_requires_preview("application/zip") is False
+class TestRenderHelpers:
+    def test_render_pdf_first_page_returns_png(self) -> None:
+        import fitz
 
-    def test_is_image_true(self) -> None:
-        assert _mime_is_image("image/jpeg") is True
+        doc = fitz.open()
+        doc.new_page(width=200, height=200)
+        pdf_bytes = doc.tobytes()
+        doc.close()
 
-    def test_is_image_false(self) -> None:
-        assert _mime_is_image("text/plain") is False
+        png = _render_pdf_first_page(pdf_bytes)
+        # PNG-сигнатура.
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
-    def test_is_pdf_true(self) -> None:
-        assert _mime_is_pdf("application/pdf") is True
+    def test_render_pdf_invalid_raises(self) -> None:
+        with pytest.raises(Exception):
+            _render_pdf_first_page(b"not-a-pdf")
 
-    def test_is_pdf_false(self) -> None:
-        assert _mime_is_pdf("image/png") is False
+    def test_extract_video_frame_returns_ffmpeg_stdout(self, monkeypatch) -> None:
+        def fake_run(args, **kwargs):
+            return MagicMock(returncode=0, stdout=b"frame-png", stderr=b"")
+
+        monkeypatch.setattr(previews.subprocess, "run", fake_run)
+        assert _extract_video_frame(b"video-bytes") == b"frame-png"
+
+    def test_extract_video_frame_failure_raises(self, monkeypatch) -> None:
+        def fake_run(args, **kwargs):
+            return MagicMock(returncode=1, stdout=b"", stderr=b"boom")
+
+        monkeypatch.setattr(previews.subprocess, "run", fake_run)
+        with pytest.raises(RuntimeError):
+            _extract_video_frame(b"video-bytes")
 
 
 class TestResolveOwnerId:
@@ -290,24 +314,93 @@ class TestNotRequired:
         )
 
     @pytest.mark.asyncio
-    async def test_pdf_marked_not_required(self) -> None:
+    async def test_oversized_pdf_skipped(self) -> None:
+        file_id = uuid.uuid4()
+        ctx, uow = make_ctx(payload={"file_id": str(file_id)})
+        row = make_file_row(
+            file_id=file_id,
+            mime_type="application/pdf",
+            size_bytes=previews._PDF_PREVIEW_MAX_SOURCE_BYTES + 1,
+        )
+        uow.files.get_by_id = AsyncMock(return_value=row)
+
+        result = await generate_file_preview_handler(ctx)
+
+        assert (
+            result.result_data["preview_status"]
+            == FilePreviewStatus.NOT_REQUIRED.value
+        )
+        ctx.storage_service.objects.get_object_bytes.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Превью PDF и видео
+# ---------------------------------------------------------------------------
+
+class TestPdfVideoPreview:
+    @pytest.mark.asyncio
+    async def test_pdf_preview_generated_as_webp(self, monkeypatch) -> None:
+        file_id = uuid.uuid4()
+        owner_id = uuid.uuid4()
+        ctx, uow = make_ctx(payload={"file_id": str(file_id)})
+        row = make_file_row(
+            file_id=file_id, owner_id=owner_id, mime_type="application/pdf"
+        )
+        uow.files.get_by_id = AsyncMock(return_value=row)
+        monkeypatch.setattr(previews, "_render_pdf_first_page", lambda data: b"png")
+        monkeypatch.setattr(previews, "_compress_to_webp", lambda data: b"webp")
+
+        result = await generate_file_preview_handler(ctx)
+
+        assert result.success is True
+        assert result.result_data["preview_status"] == FilePreviewStatus.READY.value
+        ctx.storage_service.build_preview_key.assert_called_once_with(
+            user_id=owner_id, file_id=file_id, extension="webp"
+        )
+        put_kwargs = ctx.storage_service.objects.put_object.await_args.kwargs
+        assert put_kwargs["content_type"] == "image/webp"
+        uow.files.update_preview.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_video_preview_generated_as_webp(self, monkeypatch) -> None:
+        file_id = uuid.uuid4()
+        ctx, uow = make_ctx(payload={"file_id": str(file_id)})
+        row = make_file_row(file_id=file_id, mime_type="video/mp4")
+        uow.files.get_by_id = AsyncMock(return_value=row)
+        monkeypatch.setattr(
+            previews, "_extract_video_frame", lambda data: b"png-frame"
+        )
+        monkeypatch.setattr(previews, "_compress_to_webp", lambda data: b"webp")
+
+        result = await generate_file_preview_handler(ctx)
+
+        assert result.success is True
+        assert result.result_data["preview_status"] == FilePreviewStatus.READY.value
+        put_kwargs = ctx.storage_service.objects.put_object.await_args.kwargs
+        assert put_kwargs["content_type"] == "image/webp"
+
+    @pytest.mark.asyncio
+    async def test_render_failure_marks_not_required(self, monkeypatch) -> None:
         file_id = uuid.uuid4()
         ctx, uow = make_ctx(payload={"file_id": str(file_id)})
         row = make_file_row(file_id=file_id, mime_type="application/pdf")
         uow.files.get_by_id = AsyncMock(return_value=row)
-        uow.files.mark_preview_not_required = AsyncMock(
-            return_value=MagicMock(preview_storage_key=None)
-        )
+
+        def boom(_data):
+            raise RuntimeError("corrupt pdf")
+
+        monkeypatch.setattr(previews, "_render_pdf_first_page", boom)
 
         result = await generate_file_preview_handler(ctx)
 
+        # Сбой рендера не валит задачу: превью просто помечается NOT_REQUIRED.
         assert result.success is True
         assert (
             result.result_data["preview_status"]
             == FilePreviewStatus.NOT_REQUIRED.value
         )
-        uow.files.mark_preview_not_required.assert_awaited_once()
-        ctx.storage_service.objects.get_object_bytes.assert_not_called()
+        uow.files.mark_preview_not_required.assert_awaited()
+        ctx.storage_service.objects.put_object.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

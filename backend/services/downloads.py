@@ -10,6 +10,7 @@ from uuid import UUID
 
 from core.config import Settings, get_settings
 from core.logging import get_logger
+from core.preview_mime import preview_content_type
 from database import DatabaseError, UnitOfWorkFactory, create_unit_of_work_factory
 from database.models.enums import (
     AuditAction,
@@ -199,7 +200,7 @@ class DownloadsService:
         """Возвращает presigned URL thumbnail для каждого из запрошенных узлов.
 
         Запускает получение URL параллельно. Для узлов, к которым нет доступа
-        или которые не являются изображениями, возвращает None.
+        или у которых нет готового preview, возвращает None.
 
         Args:
             node_ids: Список идентификаторов узлов.
@@ -778,9 +779,16 @@ class DownloadsService:
         )
         mime_type = cast(str | None, file_snapshot.get("mime_type"))
 
+        # При отдаче preview-объекта content-type должен соответствовать самому
+        # превью (webp/текст), а не исходному типу файла, иначе браузер получит,
+        # например, webp под видом application/pdf и не отрисует миниатюру.
+        response_content_type = (
+            preview_content_type(mime_type) if use_preview else mime_type
+        )
+
         response_headers: dict[str, str] = {}
-        if mime_type:
-            response_headers["response-content-type"] = mime_type
+        if response_content_type:
+            response_headers["response-content-type"] = response_content_type
 
         presigned = await self.storage_service.create_download_url(
             bucket=bucket,

@@ -1,12 +1,25 @@
 from __future__ import annotations
 
+import asyncio
 import io
+import os
+import subprocess
+import tempfile
 from typing import Any
 from uuid import UUID
 
+import fitz
 from PIL import Image
 
 from core.logging import get_logger
+from core.preview_mime import (
+    PREVIEW_IMAGE_CONTENT_TYPE,
+    PREVIEW_TEXT_CONTENT_TYPE,
+    is_image,
+    is_pdf,
+    is_video,
+    preview_required,
+)
 from database.exceptions import DatabaseConnectionError
 from database.models.enums import FilePreviewStatus
 from services.exceptions import ServiceError
@@ -28,26 +41,21 @@ _IMAGE_PREVIEW_MAX_DIMENSION = 400
 
 # Защита от чрезмерного потребления памяти и «decompression bomb».
 # Превью всё равно ужимается до _IMAGE_PREVIEW_MAX_DIMENSION, поэтому исходные
-# изображения, превышающие эти пороги, превью не получают (помечаются
-# NOT_REQUIRED): это снимает пик RAM и класс DoS на worker-процессе.
+# файлы, превышающие эти пороги, превью не получают (помечаются NOT_REQUIRED):
+# это снимает пик RAM и класс DoS на worker-процессе.
 _IMAGE_PREVIEW_MAX_SOURCE_BYTES = 25 * 1024 * 1024  # 25 МБ исходного файла
+_PDF_PREVIEW_MAX_SOURCE_BYTES = 50 * 1024 * 1024  # 50 МБ исходного PDF
+_VIDEO_PREVIEW_MAX_SOURCE_BYTES = 200 * 1024 * 1024  # 200 МБ исходного видео
 _IMAGE_PREVIEW_MAX_PIXELS = 40_000_000  # 40 Мпикс (ширина × высота)
+
+# Параметры рендера превью PDF и видео.
+_PDF_RENDER_DPI = 120
+_VIDEO_FRAME_TIMESTAMP = "00:00:01"
+_VIDEO_FFMPEG_TIMEOUT_SECONDS = 30
 
 # Глобальный предел Pillow на число пикселей растра: декодер сам прерывает
 # распаковку изображений-«бомб», не выделяя память под полный растр.
 Image.MAX_IMAGE_PIXELS = _IMAGE_PREVIEW_MAX_PIXELS
-
-_PREVIEW_SUPPORTED_MIME_PREFIXES: tuple[str, ...] = (
-    "image/",
-    "text/",
-)
-_PREVIEW_SUPPORTED_MIME_TYPES: tuple[str, ...] = (
-    "application/pdf",
-    "application/json",
-)
-
-_TEXT_MIME_PREFIXES: tuple[str, ...] = ("text/",)
-_TEXT_MIME_TYPES: tuple[str, ...] = ("application/json",)
 
 
 async def generate_file_preview_handler(
@@ -110,7 +118,7 @@ async def generate_file_preview_handler(
 
             mime_type = (file_row.mime_type or "").strip().lower()
 
-            if not _mime_requires_preview(mime_type):
+            if not preview_required(mime_type):
                 updated = await uow.files.mark_preview_not_required(
                     file_id=file_row.id,
                     flush=True,
@@ -128,37 +136,18 @@ async def generate_file_preview_handler(
                     progress_percent=100,
                 )
 
-            if _mime_is_pdf(mime_type):
-                updated = await uow.files.mark_preview_not_required(
-                    file_id=file_row.id,
-                    flush=True,
-                    refresh=True,
-                )
-                await uow.commit()
-                return success_result(
-                    result_data={
-                        "file_id": str(file_row.id),
-                        "preview_status": FilePreviewStatus.NOT_REQUIRED.value,
-                        "preview_storage_key": getattr(
-                            updated, "preview_storage_key", None
-                        ),
-                    },
-                    progress_percent=100,
-                )
-
-            # Слишком большие изображения превью не получают: их декодирование
-            # дало бы пик RAM, способный уронить worker. Размер проверяется до
+            # Слишком большие медиа-файлы превью не получают: их обработка дала бы
+            # пик RAM/CPU, способный уронить worker. Размер проверяется до
             # скачивания, поэтому тяжёлый файл вообще не попадает в память.
-            if (
-                _mime_is_image(mime_type)
-                and file_row.size_bytes > _IMAGE_PREVIEW_MAX_SOURCE_BYTES
-            ):
+            source_limit = _media_source_limit(mime_type)
+            if source_limit is not None and file_row.size_bytes > source_limit:
                 logger.info(
-                    "generate_file_preview: изображение превышает лимит размера",
+                    "generate_file_preview: файл превышает лимит размера для превью",
                     extra={
                         "file_id": str(file_row.id),
                         "size_bytes": file_row.size_bytes,
-                        "max_source_bytes": _IMAGE_PREVIEW_MAX_SOURCE_BYTES,
+                        "max_source_bytes": source_limit,
+                        "mime_type": mime_type,
                     },
                 )
                 updated = await uow.files.mark_preview_not_required(
@@ -193,7 +182,7 @@ async def generate_file_preview_handler(
         _owner_id: UUID = file_snapshot["owner_id"]
         _mime: str = file_snapshot["mime_type"]
 
-        if _mime_is_image(_mime):
+        if is_image(_mime) or is_pdf(_mime) or is_video(_mime):
             preview_key = context.storage_service.build_preview_key(
                 user_id=_owner_id,
                 file_id=_file_id,
@@ -203,13 +192,51 @@ async def generate_file_preview_handler(
                 bucket=file_snapshot["storage_bucket"],
                 object_key=file_snapshot["storage_key"],
             )
-            webp_bytes = _compress_to_webp(downloaded.data)
+            try:
+                if is_image(_mime):
+                    raster = downloaded.data
+                elif is_pdf(_mime):
+                    raster = await asyncio.to_thread(
+                        _render_pdf_first_page, downloaded.data
+                    )
+                else:  # video
+                    raster = await asyncio.to_thread(
+                        _extract_video_frame, downloaded.data
+                    )
+                webp_bytes = _compress_to_webp(raster)
+            except (MemoryError, Image.DecompressionBombError):
+                raise
+            except Exception as exc:  # noqa: BLE001 — рендер не удался, превью необязательно
+                logger.info(
+                    "generate_file_preview: не удалось отрендерить превью",
+                    extra={
+                        "file_id": str(_file_id),
+                        "mime_type": _mime,
+                        "reason": str(exc),
+                        "error_type": exc.__class__.__name__,
+                    },
+                )
+                async with context.uow_factory() as uow:
+                    updated = await uow.files.mark_preview_not_required(
+                        file_id=_file_id, flush=True, refresh=True
+                    )
+                    await uow.commit()
+                return success_result(
+                    result_data={
+                        "file_id": str(_file_id),
+                        "preview_status": FilePreviewStatus.NOT_REQUIRED.value,
+                        "preview_storage_key": getattr(
+                            updated, "preview_storage_key", None
+                        ),
+                    },
+                    progress_percent=100,
+                )
             await context.storage_service.objects.put_object(
                 bucket=context.storage_service.default_files_bucket,
                 object_key=preview_key,
                 data=io.BytesIO(webp_bytes),
                 length=len(webp_bytes),
-                content_type="image/webp",
+                content_type=PREVIEW_IMAGE_CONTENT_TYPE,
             )
             async with context.uow_factory() as uow:
                 await uow.files.update_preview(
@@ -245,7 +272,7 @@ async def generate_file_preview_handler(
             object_key=preview_key,
             data=io.BytesIO(preview_bytes),
             length=len(preview_bytes),
-            content_type="text/plain; charset=utf-8",
+            content_type=PREVIEW_TEXT_CONTENT_TYPE,
         )
         async with context.uow_factory() as uow:
             await uow.files.update_preview(
@@ -367,49 +394,103 @@ def _compress_to_webp(data: bytes) -> bytes:
         return out.getvalue()
 
 
-def _mime_requires_preview(mime_type: str) -> bool:
-    """Проверяет, требуется ли preview для MIME-типа.
+def _media_source_limit(mime_type: str) -> int | None:
+    """Возвращает максимальный размер исходного файла для генерации превью.
 
     Args:
         mime_type: Нормализованный MIME-тип файла.
 
     Returns:
-        `True`, если MIME-тип поддерживает preview, иначе `False`.
+        Максимальный размер исходного файла в байтах для изображений, PDF и
+        видео; ``None`` для остальных типов (текст усекается при чтении и не
+        нуждается в ограничении размера источника).
     """
 
-    if not mime_type:
-        return False
-    if mime_type in _PREVIEW_SUPPORTED_MIME_TYPES:
-        return True
-    return any(
-        mime_type.startswith(prefix) for prefix in _PREVIEW_SUPPORTED_MIME_PREFIXES
-    )
+    if is_image(mime_type):
+        return _IMAGE_PREVIEW_MAX_SOURCE_BYTES
+    if is_pdf(mime_type):
+        return _PDF_PREVIEW_MAX_SOURCE_BYTES
+    if is_video(mime_type):
+        return _VIDEO_PREVIEW_MAX_SOURCE_BYTES
+    return None
 
 
-def _mime_is_image(mime_type: str) -> bool:
-    """Проверяет, является ли MIME-тип изображением.
+def _render_pdf_first_page(data: bytes) -> bytes:
+    """Рендерит первую страницу PDF в PNG-растр.
 
     Args:
-        mime_type: Нормализованный MIME-тип файла.
+        data: Байты PDF-документа.
 
     Returns:
-        `True`, если MIME-тип относится к изображениям, иначе `False`.
+        PNG-байты первой страницы.
+
+    Raises:
+        ValueError: Если документ не содержит страниц.
+        Exception: Если PyMuPDF не смог открыть или отрендерить документ.
     """
 
-    return mime_type.startswith("image/")
+    with fitz.open(stream=data, filetype="pdf") as doc:
+        if doc.page_count < 1:
+            raise ValueError("PDF не содержит страниц.")
+        page = doc.load_page(0)
+        pixmap = page.get_pixmap(dpi=_PDF_RENDER_DPI, alpha=False)
+        return pixmap.tobytes("png")
 
 
-def _mime_is_pdf(mime_type: str) -> bool:
-    """Проверяет, является ли MIME-тип PDF-документом.
+def _extract_video_frame(data: bytes) -> bytes:
+    """Извлекает кадр из видео через ffmpeg и возвращает его как PNG.
+
+    Сначала пробует кадр на отметке ``_VIDEO_FRAME_TIMESTAMP``; для очень
+    коротких видео откатывается к первому кадру.
 
     Args:
-        mime_type: Нормализованный MIME-тип файла.
+        data: Байты видеофайла.
 
     Returns:
-        `True`, если MIME-тип равен `application/pdf`, иначе `False`.
+        PNG-байты извлечённого кадра.
+
+    Raises:
+        RuntimeError: Если ffmpeg не смог извлечь кадр.
     """
 
-    return mime_type == "application/pdf"
+    with tempfile.NamedTemporaryFile(suffix=".video", delete=False) as tmp:
+        tmp.write(data)
+        tmp_path = tmp.name
+
+    try:
+        for timestamp in (_VIDEO_FRAME_TIMESTAMP, "00:00:00"):
+            result = subprocess.run(  # noqa: S603 — фиксированный набор аргументов
+                [
+                    "ffmpeg",
+                    "-nostdin",
+                    "-loglevel",
+                    "error",
+                    "-ss",
+                    timestamp,
+                    "-i",
+                    tmp_path,
+                    "-frames:v",
+                    "1",
+                    "-f",
+                    "image2pipe",
+                    "-vcodec",
+                    "png",
+                    "pipe:1",
+                ],
+                capture_output=True,
+                timeout=_VIDEO_FFMPEG_TIMEOUT_SECONDS,
+                check=False,
+            )
+            if result.returncode == 0 and result.stdout:
+                return result.stdout
+        raise RuntimeError(
+            "ffmpeg не смог извлечь кадр из видео для генерации превью."
+        )
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
 def _resolve_owner_id(file_row: Any) -> UUID:

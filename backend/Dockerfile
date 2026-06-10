@@ -11,6 +11,12 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# 0) Системные зависимости: ffmpeg нужен worker'у для генерации превью видео
+#    (извлечение кадра). Слой кэшируется отдельно от кода приложения.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 # 1) Зависимости сначала кэшируются до тех пор, пока pyproject.toml / uv.lock не изменятся.
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-install-project
