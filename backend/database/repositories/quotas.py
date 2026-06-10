@@ -4,17 +4,18 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, Final
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, func, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.constants import StorageConstants
 from database.exceptions import (
     ConstraintViolationError,
     DuplicateEntityError,
     EntityNotFoundError,
     InvalidQueryError,
 )
-from database.models.enums import PublicLinkStatus, UploadSessionStatus
+from database.models.enums import PublicLinkStatus, UploadSessionStatus, UserStatus
 from database.models.filesystem import File, FileSystemNode
 from database.models.links import PublicLink
 from database.models.quotas import UserQuota
@@ -258,7 +259,7 @@ class UserQuotaRepository(BaseRepository[UserQuota]):
         self,
         *,
         user_id: uuid.UUID,
-        storage_limit_bytes: int = 10 * 1024 * 1024 * 1024,
+        storage_limit_bytes: int = StorageConstants.DEFAULT_STORAGE_LIMIT_BYTES,
         max_file_size_bytes: int = 1024 * 1024 * 1024,
         files_limit: int | None = None,
         public_links_limit: int | None = 100,
@@ -1565,6 +1566,94 @@ class UserQuotaRepository(BaseRepository[UserQuota]):
                 details={
                     "user_id": str(user_id),
                     "include_deleted": include_deleted,
+                },
+                cause=exc,
+            ) from exc
+
+    async def acquire_capacity_lock(self) -> None:
+        """Берёт транзакционную advisory-блокировку выдачи квот.
+
+        Блокировка ``pg_advisory_xact_lock`` на фиксированном ключе сериализует
+        операции, меняющие суммарный выделенный объём (создание квоты, повышение
+        лимита, выдача квоты новому пользователю), чтобы конкурентные
+        транзакции не превысили общий пул на устаревшем чтении суммы.
+        Освобождается автоматически при ``commit``/``rollback``.
+
+        Важно: вызывать ДО любых ``SELECT ... FOR UPDATE`` по строкам квот в той
+        же операции, чтобы избежать взаимных блокировок (всегда сначала
+        advisory-lock, затем строковые блокировки).
+
+        Raises:
+            RepositoryError: Если произошла ошибка при выполнении SQL-запроса.
+        """
+
+        try:
+            await self.session.execute(
+                text("SELECT pg_advisory_xact_lock(:key)"),
+                {"key": StorageConstants.CAPACITY_ADVISORY_LOCK_KEY},
+            )
+        except SQLAlchemyError as exc:
+            raise self._repository_error(
+                operation="acquire_capacity_lock",
+                reason=str(exc),
+                details={"key": StorageConstants.CAPACITY_ADVISORY_LOCK_KEY},
+                cause=exc,
+            ) from exc
+
+    async def total_allocated_storage_bytes(
+        self,
+        *,
+        exclude_user_id: uuid.UUID | None = None,
+        exclude_deleted_users: bool = True,
+    ) -> int:
+        """Возвращает суммарно выделенный объём хранилища по всем пользователям.
+
+        Суммирует ``storage_limit_bytes`` всех квот. Используется для контроля
+        переподписки: сумма выданных лимитов не должна превышать пул сервера.
+
+        Args:
+            exclude_user_id: Идентификатор пользователя, чью квоту нужно
+                исключить из суммы (например, при изменении его собственного
+                лимита, чтобы не считать старое значение дважды).
+            exclude_deleted_users: Если ``True``, не учитывает квоты
+                пользователей со статусом ``DELETED`` — их резерв считается
+                освобождённым.
+
+        Returns:
+            Суммарно выделенный объём хранилища в байтах.
+
+        Raises:
+            RepositoryError: Если произошла ошибка при выполнении SQL-запроса.
+        """
+
+        try:
+            statement = (
+                select(func.coalesce(func.sum(UserQuota.storage_limit_bytes), 0))
+                .select_from(UserQuota)
+                .join(User, User.id == UserQuota.user_id)
+            )
+
+            if exclude_deleted_users:
+                statement = statement.where(User.status != UserStatus.DELETED)
+
+            if exclude_user_id is not None:
+                statement = statement.where(
+                    UserQuota.user_id != exclude_user_id,
+                )
+
+            result = await self.session.execute(statement)
+
+            return int(result.scalar_one() or 0)
+
+        except SQLAlchemyError as exc:
+            raise self._repository_error(
+                operation="total_allocated_storage_bytes",
+                reason=str(exc),
+                details={
+                    "exclude_user_id": (
+                        str(exclude_user_id) if exclude_user_id else None
+                    ),
+                    "exclude_deleted_users": exclude_deleted_users,
                 },
                 cause=exc,
             ) from exc

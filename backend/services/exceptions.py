@@ -82,6 +82,7 @@ class ServiceErrorCode(StrEnum):
     AUTHENTICATION_ERROR = "authentication_error"
     AUTHORIZATION_ERROR = "authorization_error"
     QUOTA_EXCEEDED = "quota_exceeded"
+    SERVER_CAPACITY_EXCEEDED = "server_capacity_exceeded"
     STORAGE_SERVICE_ERROR = "storage_service_error"
     UPLOAD_ERROR = "upload_error"
     DOWNLOAD_ERROR = "download_error"
@@ -723,6 +724,65 @@ class QuotaExceededServiceError(ServiceError):
                 requested=requested,
                 used=used,
                 limit=limit,
+                available=available,
+            ),
+            cause=cause,
+        )
+
+
+class InsufficientServerCapacityError(ServiceError):
+    """Ошибка нехватки общей ёмкости хранилища сервера.
+
+    В отличие от `QuotaExceededServiceError` (превышение личной квоты
+    пользователя), эта ошибка означает, что сервер физически не может выделить
+    запрошенный объём: суммарно выданные лимиты не помещаются в пул хранилища.
+    Возвращается при выдаче/повышении квоты и при одобрении нового пользователя.
+    """
+
+    default_message: ClassVar[str] = (
+        "Недостаточно свободного места на сервере для выделения запрошенного "
+        "объёма хранилища."
+    )
+    default_code: ClassVar[str] = ServiceErrorCode.SERVER_CAPACITY_EXCEEDED.value
+    default_category: ClassVar[ServiceErrorCategory] = ServiceErrorCategory.QUOTA
+    default_status_code: ClassVar[int] = HTTPStatus.INSUFFICIENT_STORAGE
+
+    def __init__(
+        self,
+        message: str | None = None,
+        *,
+        user_id: Any | None = None,
+        pool: int | None = None,
+        allocated: int | None = None,
+        requested: int | None = None,
+        available: int | None = None,
+        code: str | Enum | None = None,
+        details: Mapping[str, Any] | None = None,
+        cause: BaseException | None = None,
+    ) -> None:
+        """Инициализирует ошибку нехватки ёмкости сервера.
+
+        Args:
+            message: Человекочитаемое сообщение об ошибке.
+            user_id: Идентификатор пользователя, которому выделяется место.
+            pool: Общий пул хранилища сервера в байтах.
+            allocated: Суммарно выданный объём всем пользователям в байтах.
+            requested: Запрошенный к выделению объём в байтах.
+            available: Свободный остаток пула в байтах.
+            code: Машинно-читаемый код ошибки.
+            details: Дополнительные детали ошибки.
+            cause: Исходное исключение.
+        """
+
+        super().__init__(
+            message,
+            code=code,
+            details=_merge_details(
+                details,
+                user_id=user_id,
+                pool=pool,
+                allocated=allocated,
+                requested=requested,
                 available=available,
             ),
             cause=cause,

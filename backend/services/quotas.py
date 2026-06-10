@@ -4,6 +4,8 @@ from collections.abc import Mapping
 from typing import Any
 from uuid import UUID
 
+from core.config import get_settings
+from core.constants import StorageConstants
 from core.logging import get_logger
 from database import DatabaseError, UnitOfWorkFactory, create_unit_of_work_factory
 from database.models.enums import AuditAction, AuditResourceType, QuotaResourceType
@@ -14,24 +16,97 @@ from schemas.quotas import (
     QuotaCheckResponse,
     QuotaRecalculateRequest,
     QuotaUsageRead,
+    ServerCapacityRead,
     UserQuotaCreate,
     UserQuotaRead,
     UserQuotaUpdate,
 )
 from services.audit import AuditService, get_audit_service
 from services.exceptions import (
+    InsufficientServerCapacityError,
     QuotaExceededServiceError,
     ServiceError,
     ValidationServiceError,
     service_error_from_database,
     service_error_from_exception,
 )
+from storage.capacity import CapacityProvider, get_capacity_provider
+from storage.exceptions import StorageCapacityError
 
 logger = get_logger("services.quotas")
 
 SERVICE_NAME = "quotas"
 MAX_PAGE_LIMIT = 1000
 REPOSITORY_PAGE_LIMIT = 1000
+
+
+async def enforce_server_capacity(
+    *,
+    uow: Any,
+    capacity_provider: CapacityProvider,
+    user_id: UUID | None,
+    new_limit: int,
+    previous_limit: int | None,
+) -> None:
+    """Проверяет, что выделение ``new_limit`` помещается в пул сервера.
+
+    Единая точка контроля переподписки для всех путей выдачи квот (создание,
+    повышение, выдача новому пользователю). Берёт advisory-блокировку, чтобы
+    конкурентные выдачи не превысили пул на устаревшем чтении суммы, затем
+    сравнивает прогнозируемый суммарный объём с пулом.
+
+    Понижение или сохранение лимита (``delta <= 0``) разрешено всегда — даже при
+    уже существующей переподписке, что позволяет «лечить» её снижением квот.
+
+    Должна вызываться внутри открытой транзакции ``uow`` ДО любых
+    ``SELECT ... FOR UPDATE`` по строкам квот (порядок блокировок против
+    дедлоков).
+
+    Args:
+        uow: Открытый Unit of Work (его сессия используется для блокировки и
+            чтения суммы).
+        capacity_provider: Провайдер ёмкости хранилища.
+        user_id: Идентификатор пользователя, которому выделяется место, или
+            ``None`` для ещё не созданного пользователя (тогда из суммы ничего
+            не исключается).
+        new_limit: Новый лимит хранилища пользователя в байтах.
+        previous_limit: Прежний лимит пользователя в байтах (``None`` при
+            создании квоты).
+
+    Raises:
+        InsufficientServerCapacityError: Если выделение превысит пул сервера или
+            если пул невозможно определить (fail-closed).
+    """
+
+    delta = new_limit - (previous_limit or 0)
+    if delta <= 0:
+        return
+
+    await uow.quotas.acquire_capacity_lock()
+
+    try:
+        pool = await capacity_provider.get_pool_bytes()
+    except StorageCapacityError as exc:
+        raise InsufficientServerCapacityError(
+            "Невозможно определить ёмкость хранилища сервера; выделение места "
+            "временно недоступно.",
+            user_id=user_id,
+            requested=new_limit,
+            cause=exc,
+        ) from exc
+
+    allocated_others = await uow.quotas.total_allocated_storage_bytes(
+        exclude_user_id=user_id,
+    )
+    projected = allocated_others + new_limit
+    if projected > pool:
+        raise InsufficientServerCapacityError(
+            user_id=user_id,
+            pool=pool,
+            allocated=allocated_others,
+            requested=new_limit,
+            available=max(pool - allocated_others, 0),
+        )
 
 
 class QuotasService:
@@ -51,6 +126,7 @@ class QuotasService:
         *,
         uow_factory: UnitOfWorkFactory | None = None,
         audit_service: AuditService | None = None,
+        capacity_provider: CapacityProvider | None = None,
     ) -> None:
         """Инициализирует сервис квот.
 
@@ -62,11 +138,16 @@ class QuotasService:
                 фабрика.
             audit_service: Сервис аудита. Если None, создается стандартный сервис
                 аудита.
+            capacity_provider: Провайдер ёмкости хранилища для контроля
+                переподписки. Если None, создаётся из настроек.
         """
 
         self.uow_factory = uow_factory or create_unit_of_work_factory()
         self.audit_service = audit_service or get_audit_service(
             uow_factory=self.uow_factory,
+        )
+        self.capacity_provider = capacity_provider or get_capacity_provider(
+            get_settings().storage,
         )
 
     async def create_quota(
@@ -94,6 +175,13 @@ class QuotasService:
         snapshot: dict[str, Any] = {}
         try:
             async with self.uow_factory() as uow:
+                await enforce_server_capacity(
+                    uow=uow,
+                    capacity_provider=self.capacity_provider,
+                    user_id=data.user_id,
+                    new_limit=data.storage_limit_bytes,
+                    previous_limit=None,
+                )
                 quota = await uow.quotas.create_quota(
                     user_id=data.user_id,
                     storage_limit_bytes=data.storage_limit_bytes,
@@ -141,7 +229,7 @@ class QuotasService:
         user_id: UUID,
         *,
         actor_id: UUID | None = None,
-        storage_limit_bytes: int = 10 * 1024 * 1024 * 1024,
+        storage_limit_bytes: int = StorageConstants.DEFAULT_STORAGE_LIMIT_BYTES,
         max_file_size_bytes: int = 1024 * 1024 * 1024,
         files_limit: int | None = None,
         public_links_limit: int | None = 100,
@@ -177,6 +265,13 @@ class QuotasService:
         snapshot: dict[str, Any] = {}
         try:
             async with self.uow_factory() as uow:
+                await enforce_server_capacity(
+                    uow=uow,
+                    capacity_provider=self.capacity_provider,
+                    user_id=user_id,
+                    new_limit=storage_limit_bytes,
+                    previous_limit=None,
+                )
                 quota = await uow.quotas.create_default_quota(
                     user_id=user_id,
                     storage_limit_bytes=storage_limit_bytes,
@@ -220,7 +315,7 @@ class QuotasService:
         user_id: UUID,
         *,
         actor_id: UUID | None = None,
-        storage_limit_bytes: int = 10 * 1024 * 1024 * 1024,
+        storage_limit_bytes: int = StorageConstants.DEFAULT_STORAGE_LIMIT_BYTES,
         max_file_size_bytes: int = 1024 * 1024 * 1024,
         files_limit: int | None = None,
         public_links_limit: int | None = 100,
@@ -409,6 +504,21 @@ class QuotasService:
         snapshot: dict[str, Any] = {}
         try:
             async with self.uow_factory() as uow:
+                # Контроль переподписки нужен только при повышении лимита
+                # хранилища. Advisory-блокировку берём ДО чтения прежнего лимита
+                # и ДО строкового for_update-чтения квоты, чтобы и прежний лимит,
+                # и сумма читались согласованно, и не было дедлоков.
+                if values.get("storage_limit_bytes") is not None:
+                    await uow.quotas.acquire_capacity_lock()
+                    current = await uow.quotas.get_required_by_user_id(user_id)
+                    await enforce_server_capacity(
+                        uow=uow,
+                        capacity_provider=self.capacity_provider,
+                        user_id=user_id,
+                        new_limit=values["storage_limit_bytes"],
+                        previous_limit=current.storage_limit_bytes,
+                    )
+
                 quota = await uow.quotas.get_required_by_user_id(
                     user_id, for_update=True
                 )
@@ -506,6 +616,58 @@ class QuotasService:
                 exc,
                 operation=operation,
                 message="Непредвиденная ошибка при обновлении квоты пользователя.",
+            ) from exc
+
+    async def get_server_capacity(self) -> ServerCapacityRead:
+        """Возвращает состояние общей ёмкости хранилища сервера.
+
+        Собирает снимок пула (из конфига или MinIO) и суммарно выделенный объём
+        по всем активным пользователям, чтобы администратор видел распределение
+        места и факт переподписки.
+
+        Returns:
+            Состояние ёмкости хранилища сервера.
+
+        Raises:
+            ServiceError: Если ёмкость нельзя определить, произошла ошибка базы
+                данных или непредвиденная ошибка сервиса.
+        """
+
+        operation = "get_server_capacity"
+        try:
+            status = await self.capacity_provider.resolve()
+            async with self.uow_factory() as uow:
+                allocated = await uow.quotas.total_allocated_storage_bytes()
+            available = max(status.pool_bytes - allocated, 0)
+            return ServerCapacityRead(
+                pool_bytes=status.pool_bytes,
+                allocated_bytes=allocated,
+                available_bytes=available,
+                physical_total_bytes=status.physical_total_bytes,
+                physical_available_bytes=status.physical_available_bytes,
+                source=status.source,
+                is_overcommitted=allocated > status.pool_bytes,
+                minio_reachable=status.minio_reachable,
+            )
+
+        except StorageCapacityError as exc:
+            raise InsufficientServerCapacityError(
+                "Невозможно определить ёмкость хранилища сервера.",
+                cause=exc,
+            ) from exc
+        except DatabaseError as exc:
+            raise self._database_error(
+                exc,
+                operation=operation,
+                message="Не удалось получить состояние ёмкости хранилища.",
+            ) from exc
+        except ServiceError:
+            raise
+        except Exception as exc:
+            raise self._unexpected_error(
+                exc,
+                operation=operation,
+                message="Непредвиденная ошибка при получении ёмкости хранилища.",
             ) from exc
 
     async def check_quota(self, data: QuotaCheckRequest) -> QuotaCheckResponse:
@@ -1635,6 +1797,7 @@ def get_quotas_service(
     *,
     uow_factory: UnitOfWorkFactory | None = None,
     audit_service: AuditService | None = None,
+    capacity_provider: CapacityProvider | None = None,
 ) -> QuotasService:
     """Создаёт экземпляр сервиса квот.
 
@@ -1643,9 +1806,15 @@ def get_quotas_service(
             стандартную фабрику самостоятельно.
         audit_service: Сервис аудита. Если не передан, будет создан стандартный
             сервис аудита.
+        capacity_provider: Провайдер ёмкости хранилища. Если не передан,
+            создаётся из настроек.
 
     Returns:
         Экземпляр `QuotasService`.
     """
 
-    return QuotasService(uow_factory=uow_factory, audit_service=audit_service)
+    return QuotasService(
+        uow_factory=uow_factory,
+        audit_service=audit_service,
+        capacity_provider=capacity_provider,
+    )

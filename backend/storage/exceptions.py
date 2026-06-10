@@ -68,6 +68,41 @@ class StorageError(Exception):
         return payload
 
 
+class StorageCapacityError(StorageError):
+    """Ошибка определения или валидации ёмкости хранилища.
+
+    Возникает, когда невозможно безопасно определить пул хранилища (например,
+    MinIO admin API недоступен и явная ёмкость не задана в конфиге) или когда
+    заданная в конфиге ёмкость превышает физический объём диска.
+    """
+
+    def __init__(
+        self,
+        message: str = "Не удалось определить ёмкость объектного хранилища.",
+        *,
+        configured_bytes: int | None = None,
+        physical_bytes: int | None = None,
+        details: dict[str, Any] | None = None,
+        cause: BaseException | None = None,
+    ) -> None:
+        """Инициализирует ошибку ёмкости хранилища.
+
+        Args:
+            message: Человекочитаемое описание ошибки.
+            configured_bytes: Заданная в конфиге ёмкость пула в байтах.
+            physical_bytes: Физическая ёмкость диска по данным MinIO в байтах.
+            details: Дополнительные структурированные детали ошибки.
+            cause: Исходное исключение, вызвавшее текущую ошибку.
+        """
+
+        merged: dict[str, Any] = dict(details or {})
+        if configured_bytes is not None:
+            merged["configured_bytes"] = configured_bytes
+        if physical_bytes is not None:
+            merged["physical_bytes"] = physical_bytes
+        super().__init__(message, details=merged, cause=cause)
+
+
 class StorageConnectionError(StorageError):
     """Ошибка подключения к объектному хранилищу.
 

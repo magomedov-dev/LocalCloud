@@ -317,6 +317,9 @@ class StorageSettings(BaseSettings):
         minio_scheme: HTTP-схема подключения к MinIO.
         minio_base_url: Базовый внутренний URL MinIO.
         minio_public_url: Публичный URL MinIO.
+        storage_capacity_bytes: Явно заданная общая ёмкость пула хранилища
+            в байтах. Если не задана, пул определяется автоматически как доля
+            от физической ёмкости диска, которую видит MinIO.
     """
 
     model_config = SettingsConfigDict(
@@ -347,6 +350,11 @@ class StorageSettings(BaseSettings):
     )
     minio_secure: bool = Field(default=STC.MINIO_SECURE, alias="MINIO_SECURE")
     minio_region: str = Field(default=STC.MINIO_REGION, alias="MINIO_REGION")
+    storage_capacity_bytes: int | None = Field(
+        default=None,
+        ge=0,
+        alias="STORAGE_CAPACITY_BYTES",
+    )
 
     @computed_field
     @property

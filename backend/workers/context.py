@@ -18,6 +18,7 @@ from services.tasks import TasksService, get_tasks_service
 from services.trash import TrashService, get_trash_service
 from services.uploads import UploadsService, get_uploads_service
 from storage import StorageService, get_storage_service
+from storage.capacity import get_capacity_provider
 
 
 @dataclass(slots=True)
@@ -111,6 +112,7 @@ def build_worker_context(worker_id: str | None = None) -> WorkerContext:
     worker_settings = settings.workers
     uow_factory = create_unit_of_work_factory()
     storage_service = get_storage_service(settings=settings.storage)
+    capacity_provider = get_capacity_provider(settings.storage)
 
     access_service = get_access_service(uow_factory=uow_factory)
     audit_service = get_audit_service(uow_factory=uow_factory)
@@ -148,6 +150,7 @@ def build_worker_context(worker_id: str | None = None) -> WorkerContext:
     quotas_service = get_quotas_service(
         uow_factory=uow_factory,
         audit_service=audit_service,
+        capacity_provider=capacity_provider,
     )
     health_service = get_health_service(
         settings=settings,

@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
+from core.config import get_settings
+from core.constants import StorageConstants
 from core.logging import get_logger
 from database import DatabaseError, UnitOfWorkFactory, create_unit_of_work_factory
 from database.models.enums import (
@@ -34,6 +36,8 @@ from services.exceptions import (
     service_error_from_database,
     service_error_from_exception,
 )
+from services.quotas import enforce_server_capacity
+from storage.capacity import CapacityProvider, get_capacity_provider
 
 logger = get_logger("services.registration")
 
@@ -66,6 +70,7 @@ class RegistrationService:
         *,
         uow_factory: UnitOfWorkFactory | None = None,
         audit_service: AuditService | None = None,
+        capacity_provider: CapacityProvider | None = None,
     ) -> None:
         """Инициализирует сервис регистрации.
 
@@ -77,11 +82,17 @@ class RegistrationService:
                 фабрика.
             audit_service: Сервис аудита. Если None, создается стандартный сервис
                 аудита.
+            capacity_provider: Провайдер ёмкости хранилища для контроля
+                переподписки при одобрении заявки. Если None, создаётся из
+                настроек.
         """
 
         self.uow_factory = uow_factory or create_unit_of_work_factory()
         self.audit_service = audit_service or get_audit_service(
             uow_factory=self.uow_factory,
+        )
+        self.capacity_provider = capacity_provider or get_capacity_provider(
+            get_settings().storage,
         )
 
     async def submit_request(
@@ -324,6 +335,17 @@ class RegistrationService:
                     username=request.username,
                     operation=operation,
                     uow=uow,
+                )
+
+                # Проверяем, что на сервере есть место под дефолтную квоту
+                # нового пользователя, ДО его создания. При нехватке поднимается
+                # 507, и вся транзакция откатывается — пользователь не создаётся.
+                await enforce_server_capacity(
+                    uow=uow,
+                    capacity_provider=self.capacity_provider,
+                    user_id=None,
+                    new_limit=StorageConstants.DEFAULT_STORAGE_LIMIT_BYTES,
+                    previous_limit=None,
                 )
 
                 now = datetime.now(UTC)
@@ -1207,6 +1229,7 @@ def get_registration_service(
     *,
     uow_factory: UnitOfWorkFactory | None = None,
     audit_service: AuditService | None = None,
+    capacity_provider: CapacityProvider | None = None,
 ) -> RegistrationService:
     """Создаёт экземпляр сервиса регистрации.
 
@@ -1215,6 +1238,8 @@ def get_registration_service(
             стандартную фабрику самостоятельно.
         audit_service: Сервис аудита. Если не передан, будет создан стандартный
             сервис аудита.
+        capacity_provider: Провайдер ёмкости хранилища. Если не передан,
+            создаётся из настроек.
 
     Returns:
         Экземпляр `RegistrationService`.
@@ -1223,4 +1248,5 @@ def get_registration_service(
     return RegistrationService(
         uow_factory=uow_factory,
         audit_service=audit_service,
+        capacity_provider=capacity_provider,
     )

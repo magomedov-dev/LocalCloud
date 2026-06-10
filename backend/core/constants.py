@@ -235,6 +235,15 @@ class StorageConstants:
         FORBIDDEN_OBJECT_KEY_PARTS: Запрещенные части object key.
         RESERVED_METADATA_KEYS: Зарезервированные ключи metadata.
         STORAGE_EXECUTOR_MAX_WORKERS: Количество обработчиков.
+        DEFAULT_STORAGE_LIMIT_BYTES: Размер дефолтной квоты хранилища
+            пользователя в байтах.
+        STORAGE_AUTO_CAPACITY_FRACTION: Доля физической ёмкости диска,
+            используемая как пул при автоопределении (если ёмкость не задана
+            явно в конфиге).
+        CAPACITY_ADVISORY_LOCK_KEY: Фиксированный ключ advisory-блокировки
+            Postgres, сериализующей операции выдачи квот.
+        CAPACITY_CACHE_TTL_SECONDS: Время жизни кэша ёмкости хранилища
+            в секундах.
     """
 
     MINIO_HOST: Final[str] = "localhost"
@@ -300,6 +309,11 @@ class StorageConstants:
     }
 
     STORAGE_EXECUTOR_MAX_WORKERS: Final[int] = 8
+
+    DEFAULT_STORAGE_LIMIT_BYTES: Final[int] = 10 * 1024 * 1024 * 1024
+    STORAGE_AUTO_CAPACITY_FRACTION: Final[float] = 0.85
+    CAPACITY_ADVISORY_LOCK_KEY: Final[int] = 0x10C_CACE_70C_5
+    CAPACITY_CACHE_TTL_SECONDS: Final[float] = 300.0
 
 
 class WorkerConstants:
