@@ -17,7 +17,6 @@ from database.repositories.parts import UploadPartsRepository
 from database.repositories.permissions import NodePermissionsRepository
 from database.repositories.quotas import UserQuotaRepository
 from database.repositories.registration import RegistrationRequestsRepository
-from database.repositories.roles import RolesRepository
 from database.repositories.sessions import UploadSessionsRepository
 from database.repositories.tasks import BackgroundTasksRepository
 from database.repositories.tokens import RefreshTokensRepository
@@ -98,7 +97,6 @@ class UnitOfWork:
         self._closed = False
 
         self._users: UsersRepository | None = None
-        self._roles: RolesRepository | None = None
         self._registration_requests: RegistrationRequestsRepository | None = None
         self._refresh_tokens: RefreshTokensRepository | None = None
 
@@ -259,22 +257,6 @@ class UnitOfWork:
         if self._users is None:
             self._users = UsersRepository(self.session)
         return self._users
-
-    @property
-    def roles(self) -> RolesRepository:
-        """Возвращает репозиторий ролей.
-
-        Returns:
-            Экземпляр RolesRepository.
-
-        Raises:
-            UnitOfWorkError: Если UnitOfWork используется вне активного
-                контекста.
-        """
-
-        if self._roles is None:
-            self._roles = RolesRepository(self.session)
-        return self._roles
 
     @property
     def registration_requests(self) -> RegistrationRequestsRepository:
@@ -735,7 +717,6 @@ class UnitOfWork:
         """
 
         self._users = None
-        self._roles = None
         self._registration_requests = None
         self._refresh_tokens = None
 

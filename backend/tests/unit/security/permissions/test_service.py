@@ -5,11 +5,15 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import Any
 
 import pytest
 
-from database.models.enums import NodeVisibility, PermissionLevel, UserStatus
+from database.models.enums import (
+    NodeVisibility,
+    PermissionLevel,
+    SystemRole,
+    UserStatus,
+)
 from security.permissions.enums import PermissionAction, PermissionDeniedReason
 from security.permissions.exceptions import PermissionCheckError, PermissionDeniedError
 from security.permissions.service import (
@@ -41,20 +45,16 @@ from security.permissions.service import (
 # Фабрики заглушек
 # ---------------------------------------------------------------------------
 
-def _make_role(code: str = "user", name: str = "user") -> SimpleNamespace:
-    return SimpleNamespace(code=code, name=name)
-
-
 def _make_user(
     *,
     id: uuid.UUID | None = None,
     status: UserStatus | str = UserStatus.ACTIVE,
-    roles: list[Any] | None = None,
+    role: SystemRole | str | None = SystemRole.USER,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         id=id or uuid.uuid4(),
         status=status,
-        roles=roles if roles is not None else [_make_role("user", "user")],
+        role=role,
     )
 
 
@@ -170,15 +170,15 @@ class TestIsActiveUser:
 
 class TestIsAdminUser:
     def test_user_with_admin_role_code_returns_true(self) -> None:
-        user = _make_user(roles=[_make_role(code="admin", name="Administrator")])
+        user = _make_user(role=SystemRole.ADMIN)
         assert is_admin_user(user) is True
 
     def test_user_with_no_roles_returns_false(self) -> None:
-        user = _make_user(roles=[])
+        user = _make_user(role=None)
         assert is_admin_user(user) is False
 
     def test_user_with_user_role_returns_false(self) -> None:
-        user = _make_user(roles=[_make_role(code="user", name="User")])
+        user = _make_user(role=SystemRole.USER)
         assert is_admin_user(user) is False
 
     def test_none_returns_false(self) -> None:
@@ -342,7 +342,7 @@ class TestCheckNodePermission:
         assert result.reason == PermissionDeniedReason.INACTIVE_USER
 
     def test_admin_user_returns_allowed(self) -> None:
-        user = _make_user(roles=[_make_role("admin")])
+        user = _make_user(role=SystemRole.ADMIN)
         node = _make_node()
         result = check_node_permission(user=user, node=node, action=PermissionAction.READ)
         assert result.allowed is True
@@ -419,12 +419,12 @@ class TestRequireAdmin:
             require_admin(user)
 
     def test_non_admin_raises(self) -> None:
-        user = _make_user(roles=[_make_role("user")])
+        user = _make_user(role=SystemRole.USER)
         with pytest.raises(PermissionDeniedError):
             require_admin(user)
 
     def test_admin_passes(self) -> None:
-        user = _make_user(roles=[_make_role("admin")])
+        user = _make_user(role=SystemRole.ADMIN)
         # не должно вызывать исключение
         require_admin(user)
 
@@ -559,11 +559,11 @@ class TestCanManageNode:
 
 class TestIsRegularUser:
     def test_user_with_user_role_returns_true(self) -> None:
-        user = _make_user(roles=[_make_role(code="user", name="User")])
+        user = _make_user(role=SystemRole.USER)
         assert is_regular_user(user) is True
 
     def test_admin_only_user_returns_false(self) -> None:
-        user = _make_user(roles=[_make_role(code="admin", name="Administrator")])
+        user = _make_user(role=SystemRole.ADMIN)
         assert is_regular_user(user) is False
 
     def test_none_returns_false(self) -> None:

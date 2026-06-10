@@ -6,9 +6,8 @@ from uuid import UUID
 
 from pydantic import ConfigDict, EmailStr, Field, field_validator
 
-from database.models.enums import UserStatus
+from database.models.enums import SystemRole, UserStatus
 from schemas.common import BaseSchema, PaginationParams
-from schemas.roles import RoleListItem
 
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 
@@ -342,7 +341,7 @@ class CurrentUserRead(BaseSchema):
         username: Имя текущего пользователя.
         status: Текущий статус учётной записи.
         last_login_at: Дата и время последнего успешного входа.
-        roles: Роли текущего пользователя.
+        role: Системная роль текущего пользователя.
     """
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
@@ -367,9 +366,9 @@ class CurrentUserRead(BaseSchema):
         default=None,
         description="Дата и время последнего успешного входа.",
     )
-    roles: list[RoleListItem] = Field(
-        default_factory=list,
-        description="Роли текущего пользователя.",
+    role: SystemRole = Field(
+        ...,
+        description="Системная роль пользователя.",
     )
 
 
@@ -622,10 +621,10 @@ class UserWithRolesRead(UserRead):
         rejection_reason: Причина отклонения пользователя.
         created_at: Дата и время создания пользователя.
         updated_at: Дата и время последнего обновления пользователя.
-        roles: Роли пользователя.
+        role: Системная роль пользователя.
     """
 
-    roles: list[RoleListItem] = Field(
-        default_factory=list,
-        description="Роли пользователя.",
+    role: SystemRole = Field(
+        ...,
+        description="Системная роль пользователя.",
     )

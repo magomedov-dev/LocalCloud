@@ -1,26 +1,15 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterable
 from datetime import datetime
 from typing import Protocol
 
-from database.models.enums import NodeVisibility, PermissionLevel, UserStatus
-
-
-class SupportsUserRole(Protocol):
-    """Протокол роли пользователя.
-
-    Описывает минимальный интерфейс объекта роли, необходимый для проверки
-    прав доступа.
-
-    Attributes:
-        code: Машинный код роли.
-        name: Человекочитаемое название роли.
-    """
-
-    code: str
-    name: str
+from database.models.enums import (
+    NodeVisibility,
+    PermissionLevel,
+    SystemRole,
+    UserStatus,
+)
 
 
 class SupportsUser(Protocol):
@@ -32,12 +21,12 @@ class SupportsUser(Protocol):
     Attributes:
         id: Идентификатор пользователя.
         status: Статус пользователя.
-        roles: Роли пользователя.
+        role: Системная роль пользователя.
     """
 
     id: uuid.UUID
     status: UserStatus | str
-    roles: Iterable[SupportsUserRole]
+    role: SystemRole | str
 
 
 class SupportsNode(Protocol):

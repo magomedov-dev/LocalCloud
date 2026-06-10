@@ -1408,3 +1408,34 @@ async def test_create_user_password_hash_too_long():
             password_hash="h" * 256,
             check_duplicates=False,
         )
+
+
+# ---------------------------------------------------------------------------
+# get_first_admin_user_id
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_get_first_admin_user_id_returns_id():
+    repo, session, result = make_repo()
+    admin_id = uuid.uuid4()
+    result.scalar_one_or_none = MagicMock(return_value=admin_id)
+    session.execute = AsyncMock(return_value=result)
+    found = await repo.get_first_admin_user_id()
+    assert found == admin_id
+
+
+@pytest.mark.asyncio
+async def test_get_first_admin_user_id_returns_none_when_no_admins():
+    repo, session, result = make_repo()
+    result.scalar_one_or_none = MagicMock(return_value=None)
+    session.execute = AsyncMock(return_value=result)
+    found = await repo.get_first_admin_user_id()
+    assert found is None
+
+
+@pytest.mark.asyncio
+async def test_get_first_admin_user_id_wraps_db_error():
+    repo, session, _ = make_repo()
+    session.execute = AsyncMock(side_effect=SQLAlchemyError("db error"))
+    with pytest.raises(RepositoryError):
+        await repo.get_first_admin_user_id()

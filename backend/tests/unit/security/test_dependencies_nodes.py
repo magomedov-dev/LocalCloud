@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from database.models.enums import UserStatus
+from database.models.enums import SystemRole, UserStatus
 from security.dependencies.auth import SecurityDependencyError
 from security.dependencies.nodes import (
     get_accessible_node_dependency,
@@ -56,12 +56,12 @@ def make_node(owner_id: uuid.UUID | None = None, is_deleted: bool = False) -> Ma
 
 def make_user(
     status: UserStatus = UserStatus.ACTIVE,
-    roles: list | None = None,
+    role: SystemRole = SystemRole.USER,
 ) -> MagicMock:
     user = MagicMock()
     user.id = uuid.uuid4()
     user.status = status
-    user.roles = roles if roles is not None else []
+    user.role = role
     return user
 
 
@@ -184,10 +184,7 @@ class TestRequireNodePermissionDependency:
     @pytest.mark.asyncio
     async def test_admin_user_can_access_any_node(self) -> None:
         """Администратору всегда должен предоставляться доступ."""
-        role = MagicMock()
-        role.code = "admin"
-        role.name = "admin"
-        admin = make_user(roles=[role])
+        admin = make_user(role=SystemRole.ADMIN)
 
         node = make_node()
         dep = require_node_permission_dependency(PermissionAction.READ)
@@ -246,10 +243,7 @@ class TestGetAccessibleNodeDependency:
 
     @pytest.mark.asyncio
     async def test_admin_gets_node_back(self) -> None:
-        role = MagicMock()
-        role.code = "admin"
-        role.name = "admin"
-        admin = make_user(roles=[role])
+        admin = make_user(role=SystemRole.ADMIN)
         node = make_node()
         dep = get_accessible_node_dependency(PermissionAction.READ)
         session = make_session_returning(node)

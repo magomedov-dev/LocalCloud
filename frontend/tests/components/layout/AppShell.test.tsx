@@ -39,7 +39,7 @@ const user: CurrentUser = {
   last_login_at: null,
   created_at: "2024-01-01T00:00:00Z",
   updated_at: "2024-01-01T00:00:00Z",
-  roles: [],
+  role: "user",
 };
 
 function renderShell() {

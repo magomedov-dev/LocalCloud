@@ -13,7 +13,7 @@ from app.main import app
 from api.dependencies import (
     get_auth_service_dependency,
 )
-from database.models.enums import UserStatus
+from database.models.enums import SystemRole, UserStatus
 from schemas.auth import (
     LoginResponse,
     LogoutResponse,
@@ -38,7 +38,7 @@ def _current_user_read_dict(user_id: uuid.UUID | None = None) -> dict[str, Any]:
         "username": "testuser",
         "status": "active",
         "last_login_at": None,
-        "roles": [],
+        "role": "user",
     }
 
 
@@ -75,7 +75,7 @@ class TestLogin:
             email=mock_user.email,
             username=mock_user.username,
             status=UserStatus.ACTIVE,
-            roles=[],
+            role=SystemRole.USER,
         )
         login_resp = LoginResponse(authenticated=True, user=user_read)
 
@@ -131,7 +131,7 @@ class TestRefresh:
             email=mock_user.email,
             username=mock_user.username,
             status=UserStatus.ACTIVE,
-            roles=[],
+            role=SystemRole.USER,
         )
         refresh_resp = RefreshTokenResponse(authenticated=True, user=user_read)
 

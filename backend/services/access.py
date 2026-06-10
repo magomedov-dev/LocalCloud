@@ -17,6 +17,7 @@ from database.models.enums import (
     NodeType,
     NodeVisibility,
     PermissionLevel,
+    SystemRole,
     UserStatus,
 )
 from database.models.filesystem import FileSystemNode
@@ -51,31 +52,18 @@ REPOSITORY_PAGE_LIMIT = 1000
 
 
 @dataclass(frozen=True, slots=True)
-class AccessRole:
-    """Lightweight-представление роли для проверки доступа.
-
-    Attributes:
-        code: Стабильный код роли.
-        name: Техническое имя роли.
-    """
-
-    code: str
-    name: str
-
-
-@dataclass(frozen=True, slots=True)
 class AccessUser:
     """Lightweight-представление пользователя для проверки доступа.
 
     Attributes:
         id: Идентификатор пользователя.
         status: Статус пользователя.
-        roles: Активные роли пользователя.
+        role: Системная роль пользователя.
     """
 
     id: UUID
     status: UserStatus | str
-    roles: tuple[AccessRole, ...]
+    role: SystemRole | str
 
 
 @dataclass(frozen=True, slots=True)
@@ -852,12 +840,12 @@ class AccessService:
         """Загружает lightweight-представление пользователя для проверки доступа.
 
         Args:
-            uow: Активный UnitOfWork с репозиториями пользователей и ролей.
+            uow: Активный UnitOfWork с репозиторием пользователей.
             user_id: Идентификатор пользователя. Если `None`, пользователь
                 считается анонимным.
 
         Returns:
-            `AccessUser` с активными ролями пользователя или `None` для
+            `AccessUser` с системной ролью пользователя или `None` для
             анонимного пользователя.
 
         Raises:
@@ -869,17 +857,10 @@ class AccessService:
             return None
 
         user = await uow.users.get_required_user_by_id(user_id)
-        roles = await uow.roles.get_user_roles(
-            user_id,
-            only_active_roles=True,
-            order_by_name=True,
-        )
         return AccessUser(
             id=user.id,
             status=user.status,
-            roles=tuple(
-                AccessRole(code=str(role.code), name=str(role.name)) for role in roles
-            ),
+            role=user.role,
         )
 
     async def _load_node_permissions(

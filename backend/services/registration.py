@@ -361,17 +361,6 @@ class RegistrationService:
                 )
                 created_user_id = user.id
 
-                role = await uow.roles.get_required_user_role_model()
-                await uow.roles.assign_role(
-                    user_id=user.id,
-                    role_id=role.id,
-                    assigned_by=reviewed_by,
-                    flush=True,
-                    refresh=False,
-                    check_user_exists=False,
-                    check_role_exists=False,
-                    ignore_existing=True,
-                )
                 await uow.quotas.create_default_quota(
                     user_id=user.id,
                     flush=True,

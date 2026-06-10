@@ -13,7 +13,6 @@ from database.repositories.parts import (
 from database.repositories.permissions import NodePermissionsRepository
 from database.repositories.quotas import UserQuotaRepository
 from database.repositories.registration import RegistrationRequestsRepository
-from database.repositories.roles import RolesRepository
 from database.repositories.sessions import UploadSessionsRepository
 from database.repositories.tasks import BackgroundTasksRepository
 from database.repositories.tokens import RefreshTokensRepository
@@ -34,7 +33,6 @@ __all__ = [
     "NodePermissionsRepository",
     "UserQuotaRepository",
     "RegistrationRequestsRepository",
-    "RolesRepository",
     "UploadSessionsRepository",
     "BackgroundTasksRepository",
     "RefreshTokensRepository",

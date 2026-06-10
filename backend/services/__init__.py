@@ -3,7 +3,6 @@ from __future__ import annotations
 from services.access import (
     AccessNode,
     AccessPermission,
-    AccessRole,
     AccessService,
     AccessUser,
     get_access_service,
@@ -34,7 +33,6 @@ from services.uploads import UploadsService, get_uploads_service
 from services.users import UsersService, get_users_service
 
 __all__ = [
-    "AccessRole",
     "AccessUser",
     "AccessNode",
     "AccessPermission",

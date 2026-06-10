@@ -8,7 +8,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from database import DatabaseError
-from database.models.enums import BackgroundTaskStatus, BackgroundTaskType, TaskPriority
+from database.models.enums import (
+    BackgroundTaskStatus,
+    BackgroundTaskType,
+    SystemRole,
+    TaskPriority,
+)
 from schemas.tasks import (
     BackgroundTaskCancelRequest,
     BackgroundTaskCreate,
@@ -98,21 +103,15 @@ def make_task_mock(
     return task
 
 
-def make_role_mock(code="user"):
-    role = MagicMock()
-    role.code = code
-    return role
-
-
-def make_user_mock(roles=("user",)):
+def make_user_mock(role=SystemRole.USER):
     user = MagicMock()
-    user.roles = [make_role_mock(code) for code in roles]
+    user.role = role
     return user
 
 
-def make_users_repo(roles=("user",)):
+def make_users_repo(role=SystemRole.USER):
     repo = AsyncMock()
-    repo.get_required_user_by_id = AsyncMock(return_value=make_user_mock(roles))
+    repo.get_required_user_by_id = AsyncMock(return_value=make_user_mock(role))
     return repo
 
 
@@ -218,10 +217,7 @@ async def test_get_task_returns_background_task_read_for_owner():
     tasks_repo = AsyncMock()
     tasks_repo.get_required_by_id = AsyncMock(return_value=task)
 
-    roles_repo = AsyncMock()
-    roles_repo.get_user_roles = AsyncMock(return_value=[make_role_mock("user")])
-
-    uow = make_uow(tasks=tasks_repo, roles=roles_repo)
+    uow = make_uow(tasks=tasks_repo, users=make_users_repo(SystemRole.USER))
     service = make_tasks_service(uow)
 
     result = await service.get_task(task_id, actor_id=actor_id)
@@ -241,10 +237,7 @@ async def test_get_task_raises_permission_error_for_non_owner():
     tasks_repo = AsyncMock()
     tasks_repo.get_required_by_id = AsyncMock(return_value=task)
 
-    roles_repo = AsyncMock()
-    roles_repo.get_user_roles = AsyncMock(return_value=[make_role_mock("user")])
-
-    uow = make_uow(tasks=tasks_repo, roles=roles_repo)
+    uow = make_uow(tasks=tasks_repo, users=make_users_repo(SystemRole.USER))
     service = make_tasks_service(uow)
 
     with pytest.raises(PermissionServiceError):
@@ -268,10 +261,7 @@ async def test_cancel_task_returns_cancelled_task():
     tasks_repo.get_required_by_id = AsyncMock(return_value=task)
     tasks_repo.mark_cancelled = AsyncMock(return_value=cancelled_task)
 
-    roles_repo = AsyncMock()
-    roles_repo.get_user_roles = AsyncMock(return_value=[make_role_mock("user")])
-
-    uow = make_uow(tasks=tasks_repo, roles=roles_repo)
+    uow = make_uow(tasks=tasks_repo, users=make_users_repo(SystemRole.USER))
     service = make_tasks_service(uow)
 
     data = BackgroundTaskCancelRequest(reason="User requested cancellation")
@@ -297,10 +287,7 @@ async def test_list_tasks_returns_page_for_owner():
     tasks_repo.search_tasks = AsyncMock(return_value=[task])
     tasks_repo.count_tasks = AsyncMock(return_value=1)
 
-    roles_repo = AsyncMock()
-    roles_repo.get_user_roles = AsyncMock(return_value=[make_role_mock("user")])
-
-    uow = make_uow(tasks=tasks_repo, roles=roles_repo)
+    uow = make_uow(tasks=tasks_repo, users=make_users_repo(SystemRole.USER))
     service = make_tasks_service(uow)
 
     params = BackgroundTaskQueryParams()
@@ -316,12 +303,9 @@ async def test_list_tasks_non_owner_filter_raises_permission_error():
     actor_id = uuid.uuid4()
     other_user_id = uuid.uuid4()
 
-    roles_repo = AsyncMock()
-    roles_repo.get_user_roles = AsyncMock(return_value=[make_role_mock("user")])
-
     tasks_repo = AsyncMock()
 
-    uow = make_uow(tasks=tasks_repo, roles=roles_repo)
+    uow = make_uow(tasks=tasks_repo, users=make_users_repo(SystemRole.USER))
     service = make_tasks_service(uow)
 
     params = BackgroundTaskQueryParams(created_by=other_user_id)
@@ -522,7 +506,7 @@ async def test_get_task_allows_admin_for_other_user_task():
 
     tasks_repo = AsyncMock()
     tasks_repo.get_required_by_id = AsyncMock(return_value=task)
-    users_repo = make_users_repo(roles=("admin",))
+    users_repo = make_users_repo(SystemRole.ADMIN)
 
     uow = make_uow(tasks=tasks_repo, users=users_repo)
     service = make_tasks_service(uow)
@@ -598,7 +582,7 @@ async def test_list_tasks_admin_can_filter_other_user():
     tasks_repo = AsyncMock()
     tasks_repo.search_tasks = AsyncMock(return_value=[task])
     tasks_repo.count_tasks = AsyncMock(return_value=1)
-    users_repo = make_users_repo(roles=("admin",))
+    users_repo = make_users_repo(SystemRole.ADMIN)
 
     uow = make_uow(tasks=tasks_repo, users=users_repo)
     service = make_tasks_service(uow)
@@ -619,7 +603,7 @@ async def test_list_tasks_extra_filter_excludes_task():
     tasks_repo = AsyncMock()
     tasks_repo.search_tasks = AsyncMock(return_value=[task])
     tasks_repo.count_tasks = AsyncMock(return_value=1)
-    users_repo = make_users_repo(roles=("user",))
+    users_repo = make_users_repo(SystemRole.USER)
 
     uow = make_uow(tasks=tasks_repo, users=users_repo)
     service = make_tasks_service(uow)
@@ -636,7 +620,7 @@ async def test_list_tasks_wraps_database_error():
     actor_id = uuid.uuid4()
     tasks_repo = AsyncMock()
     tasks_repo.search_tasks = AsyncMock(side_effect=DatabaseError("db"))
-    users_repo = make_users_repo(roles=("user",))
+    users_repo = make_users_repo(SystemRole.USER)
     uow = make_uow(tasks=tasks_repo, users=users_repo)
     service = make_tasks_service(uow)
 
@@ -650,7 +634,7 @@ async def test_list_tasks_wraps_unexpected_error():
     actor_id = uuid.uuid4()
     tasks_repo = AsyncMock()
     tasks_repo.search_tasks = AsyncMock(side_effect=RuntimeError("x"))
-    users_repo = make_users_repo(roles=("user",))
+    users_repo = make_users_repo(SystemRole.USER)
     uow = make_uow(tasks=tasks_repo, users=users_repo)
     service = make_tasks_service(uow)
 
@@ -670,7 +654,7 @@ async def test_cancel_task_permission_error_for_non_owner():
     task = make_task_mock(created_by=uuid.uuid4())
     tasks_repo = AsyncMock()
     tasks_repo.get_required_by_id = AsyncMock(return_value=task)
-    users_repo = make_users_repo(roles=("user",))
+    users_repo = make_users_repo(SystemRole.USER)
     uow = make_uow(tasks=tasks_repo, users=users_repo)
     service = make_tasks_service(uow)
 
@@ -1186,7 +1170,7 @@ async def test_get_status_counts_admin_uses_global_counts():
     global_counts = {BackgroundTaskStatus.PENDING: 3}
     tasks_repo = AsyncMock()
     tasks_repo.get_status_counts = AsyncMock(return_value=global_counts)
-    users_repo = make_users_repo(roles=("admin",))
+    users_repo = make_users_repo(SystemRole.ADMIN)
     uow = make_uow(tasks=tasks_repo, users=users_repo)
     service = make_tasks_service(uow)
 
@@ -1201,7 +1185,7 @@ async def test_get_status_counts_regular_user_counts_own():
     actor_id = uuid.uuid4()
     tasks_repo = AsyncMock()
     tasks_repo.count_tasks = AsyncMock(return_value=2)
-    users_repo = make_users_repo(roles=("user",))
+    users_repo = make_users_repo(SystemRole.USER)
     uow = make_uow(tasks=tasks_repo, users=users_repo)
     service = make_tasks_service(uow)
 

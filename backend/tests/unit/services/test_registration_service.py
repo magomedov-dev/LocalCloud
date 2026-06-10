@@ -252,12 +252,6 @@ async def test_approve_request_success():
     users_repo.username_exists = AsyncMock(return_value=False)
     users_repo.create_user = AsyncMock(return_value=user_mock)
 
-    roles_repo = AsyncMock()
-    role_mock = MagicMock()
-    role_mock.id = uuid.uuid4()
-    roles_repo.get_required_user_role_model = AsyncMock(return_value=role_mock)
-    roles_repo.assign_role = AsyncMock()
-
     quotas_repo = AsyncMock()
     quotas_repo.create_default_quota = AsyncMock()
 
@@ -267,7 +261,6 @@ async def test_approve_request_success():
 
     uow = make_uow_mock(
         users=users_repo,
-        roles=roles_repo,
         quotas=quotas_repo,
         registration_requests=reg_repo,
     )
@@ -1077,12 +1070,6 @@ async def test_approve_request_audit_failure_is_swallowed():
     users_repo.username_exists = AsyncMock(return_value=False)
     users_repo.create_user = AsyncMock(return_value=user_mock)
 
-    roles_repo = AsyncMock()
-    role_mock = MagicMock()
-    role_mock.id = uuid.uuid4()
-    roles_repo.get_required_user_role_model = AsyncMock(return_value=role_mock)
-    roles_repo.assign_role = AsyncMock()
-
     quotas_repo = AsyncMock()
     quotas_repo.create_default_quota = AsyncMock()
 
@@ -1092,7 +1079,6 @@ async def test_approve_request_audit_failure_is_swallowed():
 
     uow = make_uow_mock(
         users=users_repo,
-        roles=roles_repo,
         quotas=quotas_repo,
         registration_requests=reg_repo,
     )

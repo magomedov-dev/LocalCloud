@@ -123,16 +123,6 @@ from schemas.registration import (
     RegistrationRequestListItem,
     RegistrationRequestRead,
 )
-from schemas.roles import (
-    RoleAssignRequest,
-    RoleBase,
-    RoleCreate,
-    RoleListItem,
-    RoleRead,
-    RoleRemoveRequest,
-    RoleUpdate,
-    UserRoleRead,
-)
 from schemas.tasks import (
     BackgroundTaskCancelRequest,
     BackgroundTaskCreate,
@@ -195,14 +185,6 @@ __all__ = [
     "PaginationParams",
     "PageMeta",
     "PageResponse",
-    "RoleBase",
-    "RoleCreate",
-    "RoleUpdate",
-    "RoleRead",
-    "RoleListItem",
-    "RoleAssignRequest",
-    "RoleRemoveRequest",
-    "UserRoleRead",
     "UserBase",
     "UserCreate",
     "UserUpdate",

@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from database.models.enums import SessionStatus, UserStatus
+from database.models.enums import SessionStatus, SystemRole, UserStatus
 
 
 # ---------------------------------------------------------------------------
@@ -62,6 +62,7 @@ def make_user_mock(
     status: UserStatus = UserStatus.ACTIVE,
     password_hash: str = "",
     last_login_at: datetime | None = None,
+    role: SystemRole = SystemRole.USER,
 ) -> MagicMock:
     """Вернуть мок, имитирующий ORM-модель User."""
     user = MagicMock()
@@ -69,6 +70,7 @@ def make_user_mock(
     user.email = email
     user.username = username
     user.status = status
+    user.role = role
     user.password_hash = password_hash
     user.last_login_at = last_login_at
     user.approved_at = None

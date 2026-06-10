@@ -5,7 +5,6 @@ from fastapi import Depends
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from core.logging import get_logger
 from database.models.users import User
@@ -30,15 +29,15 @@ logger = get_logger(__name__)
 async def get_user_by_id(
     session: AsyncSession,
     user_id: uuid.UUID,
-    *,
-    load_roles: bool = True,
 ) -> User | None:
     """Возвращает пользователя по идентификатору.
+
+    Системная роль пользователя хранится в колонке ``User.role`` и загружается
+    вместе с самим пользователем, поэтому дополнительная предзагрузка не нужна.
 
     Args:
         session: Асинхронная SQLAlchemy-сессия.
         user_id: Идентификатор пользователя.
-        load_roles: Нужно ли заранее загрузить связанные роли пользователя.
 
     Returns:
         Пользователь или None, если пользователь не найден.
@@ -48,9 +47,6 @@ async def get_user_by_id(
     """
 
     statement = select(User).where(User.id == user_id)
-
-    if load_roles:
-        statement = statement.options(selectinload(User.roles))
 
     try:
         result = await session.execute(statement)

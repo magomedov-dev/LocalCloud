@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { AuthContextValue } from "@/contexts/auth-context";
-import type { CurrentUser, RoleListItem } from "@/types";
+import type { CurrentUser, UserRole } from "@/types";
 import { renderWithProviders } from "@tests/utils";
 import { Sidebar } from "@/components/layout/Sidebar";
 
@@ -18,19 +18,7 @@ vi.mock("@/hooks/useQuota", async (importOriginal) => {
   return { ...actual, useMyQuota: () => ({ data: quotaState.data }) };
 });
 
-function adminRole(): RoleListItem {
-  return {
-    id: "r1",
-    name: "admin",
-    code: "admin",
-    display_name: "Администратор",
-    is_system: true,
-    is_active: true,
-    created_at: "2024-01-01T00:00:00Z",
-  };
-}
-
-function makeUser(roles: RoleListItem[] = []): CurrentUser {
+function makeUser(role: UserRole = "user"): CurrentUser {
   return {
     id: "u1",
     email: "a@b.c",
@@ -39,7 +27,7 @@ function makeUser(roles: RoleListItem[] = []): CurrentUser {
     last_login_at: null,
     created_at: "2024-01-01T00:00:00Z",
     updated_at: "2024-01-01T00:00:00Z",
-    roles,
+    role,
   };
 }
 
@@ -72,7 +60,7 @@ describe("Sidebar", () => {
   });
 
   it("показывает админ-раздел для администратора", () => {
-    setAuth(makeUser([adminRole()]));
+    setAuth(makeUser("admin"));
     renderWithProviders(<Sidebar collapsed={false} onToggle={vi.fn()} />);
     expect(screen.getByRole("link", { name: "Администратор" })).toHaveAttribute(
       "href",

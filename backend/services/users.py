@@ -8,10 +8,8 @@ from uuid import UUID
 from core.logging import get_logger
 from database import DatabaseError, UnitOfWorkFactory, create_unit_of_work_factory
 from database.models.enums import AuditAction, AuditResourceType, UserStatus
-from database.models.roles import Role
 from database.models.users import User
 from schemas.common import PageMeta, PageResponse
-from schemas.roles import RoleListItem
 from schemas.users import (
     CurrentUserRead,
     UserAdminUpdate,
@@ -129,19 +127,6 @@ class UsersService:
                     check_duplicates=True,
                 )
 
-                if assign_default_role:
-                    role = await uow.roles.get_required_user_role_model()
-                    await uow.roles.assign_role(
-                        user_id=user.id,
-                        role_id=role.id,
-                        assigned_by=actor_id,
-                        flush=True,
-                        refresh=False,
-                        check_user_exists=False,
-                        check_role_exists=False,
-                        ignore_existing=True,
-                    )
-
                 snapshot = _user_snapshot(user)
                 await uow.commit()
 
@@ -231,15 +216,12 @@ class UsersService:
         try:
             async with self.uow_factory() as uow:
                 user = await uow.users.get_required_user_by_id(user_id)
-                roles = await uow.roles.get_user_roles(
-                    user.id, only_active_roles=False, order_by_name=True
-                )
-                first_admin_id = await uow.roles.get_first_admin_user_id()
+                first_admin_id = await uow.users.get_first_admin_user_id()
                 snapshot = _user_snapshot(user)
                 snapshot["is_primary_admin"] = (
                     first_admin_id is not None and user.id == first_admin_id
                 )
-                result = _user_with_roles_read(snapshot, roles)
+                result = _user_with_roles_read(snapshot)
             return self._require_result(result, operation=operation)
         except DatabaseError as exc:
             raise self._database_error(
@@ -275,10 +257,7 @@ class UsersService:
         try:
             async with self.uow_factory() as uow:
                 user = await uow.users.get_required_user_by_id(user_id)
-                roles = await uow.roles.get_user_roles(
-                    user.id, only_active_roles=True, order_by_name=True
-                )
-                result = _current_user_read(_user_snapshot(user), roles)
+                result = _current_user_read(_user_snapshot(user))
             return self._require_result(result, operation=operation)
         except DatabaseError as exc:
             raise self._database_error(
@@ -441,7 +420,7 @@ class UsersService:
         try:
             async with self.uow_factory() as uow:
                 snapshots = await self._collect_user_snapshots(uow=uow, params=params)
-                first_admin_id = await uow.roles.get_first_admin_user_id()
+                first_admin_id = await uow.users.get_first_admin_user_id()
 
             snapshots = self._sort_snapshots(
                 snapshots, sort_by=params.sort_by, sort_desc=params.sort_desc
@@ -855,7 +834,7 @@ class UsersService:
 
         try:
             async with self.uow_factory() as uow:
-                return await uow.roles.get_first_admin_user_id()
+                return await uow.users.get_first_admin_user_id()
         except DatabaseError as exc:
             raise self._database_error(
                 exc,
@@ -1457,6 +1436,7 @@ def _user_snapshot(user: User) -> dict[str, Any]:
         "email": user.email,
         "username": user.username,
         "status": user.status,
+        "role": user.role,
         "last_login_at": user.last_login_at,
         "approved_at": user.approved_at,
         "blocked_at": user.blocked_at,
@@ -1466,27 +1446,6 @@ def _user_snapshot(user: User) -> dict[str, Any]:
         "rejection_reason": user.rejection_reason,
         "created_at": user.created_at,
         "updated_at": user.updated_at,
-    }
-
-
-def _role_snapshot(role: Role) -> dict[str, Any]:
-    """Создает снимок роли.
-
-    Args:
-        role: ORM-модель роли.
-
-    Returns:
-        Словарь с идентификатором, именем, кодом, отображаемым названием,
-        системным признаком и активностью роли.
-    """
-
-    return {
-        "id": role.id,
-        "name": role.name,
-        "code": role.code,
-        "display_name": role.display_name,
-        "is_system": role.is_system,
-        "is_active": role.is_active,
     }
 
 
@@ -1516,53 +1475,30 @@ def _user_list_item(snapshot: Mapping[str, Any]) -> UserListItem:
     return UserListItem.model_validate(dict(snapshot))
 
 
-def _user_with_roles_read(
-    snapshot: Mapping[str, Any], roles: list[Role]
-) -> UserWithRolesRead:
-    """Преобразует снимок пользователя и роли в расширенную схему.
+def _user_with_roles_read(snapshot: Mapping[str, Any]) -> UserWithRolesRead:
+    """Преобразует снимок пользователя в расширенную схему с ролью.
 
     Args:
-        snapshot: Снимок пользователя.
-        roles: Список ролей пользователя.
+        snapshot: Снимок пользователя, содержащий системную роль.
 
     Returns:
-        Схема пользователя со списком ролей.
+        Схема пользователя с системной ролью.
     """
 
-    payload = dict(snapshot)
-    payload["roles"] = [_role_list_item(role) for role in roles]
-    return UserWithRolesRead.model_validate(payload)
+    return UserWithRolesRead.model_validate(dict(snapshot))
 
 
-def _current_user_read(
-    snapshot: Mapping[str, Any], roles: list[Role]
-) -> CurrentUserRead:
-    """Преобразует снимок пользователя и активные роли в схему текущего пользователя.
+def _current_user_read(snapshot: Mapping[str, Any]) -> CurrentUserRead:
+    """Преобразует снимок пользователя в схему текущего пользователя.
 
     Args:
-        snapshot: Снимок пользователя.
-        roles: Список активных ролей пользователя.
+        snapshot: Снимок пользователя, содержащий системную роль.
 
     Returns:
         Схема текущего пользователя.
     """
 
-    payload = dict(snapshot)
-    payload["roles"] = [_role_list_item(role) for role in roles]
-    return CurrentUserRead.model_validate(payload)
-
-
-def _role_list_item(role: Role) -> RoleListItem:
-    """Преобразует роль в элемент списка ролей.
-
-    Args:
-        role: ORM-модель роли.
-
-    Returns:
-        Элемент списка ролей.
-    """
-
-    return RoleListItem.model_validate(_role_snapshot(role))
+    return CurrentUserRead.model_validate(dict(snapshot))
 
 
 def _audit_user(snapshot: Mapping[str, Any]) -> dict[str, Any]:

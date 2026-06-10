@@ -774,22 +774,17 @@ def _has_role(user: SupportsUser | None, system_role: SystemRole) -> bool:
         system_role: Системная роль.
 
     Returns:
-        True, если роль найдена по коду или имени, иначе False.
+        True, если системная роль пользователя совпадает с указанной, иначе
+        False.
     """
 
     if user is None:
         return False
 
-    roles = getattr(user, "roles", None)
+    role = getattr(user, "role", None)
 
-    if not roles:
+    if role is None:
         return False
 
-    for role in roles:
-        role_code = str(getattr(role, "code", "") or "").strip().lower()
-        role_name = str(getattr(role, "name", "") or "").strip().lower()
-
-        if role_code == system_role.value or role_name == system_role.value:
-            return True
-
-    return False
+    role_value = getattr(role, "value", role)
+    return str(role_value).strip().lower() == system_role.value

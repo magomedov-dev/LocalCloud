@@ -4,17 +4,9 @@
 export type UserStatus = "pending" | "active" | "blocked" | "rejected" | "deleted";
 
 /**
- * Краткое представление роли для списков.
+ * Роль пользователя.
  */
-export interface RoleListItem {
-  id: string;
-  name: string;
-  code: string;
-  display_name: string;
-  is_system: boolean;
-  is_active: boolean;
-  created_at: string;
-}
+export type UserRole = "admin" | "user";
 
 /**
  * Текущий аутентифицированный пользователь.
@@ -27,7 +19,7 @@ export interface CurrentUser {
   last_login_at: string | null;
   created_at: string;
   updated_at: string;
-  roles: RoleListItem[];
+  role: UserRole;
 }
 
 /**

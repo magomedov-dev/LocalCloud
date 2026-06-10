@@ -14,7 +14,7 @@ from database.exceptions import (
     EntityNotFoundError,
     InvalidQueryError,
 )
-from database.models.enums import UserStatus
+from database.models.enums import SystemRole, UserStatus
 from database.models.users import User
 from database.repositories.base import BaseRepository
 
@@ -152,6 +152,31 @@ class UsersRepository(BaseRepository[User]):
             )
 
         return user
+
+    async def get_first_admin_user_id(self) -> uuid.UUID | None:
+        """Возвращает идентификатор «первого» администратора.
+
+        Первым считается не удалённый пользователь с системной ролью
+        администратора, созданный раньше остальных администраторов. Используется
+        для защиты учётной записи первичного администратора от удаления.
+
+        Returns:
+            Идентификатор первого администратора или ``None``, если активных
+            администраторов нет.
+        """
+
+        statement = (
+            select(User.id)
+            .where(User.role == SystemRole.ADMIN)
+            .where(User.status != UserStatus.DELETED)
+            .order_by(User.created_at.asc(), User.id.asc())
+            .limit(1)
+        )
+
+        return await self.scalar_one_or_none(
+            statement,
+            operation="get_first_admin_user_id",
+        )
 
     # ------------------------------------------------------------------
     # Поиск по email

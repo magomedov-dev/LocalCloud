@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from database.models.enums import UserStatus
+from database.models.enums import SystemRole, UserStatus
 from security.dependencies.users import get_current_active_user
 
 API_V1 = "/api/v1"
@@ -43,7 +43,7 @@ def _make_mock_user(
     email: str = "test@example.com",
     username: str = "testuser",
     status: UserStatus = UserStatus.ACTIVE,
-    roles: list[Any] | None = None,
+    role: SystemRole = SystemRole.USER,
 ) -> MagicMock:
     """Создаёт mock ORM-объект User для подмены зависимости аутентификации."""
     user = MagicMock()
@@ -60,7 +60,7 @@ def _make_mock_user(
     user.rejection_reason = None
     user.created_at = datetime.now(tz=timezone.utc)
     user.updated_at = datetime.now(tz=timezone.utc)
-    user.roles = roles if roles is not None else []
+    user.role = role
     user.__class__.__name__ = "User"
     return user
 
@@ -74,9 +74,7 @@ def mock_user() -> MagicMock:
 @pytest.fixture
 def mock_admin_user() -> MagicMock:
     """Возвращает mock администратора с ролью admin."""
-    role = MagicMock()
-    role.name = "admin"
-    return _make_mock_user(roles=[role])
+    return _make_mock_user(role=SystemRole.ADMIN)
 
 
 @pytest.fixture

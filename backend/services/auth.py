@@ -16,7 +16,6 @@ from database.models.enums import (
     AuditResult,
     UserStatus,
 )
-from database.models.roles import Role
 from database.models.tokens import RefreshToken
 from database.models.users import User
 from schemas.auth import (
@@ -27,7 +26,6 @@ from schemas.auth import (
     RefreshTokenResponse,
     TokenPair,
 )
-from schemas.roles import RoleListItem
 from schemas.users import CurrentUserRead
 from security.cookies import clear_auth_cookies, set_auth_cookies
 from security.jwt import (
@@ -167,7 +165,6 @@ class AuthService:
 
         operation = "login"
         user_snapshot: dict[str, Any] = {}
-        roles: list[Role] = []
         token_pair: TokenPair | None = None
         session_id: UUID | None = None
 
@@ -250,11 +247,6 @@ class AuthService:
                     flush=True,
                     refresh=True,
                 )
-                roles = await uow.roles.get_user_roles(
-                    user.id,
-                    only_active_roles=True,
-                    order_by_name=True,
-                )
                 user_snapshot = _user_snapshot(user)
                 await uow.commit()
 
@@ -278,7 +270,7 @@ class AuthService:
                 },
             )
             return (
-                LoginResponse(user=_current_user_read(user_snapshot, roles)),
+                LoginResponse(user=_current_user_read(user_snapshot)),
                 issued_tokens,
             )
 
@@ -372,7 +364,6 @@ class AuthService:
         operation = "refresh_session"
         token_pair: TokenPair | None = None
         user_snapshot: dict[str, Any] = {}
-        roles: list[Role] = []
         new_session_id: UUID | None = None
         old_session_id: UUID | None = None
 
@@ -466,11 +457,6 @@ class AuthService:
                     check_duplicate=True,
                 )
                 new_session_id = new_token.id
-                roles = await uow.roles.get_user_roles(
-                    user.id,
-                    only_active_roles=True,
-                    order_by_name=True,
-                )
                 user_snapshot = _user_snapshot(user)
                 await uow.commit()
 
@@ -494,7 +480,7 @@ class AuthService:
                 },
             )
             return (
-                RefreshTokenResponse(user=_current_user_read(user_snapshot, roles)),
+                RefreshTokenResponse(user=_current_user_read(user_snapshot)),
                 issued_tokens,
             )
 
@@ -692,12 +678,7 @@ class AuthService:
                         reason=user.status.value,
                         details={"service": SERVICE_NAME, "operation": operation},
                     )
-                roles = await uow.roles.get_user_roles(
-                    user.id,
-                    only_active_roles=True,
-                    order_by_name=True,
-                )
-                current_user = _current_user_read(_user_snapshot(user), roles)
+                current_user = _current_user_read(_user_snapshot(user))
 
         except JwtTokenError as exc:
             raise AuthenticationServiceError(
@@ -1212,60 +1193,22 @@ def _user_snapshot(user: User) -> dict[str, Any]:
         "email": user.email,
         "username": user.username,
         "status": user.status,
+        "role": user.role,
         "last_login_at": user.last_login_at,
     }
 
 
-def _role_snapshot(role: Role) -> dict[str, Any]:
-    """Создаёт словарный снимок роли для DTO.
-
-    Args:
-        role: ORM-модель роли.
-
-    Returns:
-        Словарь с основными полями роли.
-    """
-
-    return {
-        "id": role.id,
-        "name": role.name,
-        "code": role.code,
-        "display_name": role.display_name,
-        "is_system": role.is_system,
-        "is_active": role.is_active,
-    }
-
-
-def _role_list_item(role: Role) -> RoleListItem:
-    """Создаёт DTO элемента списка ролей.
-
-    Args:
-        role: ORM-модель роли.
-
-    Returns:
-        DTO `RoleListItem`.
-    """
-
-    return RoleListItem.model_validate(_role_snapshot(role))
-
-
-def _current_user_read(
-    snapshot: Mapping[str, Any],
-    roles: list[Role],
-) -> CurrentUserRead:
+def _current_user_read(snapshot: Mapping[str, Any]) -> CurrentUserRead:
     """Создаёт DTO текущего пользователя.
 
     Args:
-        snapshot: Словарный снимок пользователя.
-        roles: Активные роли пользователя.
+        snapshot: Словарный снимок пользователя, содержащий системную роль.
 
     Returns:
-        DTO `CurrentUserRead` с вложенным списком ролей.
+        DTO `CurrentUserRead` с системной ролью.
     """
 
-    payload = dict(snapshot)
-    payload["roles"] = [_role_list_item(role) for role in roles]
-    return CurrentUserRead.model_validate(payload)
+    return CurrentUserRead.model_validate(dict(snapshot))
 
 
 def _auth_session_read(token: RefreshToken) -> AuthSessionRead:

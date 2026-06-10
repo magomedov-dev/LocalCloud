@@ -1098,15 +1098,13 @@ class TestGetPrimaryKeyColumn:
         assert column is User.id
 
     def test_composite_primary_key_raises_repository_error(self) -> None:
-        from database.models.roles import UserRole
-
-        repo = BaseRepository(session=AsyncMock(), model=UserRole)
+        repo = BaseRepository(session=AsyncMock(), model=_CompositePKModel)
         with pytest.raises(RepositoryError) as exc_info:
             repo._get_primary_key_column()
-        assert exc_info.value.details.get("model") == "UserRole"
+        assert exc_info.value.details.get("model") == "_CompositePKModel"
         assert set(exc_info.value.details.get("primary_key_columns")) == {
-            "user_id",
-            "role_id",
+            "part_a",
+            "part_b",
         }
 
     def test_single_non_id_primary_key_returns_column(self) -> None:

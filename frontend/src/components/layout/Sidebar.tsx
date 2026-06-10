@@ -30,7 +30,7 @@ interface Props {
  */
 export function Sidebar({ collapsed, onToggle }: Props) {
   const { user } = useAuth();
-  const isAdmin = user?.roles.some((r) => r.code === "admin") ?? false;
+  const isAdmin = user?.role === "admin";
   const { data: quota } = useMyQuota();
   const usedPct = quota
     ? Math.min(100, Math.round((quota.storage_used_bytes / quota.storage_limit_bytes) * 100))
