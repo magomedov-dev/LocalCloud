@@ -35,6 +35,7 @@ import { downloadNodeFile } from "@/lib/download";
 import { nodesApi } from "@/api/nodes";
 import { friendlyError } from "@/lib/errors";
 import type { NodeListItem } from "@/types/nodes";
+import { type ItemCapabilities, resolveCapabilities } from "./itemCapabilities";
 import type { SelectOpts } from "./FileGrid";
 import type { ReactNode } from "react";
 
@@ -60,6 +61,8 @@ interface Props {
   selectedItems?: NodeListItem[];
   onSelect?: (item: NodeListItem, opts: SelectOpts) => void;
   onPreview?: () => void;
+  /** Ограничение действий по выданным правам (для «Доступно мне»). */
+  capabilities?: ItemCapabilities;
   children: ReactNode;
 }
 
@@ -82,8 +85,10 @@ export function ItemContextMenu({
   selectedItems,
   onSelect,
   onPreview,
+  capabilities,
   children,
 }: Props) {
+  const caps = resolveCapabilities(capabilities);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { openInfo } = useInfoPanel();
@@ -168,54 +173,64 @@ export function ItemContextMenu({
             Скачать
           </ContextMenuItem>
 
-          <ContextMenuSeparator />
+          {caps.canWrite && (
+            <>
+              <ContextMenuSeparator />
 
-          <ContextMenuItem onClick={() => setRenameOpen(true)}>
-            <Pencil />
-            Переименовать
-          </ContextMenuItem>
+              <ContextMenuItem onClick={() => setRenameOpen(true)}>
+                <Pencil />
+                Переименовать
+              </ContextMenuItem>
 
-          <ContextMenuItem onClick={() => setMoveOpen(true)}>
-            <FolderInput />
-            Переместить
-          </ContextMenuItem>
+              <ContextMenuItem onClick={() => setMoveOpen(true)}>
+                <FolderInput />
+                Переместить
+              </ContextMenuItem>
 
-          <ContextMenuItem disabled={duplicating} onClick={handleDuplicate}>
-            {duplicating ? <Loader2 className="animate-spin" /> : <CopyPlus />}
-            Дублировать
-          </ContextMenuItem>
+              <ContextMenuItem disabled={duplicating} onClick={handleDuplicate}>
+                {duplicating ? <Loader2 className="animate-spin" /> : <CopyPlus />}
+                Дублировать
+              </ContextMenuItem>
 
-          <ContextMenuItem onClick={() => setCopyOpen(true)}>
-            <Copy />
-            Копировать в…
-          </ContextMenuItem>
+              <ContextMenuItem onClick={() => setCopyOpen(true)}>
+                <Copy />
+                Копировать в…
+              </ContextMenuItem>
 
-          {item.node_type === "folder" && (
-            <ContextMenuItem onClick={() => setColorOpen(true)}>
-              <Palette />
-              Цвет папки
-            </ContextMenuItem>
+              {item.node_type === "folder" && (
+                <ContextMenuItem onClick={() => setColorOpen(true)}>
+                  <Palette />
+                  Цвет папки
+                </ContextMenuItem>
+              )}
+            </>
           )}
 
-          <ContextMenuItem onClick={() => setShareOpen(true)}>
-            <Share2 />
-            Поделиться
-          </ContextMenuItem>
+          {caps.canShare && (
+            <ContextMenuItem onClick={() => setShareOpen(true)}>
+              <Share2 />
+              Поделиться
+            </ContextMenuItem>
+          )}
 
           <ContextMenuItem onClick={() => openInfo(item)}>
             <Info />
             Информация
           </ContextMenuItem>
 
-          <ContextMenuSeparator />
+          {caps.canDelete && (
+            <>
+              <ContextMenuSeparator />
 
-          <ContextMenuItem
-            onClick={() => setDeleteOpen(true)}
-            className="text-destructive focus:text-destructive"
-          >
-            <Trash2 />
-            Удалить
-          </ContextMenuItem>
+              <ContextMenuItem
+                onClick={() => setDeleteOpen(true)}
+                className="text-destructive focus:text-destructive"
+              >
+                <Trash2 />
+                Удалить
+              </ContextMenuItem>
+            </>
+          )}
         </ContextMenuContent>
       </ContextMenu>
 

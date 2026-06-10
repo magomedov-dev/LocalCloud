@@ -804,7 +804,7 @@ class AccessService:
         access_user = await self._load_access_user(uow, user_id)
         permissions = await self._load_node_permissions(uow, node.id)
 
-        return check_node_permission(
+        result = check_node_permission(
             user=cast(SupportsUser | None, access_user),
             node=cast(SupportsNode, access_node),
             action=action,
@@ -812,6 +812,37 @@ class AccessService:
             allow_deleted=allow_deleted,
             allow_public=allow_public,
         )
+
+        # Наследование прав от родительских папок: если на самом узле прямого
+        # доступа нет (или он недостаточен), учитываем гранты, выданные на
+        # узлах-предках — поделиться папкой должно давать доступ к её
+        # содержимому. Запрашиваем предков только когда это реально нужно, чтобы
+        # не нагружать частый путь владельца/администратора.
+        if (
+            not result.allowed
+            and user_id is not None
+            and result.reason
+            in (
+                PermissionDeniedReason.PERMISSION_NOT_FOUND,
+                PermissionDeniedReason.INSUFFICIENT_PERMISSION,
+            )
+        ):
+            inherited = await self._load_ancestor_permissions(uow, node)
+            if inherited:
+                inherited_result = check_node_permission(
+                    user=cast(SupportsUser | None, access_user),
+                    node=cast(SupportsNode, access_node),
+                    action=action,
+                    permissions=cast(
+                        Iterable[SupportsNodePermission], permissions + inherited
+                    ),
+                    allow_deleted=allow_deleted,
+                    allow_public=allow_public,
+                )
+                if inherited_result.allowed:
+                    return inherited_result
+
+        return result
 
     async def _load_node(
         self, uow: Any, node_id: UUID, *, allow_deleted: bool
@@ -892,6 +923,35 @@ class AccessService:
             if len(chunk) < REPOSITORY_PAGE_LIMIT:
                 break
             offset += REPOSITORY_PAGE_LIMIT
+        return tuple(permissions)
+
+    async def _load_ancestor_permissions(
+        self, uow: Any, node: FileSystemNode
+    ) -> tuple[AccessPermission, ...]:
+        """Загружает разрешения доступа со всех неудалённых узлов-предков.
+
+        Используется для наследования прав: грант на папку распространяется на
+        её содержимое. Удалённые предки пропускаются — грант на узел в корзине
+        не должен открывать доступ к его потомкам.
+
+        Args:
+            uow: Активный UnitOfWork с репозиториями узлов и разрешений.
+            node: Узел, для которого собираются разрешения предков.
+
+        Returns:
+            Кортеж lightweight-представлений разрешений всех предков узла.
+        """
+
+        ancestors = await uow.nodes.get_ancestors(
+            node_id=node.id,
+            include_self=False,
+            include_deleted=False,
+        )
+        permissions: list[AccessPermission] = []
+        for ancestor in ancestors:
+            permissions.extend(
+                await self._load_node_permissions(uow, ancestor.id)
+            )
         return tuple(permissions)
 
     @staticmethod

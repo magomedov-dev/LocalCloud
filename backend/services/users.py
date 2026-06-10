@@ -16,6 +16,7 @@ from schemas.users import (
     UserBlockRequest,
     UserCreate,
     UserListItem,
+    UserLookupItem,
     UserQueryParams,
     UserRead,
     UserRejectRequest,
@@ -38,6 +39,9 @@ logger = get_logger("services.users")
 SERVICE_NAME = "users"
 MAX_PAGE_LIMIT = 1000
 REPOSITORY_PAGE_LIMIT = 1000
+# Параметры автопоиска пользователей при шеринге (доступен всем авторизованным).
+LOOKUP_MIN_QUERY_LENGTH = 2
+LOOKUP_MAX_LIMIT = 10
 USER_SORT_FIELDS = {
     "created_at",
     "updated_at",
@@ -455,6 +459,71 @@ class UsersService:
                 exc,
                 operation=operation,
                 message="Непредвиденная ошибка при получении списка пользователей.",
+            ) from exc
+
+    async def lookup_users(
+        self,
+        query: str,
+        *,
+        exclude_user_id: UUID | None = None,
+        limit: int = 10,
+    ) -> list[UserLookupItem]:
+        """Ищет активных пользователей для автопоиска при выдаче доступа.
+
+        Доступен любому авторизованному пользователю, поэтому отдаёт минимум
+        полей и только активных пользователей. Запрос короче двух непробельных
+        символов возвращает пустой список — чтобы нельзя было выкачать всех
+        пользователей пустым/однобуквенным запросом.
+
+        Args:
+            query: Поисковая строка по email или username.
+            exclude_user_id: Идентификатор пользователя, которого нужно
+                исключить из результатов (обычно — сам инициатор).
+            limit: Максимальное количество результатов (жёстко ограничено 10).
+
+        Returns:
+            Список минимальных представлений найденных пользователей.
+
+        Raises:
+            ServiceError: Если произошла ошибка базы данных или непредвиденная
+                ошибка сервиса.
+        """
+
+        operation = "lookup_users"
+        normalized = (query or "").strip()
+        if len(normalized) < LOOKUP_MIN_QUERY_LENGTH:
+            return []
+        capped_limit = max(1, min(limit, LOOKUP_MAX_LIMIT))
+
+        try:
+            async with self.uow_factory() as uow:
+                users = await uow.users.search_users(
+                    normalized,
+                    limit=capped_limit + (1 if exclude_user_id is not None else 0),
+                    statuses=[UserStatus.ACTIVE],
+                )
+                # Сериализуем внутри сессии: после её закрытия ORM-инстансы
+                # отвязываются и доступ к атрибутам падает DetachedInstanceError.
+                items = [
+                    UserLookupItem.model_validate(user)
+                    for user in users
+                    if exclude_user_id is None or user.id != exclude_user_id
+                ]
+            return items[:capped_limit]
+
+        except DatabaseError as exc:
+            raise self._database_error(
+                exc,
+                operation=operation,
+                message="Не удалось выполнить поиск пользователей.",
+            ) from exc
+        except ServiceError:
+            raise
+        except Exception as exc:
+            raise self._unexpected_error(
+                exc,
+                operation=operation,
+                message="Непредвиденная ошибка при поиске пользователей.",
             ) from exc
 
     async def update_user(

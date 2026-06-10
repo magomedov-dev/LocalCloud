@@ -27,6 +27,7 @@ import { downloadNodeFile } from "@/lib/download";
 import { nodesApi } from "@/api/nodes";
 import { friendlyError } from "@/lib/errors";
 import type { NodeListItem } from "@/types/nodes";
+import { type ItemCapabilities, resolveCapabilities } from "./itemCapabilities";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -53,6 +54,11 @@ interface Props {
   onColorChange: (color: string | null) => void;
   onOpenChange?: (open: boolean) => void;
   onPreview?: () => void;
+  /**
+   * Ограничение действий по выданным правам (для вкладки «Доступно мне»).
+   * `undefined` — собственный файл, доступны все действия.
+   */
+  capabilities?: ItemCapabilities;
 }
 
 /**
@@ -72,7 +78,9 @@ export function ItemActions({
   onColorChange,
   onOpenChange,
   onPreview,
+  capabilities,
 }: Props) {
+  const caps = resolveCapabilities(capabilities);
   const queryClient = useQueryClient();
   const { downloadFolder, downloading } = useFolderDownload();
   const { openInfo } = useInfoPanel();
@@ -157,48 +165,58 @@ export function ItemActions({
               <DropdownMenuSeparator />
             </>
           )}
-          <DropdownMenuItem onClick={() => setRenameOpen(true)}>
-            <Pencil className="mr-2 h-4 w-4" />
-            Переименовать
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => setMoveOpen(true)}>
-            <FolderInput className="mr-2 h-4 w-4" />
-            Переместить
-          </DropdownMenuItem>
-          <DropdownMenuItem disabled={duplicating} onClick={handleDuplicate}>
-            {duplicating ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <CopyPlus className="mr-2 h-4 w-4" />
-            )}
-            Дублировать
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => setCopyOpen(true)}>
-            <Copy className="mr-2 h-4 w-4" />
-            Копировать в…
-          </DropdownMenuItem>
-          {item.node_type === "folder" && (
-            <DropdownMenuItem onClick={() => setColorOpen(true)}>
-              <Palette className="mr-2 h-4 w-4" />
-              Цвет папки
+          {caps.canWrite && (
+            <>
+              <DropdownMenuItem onClick={() => setRenameOpen(true)}>
+                <Pencil className="mr-2 h-4 w-4" />
+                Переименовать
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setMoveOpen(true)}>
+                <FolderInput className="mr-2 h-4 w-4" />
+                Переместить
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled={duplicating} onClick={handleDuplicate}>
+                {duplicating ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <CopyPlus className="mr-2 h-4 w-4" />
+                )}
+                Дублировать
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setCopyOpen(true)}>
+                <Copy className="mr-2 h-4 w-4" />
+                Копировать в…
+              </DropdownMenuItem>
+              {item.node_type === "folder" && (
+                <DropdownMenuItem onClick={() => setColorOpen(true)}>
+                  <Palette className="mr-2 h-4 w-4" />
+                  Цвет папки
+                </DropdownMenuItem>
+              )}
+            </>
+          )}
+          {caps.canShare && (
+            <DropdownMenuItem onClick={() => setShareOpen(true)}>
+              <Share2 className="mr-2 h-4 w-4" />
+              Поделиться
             </DropdownMenuItem>
           )}
-          <DropdownMenuItem onClick={() => setShareOpen(true)}>
-            <Share2 className="mr-2 h-4 w-4" />
-            Поделиться
-          </DropdownMenuItem>
           <DropdownMenuItem onClick={() => openInfo(item)}>
             <Info className="mr-2 h-4 w-4" />
             Информация
           </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem
-            onClick={() => setDeleteOpen(true)}
-            className="text-destructive focus:text-destructive"
-          >
-            <Trash2 className="mr-2 h-4 w-4" />
-            Удалить
-          </DropdownMenuItem>
+          {caps.canDelete && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={() => setDeleteOpen(true)}
+                className="text-destructive focus:text-destructive"
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Удалить
+              </DropdownMenuItem>
+            </>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
 

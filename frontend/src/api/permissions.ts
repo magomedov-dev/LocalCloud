@@ -5,6 +5,8 @@ import type {
   NodePermissionRead,
   NodePermissionListItem,
   PermissionRevokeRequest,
+  PermissionUpdateRequest,
+  SharedNodeItem,
 } from "@/types/permissions";
 
 /**
@@ -52,4 +54,45 @@ export const permissionsApi = {
    */
   revoke: (data: PermissionRevokeRequest) =>
     api.post<NodePermissionRead>("/permissions/revoke", data).then((r) => r.data),
+
+  /**
+   * Обновляет выданное разрешение (например, меняет уровень доступа).
+   *
+   * Args:
+   *   permissionId: Идентификатор разрешения.
+   *   data: Изменяемые поля разрешения.
+   *
+   * Returns:
+   *   Promise с обновлённым разрешением.
+   */
+  update: (permissionId: string, data: PermissionUpdateRequest) =>
+    api
+      .patch<NodePermissionRead>(`/permissions/${permissionId}`, data)
+      .then((r) => r.data),
+
+  /**
+   * Возвращает узлы, к которым текущему пользователю выдан доступ.
+   *
+   * Содержимое вкладки «Доступно мне».
+   *
+   * Args:
+   *   params: Параметры пагинации.
+   *
+   * Returns:
+   *   Promise с пагинированным списком доступных узлов.
+   */
+  sharedWithMe: (params?: { limit?: number; offset?: number }) =>
+    api
+      .get<PageResponse<SharedNodeItem>>("/permissions/shared-with-me", { params })
+      .then((r) => r.data),
+
+  /**
+   * Возвращает идентификаторы узлов, к которым текущий пользователь выдал доступ.
+   *
+   * Используется для бейджа «доступ выдан».
+   *
+   * Returns:
+   *   Promise со списком node id.
+   */
+  sharedByMe: () => api.get<string[]>("/permissions/shared-by-me").then((r) => r.data),
 };

@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Copy, Check, Link2, X, Loader2, Globe, Lock } from "lucide-react";
+import { Copy, Check, Link2, X, Loader2, Globe, Lock, Share2, Users } from "lucide-react";
 import { toast } from "sonner";
 import { publicLinksApi } from "@/api/public-links";
+import { UserShareTab } from "./UserShareTab";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -254,26 +255,62 @@ interface Props {
 }
 
 /**
- * Диалог управления публичной ссылкой.
+ * Диалог шеринга: публичная ссылка либо доступ конкретным пользователям.
  *
- * Показывает название выбранного файла или папки
- * и позволяет создать, скопировать или отозвать публичную ссылку.
+ * Показывает имя выбранного файла или папки и переключает между вкладкой
+ * публичной ссылки и вкладкой выдачи доступа пользователям.
  */
 export function ShareDialog({ open, onOpenChange, nodeId, nodeName }: Props) {
+  const [tab, setTab] = useState<"public" | "users">("users");
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-sm">
         <DialogHeader className="min-w-0 pr-6">
           <DialogTitle className="flex items-center gap-2">
-            <Link2 className="text-muted-foreground h-4 w-4 shrink-0" />
-            Публичная ссылка
+            <Share2 className="text-muted-foreground h-4 w-4 shrink-0" />
+            Поделиться
           </DialogTitle>
           <p className="text-muted-foreground truncate text-sm" title={nodeName}>
             {nodeName}
           </p>
         </DialogHeader>
 
-        <PublicLinkTab nodeId={nodeId} />
+        {/* Переключатель вкладок */}
+        <div className="bg-muted/50 grid grid-cols-2 gap-1 rounded-lg p-1">
+          <button
+            type="button"
+            onClick={() => setTab("users")}
+            className={cn(
+              "flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors",
+              tab === "users"
+                ? "bg-background shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <Users className="h-3.5 w-3.5" />
+            Пользователи
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab("public")}
+            className={cn(
+              "flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors",
+              tab === "public"
+                ? "bg-background shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <Link2 className="h-3.5 w-3.5" />
+            Публичная ссылка
+          </button>
+        </div>
+
+        {tab === "users" ? (
+          <UserShareTab nodeId={nodeId} />
+        ) : (
+          <PublicLinkTab nodeId={nodeId} />
+        )}
       </DialogContent>
     </Dialog>
   );

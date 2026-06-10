@@ -14,12 +14,83 @@ from schemas.permissions import (
     PermissionGrantRequest,
     PermissionRevokeRequest,
     PermissionUpdateRequest,
+    SharedNodeItem,
 )
 from security import CurrentActiveUserDependency, RequireShareNodeDependency
 from services import PermissionsService
 
 # Маршрутизатор эндпоинтов для управления правами доступа.
 router = APIRouter(prefix="/permissions", tags=["permissions"])
+
+
+@router.get(
+    "/shared-with-me",
+    response_model=PageResponse[SharedNodeItem],
+    status_code=status.HTTP_200_OK,
+)
+async def list_shared_with_me(
+    current_user: CurrentActiveUserDependency,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=1000),
+    permissions_service: PermissionsService = Depends(
+        get_permissions_service_dependency
+    ),
+) -> PageResponse[SharedNodeItem]:
+    """Возвращает узлы, к которым текущему пользователю выдан явный доступ.
+
+    Это содержимое вкладки «Доступно мне»: файлы и папки, на которые другой
+    пользователь выдал текущему пользователю активное право доступа. Ответ
+    содержит метаданные узлов вместе с уровнем и флагами выданного доступа.
+
+    Args:
+        current_user: Текущий активный пользователь, запрашивающий свой доступ.
+        offset: Смещение от начала списка.
+        limit: Максимальное количество элементов в ответе.
+        permissions_service: Сервис прав доступа, выполняющий выборку.
+
+    Returns:
+        Страница узлов «Доступно мне» с метаданными пагинации.
+
+    Raises:
+        HTTPException: Если пользователь не аутентифицирован или неактивен.
+    """
+
+    return await permissions_service.list_shared_with_me(
+        user_id=current_user.id,
+        actor_id=current_user.id,
+        offset=offset,
+        limit=limit,
+    )
+
+
+@router.get(
+    "/shared-by-me",
+    response_model=list[UUID],
+    status_code=status.HTTP_200_OK,
+)
+async def list_nodes_shared_by_me(
+    current_user: CurrentActiveUserDependency,
+    permissions_service: PermissionsService = Depends(
+        get_permissions_service_dependency
+    ),
+) -> list[UUID]:
+    """Возвращает идентификаторы узлов, к которым текущий пользователь выдал доступ.
+
+    Используется для бейджа «доступ выдан» в файловом менеджере: по этому списку
+    фронтенд отмечает свои файлы и папки, к которым кто-то имеет выданный доступ.
+
+    Args:
+        current_user: Текущий активный пользователь.
+        permissions_service: Сервис прав доступа.
+
+    Returns:
+        Список идентификаторов узлов с активными выданными грантами.
+
+    Raises:
+        HTTPException: Если пользователь не аутентифицирован или неактивен.
+    """
+
+    return await permissions_service.list_nodes_shared_by_me(user_id=current_user.id)
 
 
 @router.get(

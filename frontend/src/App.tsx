@@ -5,6 +5,7 @@ import { LoginPage } from "@/pages/Login";
 import { RegisterPage } from "@/pages/Register";
 import { FilesPage } from "@/pages/Files";
 import { TrashPage } from "@/pages/Trash";
+import { SharedPage } from "@/pages/Shared";
 import { SharePage } from "@/pages/Share";
 import { AdminLayout } from "@/pages/admin/AdminLayout";
 import { UsersPage } from "@/pages/admin/UsersPage";
@@ -32,6 +33,7 @@ function App() {
         >
           <Route path="/files" element={<FilesPage />} />
           <Route path="/files/folders/:nodeId" element={<FilesPage />} />
+          <Route path="/shared" element={<SharedPage />} />
           <Route path="/trash" element={<TrashPage />} />
 
           {/* Административные маршруты */}

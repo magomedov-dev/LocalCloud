@@ -20,6 +20,7 @@ from schemas.permissions import (
     PermissionGrantRequest,
     PermissionRevokeRequest,
     PermissionUpdateRequest,
+    SharedNodeItem,
 )
 from security.permissions import PermissionAction
 from services.access import AccessService, get_access_service
@@ -537,6 +538,141 @@ class PermissionsService:
                 exc, service=SERVICE_NAME, operation=operation
             ) from exc
 
+    async def list_shared_with_me(
+        self,
+        *,
+        user_id: UUID,
+        actor_id: UUID,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> PageResponse[SharedNodeItem]:
+        """Возвращает узлы, к которым пользователю выдан явный активный доступ.
+
+        В отличие от ``list_user_permissions`` отдаёт метаданные самих узлов
+        (имя, тип, путь, mime/размер, владелец) вместе с параметрами права —
+        чтобы фронтенд мог отрисовать вкладку «Доступно мне» одним запросом.
+        Удалённые узлы и узлы без доступной метаинформации пропускаются.
+
+        Args:
+            user_id: Идентификатор пользователя, чей доступ нужно показать.
+            actor_id: Идентификатор пользователя, выполняющего запрос.
+            offset: Смещение для постраничной выдачи.
+            limit: Максимальное количество элементов в ответе.
+
+        Returns:
+            Страница узлов «Доступно мне» и метаданные пагинации.
+
+        Raises:
+            PermissionServiceError: Если actor_id запрашивает чужой доступ.
+            ValidationServiceError: Если limit меньше 1.
+            ServiceError: Если произошла ошибка базы данных или непредвиденная
+                ошибка сервиса.
+        """
+
+        operation = "list_shared_with_me"
+        if actor_id != user_id:
+            raise PermissionServiceError(
+                "Пользователь может запросить только собственный доступ.",
+                user_id=actor_id,
+                resource_type="user",
+                resource_id=user_id,
+                action="list_shared_with_me",
+                details=_error_details(operation),
+            )
+        limit = _validate_limit(limit)
+        snapshots: list[dict[str, Any]] = []
+        total = 0
+        try:
+            async with self.uow_factory() as uow:
+                items = await uow.permissions.get_user_permissions(
+                    user_id=user_id,
+                    active_only=True,
+                    offset=offset,
+                    limit=limit,
+                )
+                total = await uow.permissions.count_user_permissions(
+                    user_id=user_id,
+                    active_only=True,
+                )
+                snapshots = [
+                    snapshot
+                    for permission in items
+                    if (snapshot := _shared_node_snapshot(permission)) is not None
+                ]
+
+            dto_items = [
+                SharedNodeItem.model_validate(snapshot) for snapshot in snapshots
+            ]
+            return PageResponse(
+                items=dto_items,
+                meta=PageMeta(
+                    limit=limit,
+                    offset=offset,
+                    total=total,
+                    count=len(dto_items),
+                ),
+            )
+
+        except ServiceError:
+            raise
+        except DatabaseError as exc:
+            raise service_error_from_database(
+                exc, service=SERVICE_NAME, operation=operation
+            ) from exc
+        except Exception as exc:
+            raise service_error_from_exception(
+                exc, service=SERVICE_NAME, operation=operation
+            ) from exc
+
+    async def list_nodes_shared_by_me(self, *, user_id: UUID) -> list[UUID]:
+        """Возвращает идентификаторы узлов, к которым пользователь выдал доступ.
+
+        Используется фронтендом для бейджа «доступ выдан»: список узлов, на
+        которые у пользователя есть активные выданные им гранты. Дубликаты
+        (несколько грантов на один узел) схлопываются.
+
+        Args:
+            user_id: Идентификатор пользователя, выдавшего доступ.
+
+        Returns:
+            Список уникальных идентификаторов узлов с активными грантами.
+
+        Raises:
+            ServiceError: Если произошла ошибка базы данных или непредвиденная
+                ошибка сервиса.
+        """
+
+        operation = "list_nodes_shared_by_me"
+        node_ids: list[UUID] = []
+        seen: set[UUID] = set()
+        try:
+            async with self.uow_factory() as uow:
+                offset = 0
+                while True:
+                    chunk = await uow.permissions.get_granted_by_user(
+                        granted_by=user_id,
+                        active_only=True,
+                        offset=offset,
+                        limit=MAX_PAGE_LIMIT,
+                    )
+                    for permission in chunk:
+                        if permission.node_id not in seen:
+                            seen.add(permission.node_id)
+                            node_ids.append(permission.node_id)
+                    if len(chunk) < MAX_PAGE_LIMIT:
+                        break
+                    offset += MAX_PAGE_LIMIT
+            return node_ids
+
+        except DatabaseError as exc:
+            raise service_error_from_database(
+                exc, service=SERVICE_NAME, operation=operation
+            ) from exc
+        except Exception as exc:
+            raise service_error_from_exception(
+                exc, service=SERVICE_NAME, operation=operation
+            ) from exc
+
     async def check_permission(
         self,
         data: PermissionCheckRequest,
@@ -758,6 +894,56 @@ def _permission_snapshot(permission: NodePermission) -> dict[str, Any]:
         "revoked_at": permission.revoked_at,
         "revoke_reason": permission.revoke_reason,
         "created_at": permission.created_at,
+    }
+
+
+def _shared_node_snapshot(permission: NodePermission) -> dict[str, Any] | None:
+    """Создает снимок узла «Доступно мне» из записи права доступа.
+
+    Объединяет метаданные eager-загруженного узла (и его File) с параметрами
+    самой записи права. Возвращает ``None``, если узел не загружен или удалён —
+    такие записи в выдаче «Доступно мне» не показываем.
+
+    Args:
+        permission: ORM-модель права доступа с загруженными ``node`` (+``file``)
+            и ``grantor``.
+
+    Returns:
+        Словарь полей ``SharedNodeItem`` либо ``None``, если узел недоступен.
+    """
+
+    node = permission.node
+    if node is None or bool(node.is_deleted):
+        return None
+
+    # Отношение file загружено через selectinload; читаем из __dict__, чтобы не
+    # спровоцировать ленивую подгрузку, если по какой-то причине его нет.
+    file = node.__dict__.get("file")
+    grantor = permission.__dict__.get("grantor")
+
+    return {
+        "id": node.id,
+        "owner_id": node.owner_id,
+        "parent_id": node.parent_id,
+        "name": node.name,
+        "node_type": node.node_type,
+        "visibility": node.visibility,
+        "path": node.path,
+        "created_at": node.created_at,
+        "updated_at": node.updated_at,
+        "file_size_bytes": file.size_bytes if file is not None else None,
+        "file_mime_type": file.mime_type if file is not None else None,
+        "permission_id": permission.id,
+        "permission_level": permission.permission_level,
+        "can_read": bool(permission.can_read),
+        "can_download": bool(permission.can_download),
+        "can_write": bool(permission.can_write),
+        "can_delete": bool(permission.can_delete),
+        "can_share": bool(permission.can_share),
+        "expires_at": permission.expires_at,
+        "granted_at": permission.created_at,
+        "granted_by": permission.granted_by,
+        "granted_by_username": grantor.username if grantor is not None else None,
     }
 
 

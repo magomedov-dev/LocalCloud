@@ -1065,6 +1065,39 @@ class TestStreamNode:
             app.dependency_overrides.pop(get_downloads_service_dependency, None)
             _clear_node_perm_overrides()
 
+    def test_stream_non_ascii_filename_does_not_crash(self) -> None:
+        """Кириллическое имя файла не должно ронять stream (latin-1 заголовки)."""
+        mock_user = _make_mock_user()
+        node_id = uuid.uuid4()
+        payload = b"data"
+        cyrillic = "Книга — Имран.pdf"
+
+        mock_downloads_svc = AsyncMock()
+        mock_downloads_svc.stream_file = AsyncMock(
+            return_value=(_FakeStream([payload]), "application/pdf", cyrillic, len(payload))
+        )
+
+        app.dependency_overrides[get_current_active_user] = lambda: mock_user
+        app.dependency_overrides[get_downloads_service_dependency] = (
+            lambda: mock_downloads_svc
+        )
+        _override_read()
+        try:
+            with TestClient(app, raise_server_exceptions=False) as c:
+                response = c.get(f"{API_V1}/nodes/{node_id}/stream")
+            assert response.status_code == 200
+            assert response.content == payload
+            disposition = response.headers["Content-Disposition"]
+            # ASCII-fallback + RFC 5987 кодирование UTF-8 имени.
+            assert "filename=" in disposition
+            assert "filename*=UTF-8''" in disposition
+            # Заголовок должен быть полностью latin-1-кодируемым.
+            disposition.encode("latin-1")
+        finally:
+            app.dependency_overrides.pop(get_current_active_user, None)
+            app.dependency_overrides.pop(get_downloads_service_dependency, None)
+            _clear_node_perm_overrides()
+
     def test_stream_range_from_zero_returns_206(self) -> None:
         mock_user = _make_mock_user()
         node_id = uuid.uuid4()

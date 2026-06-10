@@ -1,7 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { publicLinksApi } from "@/api/public-links";
+import { permissionsApi } from "@/api/permissions";
 import type { NodeListItem } from "@/types/nodes";
 import type { PublicLinkListItem } from "@/types/public-links";
+
+/** Общий query key узлов с выданным пользователям доступом. */
+export const SHARED_BY_ME_QUERY_KEY = ["permissions", "shared-by-me"] as const;
 
 /**
  * Индикаторы shared-состояния node.
@@ -86,11 +90,31 @@ export function useShareBadges(items: NodeListItem[]): Map<string, ShareBadge> {
     refetchOnMount: false,
   });
 
+  // Узлы, к которым текущий пользователь выдал доступ другим пользователям.
+  const { data: sharedByMe } = useQuery({
+    queryKey: SHARED_BY_ME_QUERY_KEY,
+    queryFn: () => permissionsApi.sharedByMe(),
+    staleTime: 10 * 60 * 1000,
+    gcTime: 15 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    refetchOnMount: false,
+  });
+  const sharedSet = new Set(sharedByMe ?? []);
+
   const map = new Map<string, ShareBadge>();
-  for (const link of data ?? []) {
-    if (nodeIds.has(link.node_id)) {
-      map.set(link.node_id, { hasPublicLink: true, hasSharedAccess: false });
+  const ensure = (id: string): ShareBadge => {
+    let badge = map.get(id);
+    if (!badge) {
+      badge = { hasPublicLink: false, hasSharedAccess: false };
+      map.set(id, badge);
     }
+    return badge;
+  };
+  for (const link of data ?? []) {
+    if (nodeIds.has(link.node_id)) ensure(link.node_id).hasPublicLink = true;
+  }
+  for (const id of nodeIds) {
+    if (sharedSet.has(id)) ensure(id).hasSharedAccess = true;
   }
   return map;
 }

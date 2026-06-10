@@ -754,6 +754,62 @@ async def test_username_exists_with_exclude(audit_service):
 
 
 # ---------------------------------------------------------------------------
+# lookup_users: автопоиск для шеринга
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_lookup_users_returns_minimal_items(audit_service):
+    """lookup_users отдаёт активных пользователей по запросу."""
+    user = make_user_mock(user_id=uuid.uuid4(), username="alice", email="a@x.io")
+    users_repo = AsyncMock()
+    users_repo.search_users = AsyncMock(return_value=[user])
+    uow = make_uow_mock(users=users_repo)
+    service = _make_service(uow, audit_service)
+
+    result = await service.lookup_users("ali", limit=10)
+
+    assert len(result) == 1
+    assert result[0].username == "alice"
+    assert result[0].email == "a@x.io"
+    # Поиск ограничен только активными пользователями.
+    _, kwargs = users_repo.search_users.call_args
+    assert kwargs["statuses"] == [UserStatus.ACTIVE]
+
+
+@pytest.mark.asyncio
+async def test_lookup_users_short_query_returns_empty(audit_service):
+    """Запрос короче двух символов не дергает репозиторий и даёт пустой список."""
+    users_repo = AsyncMock()
+    users_repo.search_users = AsyncMock(return_value=[])
+    uow = make_uow_mock(users=users_repo)
+    service = _make_service(uow, audit_service)
+
+    result = await service.lookup_users("a")
+
+    assert result == []
+    users_repo.search_users.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_lookup_users_excludes_self_and_caps_limit(audit_service):
+    """Исключает инициатора и не превышает жёсткий предел в 10 результатов."""
+    me = make_user_mock(user_id=USER_ID)
+    others = [make_user_mock(user_id=uuid.uuid4()) for _ in range(11)]
+    users_repo = AsyncMock()
+    users_repo.search_users = AsyncMock(return_value=[me, *others])
+    uow = make_uow_mock(users=users_repo)
+    service = _make_service(uow, audit_service)
+
+    result = await service.lookup_users("user", exclude_user_id=USER_ID, limit=100)
+
+    assert all(item.id != USER_ID for item in result)
+    assert len(result) == 10
+    _, kwargs = users_repo.search_users.call_args
+    assert kwargs["limit"] <= 11
+
+
+# ---------------------------------------------------------------------------
 # list_users: поиск, фильтрация, сортировка, ошибки
 # ---------------------------------------------------------------------------
 

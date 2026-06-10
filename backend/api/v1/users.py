@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Path, status
+from fastapi import APIRouter, Depends, Path, Query, status
 
 from api.dependencies import get_users_service_dependency
 from schemas.common import PageResponse
@@ -10,6 +10,7 @@ from schemas.users import (
     UserAdminUpdate,
     UserBlockRequest,
     UserListItem,
+    UserLookupItem,
     UserQueryParams,
     UserRead,
     UserRejectRequest,
@@ -118,6 +119,44 @@ async def list_users(
     """
 
     return await users_service.list_users(params)
+
+
+@router.get(
+    "/lookup",
+    response_model=list[UserLookupItem],
+    status_code=status.HTTP_200_OK,
+)
+async def lookup_users(
+    current_user: CurrentActiveUserDependency,
+    query: str = Query(..., min_length=1, max_length=255),
+    limit: int = Query(default=10, ge=1, le=10),
+    users_service: UsersService = Depends(get_users_service_dependency),
+) -> list[UserLookupItem]:
+    """Ищет активных пользователей по email или username для выдачи доступа.
+
+    Доступен любому авторизованному пользователю (в отличие от админского
+    списка `GET /users/`). Отдаёт минимальный набор полей и только активных
+    пользователей, исключая самого инициатора. Запрос короче двух непробельных
+    символов возвращает пустой список.
+
+    Args:
+        current_user: Текущий активный пользователь, выполняющий поиск.
+        query: Поисковая строка по email или username.
+        limit: Максимальное количество результатов (не более 10).
+        users_service: Сервис пользователей, выполняющий поиск.
+
+    Returns:
+        Список минимальных представлений найденных пользователей.
+
+    Raises:
+        HTTPException: Если пользователь не аутентифицирован или неактивен.
+    """
+
+    return await users_service.lookup_users(
+        query,
+        exclude_user_id=current_user.id,
+        limit=limit,
+    )
 
 
 @router.get(

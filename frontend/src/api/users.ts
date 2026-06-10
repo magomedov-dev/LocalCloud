@@ -1,6 +1,6 @@
 import api from "@/lib/api";
 import type { PageResponse } from "@/types/common";
-import type { UserRead, UserListItem } from "@/types/users";
+import type { UserRead, UserListItem, UserLookupItem } from "@/types/users";
 
 /**
  * API-клиент для управления пользователями.
@@ -28,6 +28,23 @@ export const usersApi = {
    *   Promise с полным представлением пользователя.
    */
   get: (id: string) => api.get<UserRead>(`/users/${id}`).then((r) => r.data),
+
+  /**
+   * Ищет активных пользователей по email или username для выдачи доступа.
+   *
+   * Доступно любому авторизованному пользователю; отдаёт минимум полей.
+   * Запрос короче двух символов backend трактует как пустой результат.
+   *
+   * Args:
+   *   query: Строка поиска по email или username.
+   *
+   * Returns:
+   *   Promise со списком найденных пользователей.
+   */
+  lookup: (query: string) =>
+    api
+      .get<UserLookupItem[]>("/users/lookup", { params: { query } })
+      .then((r) => r.data),
 
   /**
    * Блокирует пользователя.

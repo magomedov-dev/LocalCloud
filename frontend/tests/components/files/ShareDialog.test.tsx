@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "@tests/utils";
 import { ShareDialog } from "@/components/files/ShareDialog";
@@ -13,6 +13,20 @@ vi.mock("@/api/public-links", () => ({
     revoke: vi.fn(),
     update: vi.fn(),
   },
+}));
+
+// Диалог по умолчанию открывает вкладку «Пользователи»; глушим её API, чтобы
+// тесты публичной ссылки не били по сети при кратком монтировании вкладки.
+vi.mock("@/api/permissions", () => ({
+  permissionsApi: {
+    listForNode: vi.fn().mockResolvedValue({ items: [] }),
+    grant: vi.fn(),
+    revoke: vi.fn(),
+    update: vi.fn(),
+  },
+}));
+vi.mock("@/api/users", () => ({
+  usersApi: { lookup: vi.fn().mockResolvedValue([]), get: vi.fn() },
 }));
 
 vi.mock("sonner", () => ({
@@ -53,6 +67,8 @@ function renderDialog() {
   const utils = renderWithProviders(
     <ShareDialog open onOpenChange={onOpenChange} nodeId="n1" nodeName="файл.txt" />,
   );
+  // По умолчанию открыта вкладка «Пользователи» — переключаемся на публичную ссылку.
+  fireEvent.click(screen.getByRole("button", { name: /Публичная ссылка/ }));
   return { onOpenChange, ...utils };
 }
 

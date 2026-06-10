@@ -23,6 +23,15 @@ export interface CurrentUser {
 }
 
 /**
+ * Минимальное представление пользователя для автопоиска при шеринге.
+ */
+export interface UserLookupItem {
+  id: string;
+  username: string;
+  email: string;
+}
+
+/**
  * Полное представление пользователя.
  */
 export interface UserRead {

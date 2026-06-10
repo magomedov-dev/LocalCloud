@@ -1,4 +1,13 @@
-import { Cloud, Files, Trash2, Shield, ChevronLeft, ChevronRight, HardDrive } from "lucide-react";
+import {
+  Cloud,
+  Files,
+  Users,
+  Trash2,
+  Shield,
+  ChevronLeft,
+  ChevronRight,
+  HardDrive,
+} from "lucide-react";
 import { NavItem } from "./NavItem";
 import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
@@ -59,6 +68,7 @@ export function Sidebar({ collapsed, onToggle }: Props) {
         {/* Навигация */}
         <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-2 py-1">
           <NavItem to="/files" icon={Files} label="Файлы" collapsed={collapsed} />
+          <NavItem to="/shared" icon={Users} label="Доступно мне" collapsed={collapsed} />
           <NavItem to="/trash" icon={Trash2} label="Корзина" collapsed={collapsed} />
           {isAdmin && (
             <>

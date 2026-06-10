@@ -833,6 +833,88 @@ async def test_list_node_permissions_invalid_limit_raises():
 
 
 # ---------------------------------------------------------------------------
+# Тесты: list_shared_with_me
+# ---------------------------------------------------------------------------
+
+
+def _attach_shared_node(perm, *, name="shared.pdf", mime="application/pdf",
+                        is_deleted=False, grantor_username="alice"):
+    """Привязывает к моку права загруженный узел, его File и грантора."""
+    node = make_node_mock(node_id=perm.node_id)
+    node.name = name
+    node.node_type = NodeType.FILE
+    node.is_deleted = is_deleted
+    file = MagicMock()
+    file.size_bytes = 2048
+    file.mime_type = mime
+    node.__dict__["file"] = file
+    perm.node = node
+    grantor = MagicMock()
+    grantor.username = grantor_username
+    perm.__dict__["grantor"] = grantor
+    return perm
+
+
+@pytest.mark.asyncio
+async def test_list_shared_with_me_maps_node_and_permission():
+    """list_shared_with_me собирает метаданные узла и параметры права."""
+    user_id = uuid.uuid4()
+    perm = make_permission_mock(user_id=user_id)
+    _attach_shared_node(perm)
+
+    permissions_repo = AsyncMock()
+    permissions_repo.get_user_permissions = AsyncMock(return_value=[perm])
+    permissions_repo.count_user_permissions = AsyncMock(return_value=1)
+    uow = make_uow(permissions=permissions_repo)
+    service = make_permissions_service(uow)
+
+    result = await service.list_shared_with_me(user_id=user_id, actor_id=user_id)
+
+    assert len(result.items) == 1
+    item = result.items[0]
+    assert item.name == "shared.pdf"
+    assert item.file_mime_type == "application/pdf"
+    assert item.file_size_bytes == 2048
+    assert item.permission_id == perm.id
+    assert item.granted_by_username == "alice"
+    # active_only=True гарантирует только активные права.
+    _, kwargs = permissions_repo.get_user_permissions.call_args
+    assert kwargs["active_only"] is True
+
+
+@pytest.mark.asyncio
+async def test_list_shared_with_me_skips_deleted_nodes():
+    """Узлы в корзине/удалённые не попадают в выдачу «Доступно мне»."""
+    user_id = uuid.uuid4()
+    alive = _attach_shared_node(make_permission_mock(user_id=user_id), name="ok.txt")
+    dead = _attach_shared_node(
+        make_permission_mock(user_id=user_id), name="gone.txt", is_deleted=True
+    )
+
+    permissions_repo = AsyncMock()
+    permissions_repo.get_user_permissions = AsyncMock(return_value=[alive, dead])
+    permissions_repo.count_user_permissions = AsyncMock(return_value=2)
+    uow = make_uow(permissions=permissions_repo)
+    service = make_permissions_service(uow)
+
+    result = await service.list_shared_with_me(user_id=user_id, actor_id=user_id)
+
+    assert [i.name for i in result.items] == ["ok.txt"]
+
+
+@pytest.mark.asyncio
+async def test_list_shared_with_me_other_user_raises_permission():
+    """Нельзя запросить чужой «Доступно мне»."""
+    uow = make_uow(permissions=AsyncMock())
+    service = make_permissions_service(uow)
+
+    with pytest.raises(PermissionServiceError):
+        await service.list_shared_with_me(
+            user_id=uuid.uuid4(), actor_id=uuid.uuid4()
+        )
+
+
+# ---------------------------------------------------------------------------
 # Тесты: list_user_permissions
 # ---------------------------------------------------------------------------
 

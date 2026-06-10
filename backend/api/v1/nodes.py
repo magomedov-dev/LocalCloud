@@ -1,3 +1,4 @@
+from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Query, Request, Response, status
@@ -519,8 +520,16 @@ async def stream_node(
             stream.close()
             stream.release_conn()
 
+    # Заголовки HTTP кодируются latin-1, поэтому имя файла с не-ASCII символами
+    # (например кириллицей) нельзя класть в filename="..." напрямую — иначе
+    # Starlette падает с UnicodeEncodeError. Используем RFC 5987/6266: ASCII-
+    # fallback в filename и UTF-8 percent-encoding в filename*.
+    ascii_name = name.encode("ascii", "ignore").decode("ascii").strip() or "file"
+    ascii_name = ascii_name.replace('"', "'")
     headers: dict[str, str] = {
-        "Content-Disposition": f'inline; filename="{name}"',
+        "Content-Disposition": (
+            f'inline; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(name)}'
+        ),
         "Accept-Ranges": "bytes",
         "Cache-Control": "private, max-age=300",
     }

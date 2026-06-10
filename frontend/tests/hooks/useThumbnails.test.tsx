@@ -82,9 +82,10 @@ describe("useThumbnails", () => {
     expect(batch).toHaveBeenCalledWith(["a", "b"], expect.anything());
     expect(result.current.get("a")).toBe("https://x/a.png");
     expect(result.current.get("b")).toBeNull();
-    // Записывает в sessionStorage кэш.
+    // Кэшируем только положительный результат; null не кэшируем, чтобы можно
+    // было опросить превью повторно, когда оно сгенерируется.
     expect(setCache).toHaveBeenCalledWith("a", "https://x/a.png");
-    expect(setCache).toHaveBeenCalledWith("b", null);
+    expect(setCache).not.toHaveBeenCalledWith("b", null);
   });
 
   it("serves values from sessionStorage cache without fetching", async () => {
@@ -100,18 +101,23 @@ describe("useThumbnails", () => {
     expect(batch).not.toHaveBeenCalled();
   });
 
-  it("only fetches ids missing from session cache", async () => {
-    getCache.mockImplementation((id: string) => (id === "have" ? null : undefined));
-    batch.mockResolvedValue({ need: "https://x/need.png" } as never);
+  it("skips ids with a cached URL but re-requests pending (null) ids", async () => {
+    // "have" уже имеет готовый URL в кэше → не запрашивается повторно.
+    // "pending" известен как null → перезапрашивается (превью могло появиться).
+    getCache.mockImplementation((id: string) =>
+      id === "have" ? "https://x/have.png" : undefined,
+    );
+    batch.mockResolvedValue({ pending: "https://x/pending.png" } as never);
 
-    const { result } = renderHook(() => useThumbnails([imageNode("have"), imageNode("need")]), {
-      wrapper: wrapper(),
-    });
+    const { result } = renderHook(
+      () => useThumbnails([imageNode("have"), imageNode("pending")]),
+      { wrapper: wrapper() },
+    );
 
-    await waitFor(() => expect(result.current.get("need")).toBe("https://x/need.png"));
-    expect(batch).toHaveBeenCalledWith(["need"], expect.anything());
-    // "have" известен как null из session cache.
-    expect(result.current.get("have")).toBeNull();
+    await waitFor(() => expect(result.current.get("pending")).toBe("https://x/pending.png"));
+    // Запрашивается только "pending"; "have" обслужен из кэша.
+    expect(batch).toHaveBeenCalledWith(["pending"], expect.anything());
+    expect(result.current.get("have")).toBe("https://x/have.png");
   });
 
   it("filters out unsupported files and folders from the fetch set", async () => {

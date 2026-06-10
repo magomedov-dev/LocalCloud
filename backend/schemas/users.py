@@ -278,6 +278,35 @@ class UserRead(UserBase):
     )
 
 
+class UserLookupItem(BaseSchema):
+    """Минимальное представление пользователя для автопоиска при шеринге.
+
+    Отдаётся любому авторизованному пользователю эндпоинтом lookup, поэтому
+    содержит только то, что нужно, чтобы выбрать получателя доступа: иденти-
+    фикатор, username и email. Без статусов, дат и админ-признаков.
+
+    Attributes:
+        id: Уникальный идентификатор пользователя.
+        username: Уникальное имя пользователя.
+        email: Адрес электронной почты пользователя.
+    """
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: UUID = Field(
+        ...,
+        description="Уникальный идентификатор пользователя.",
+    )
+    username: str = Field(
+        ...,
+        description="Уникальное имя пользователя.",
+    )
+    email: EmailStr = Field(
+        ...,
+        description="Адрес электронной почты пользователя.",
+    )
+
+
 class UserListItem(BaseSchema):
     """Краткое представление пользователя для списков.
 
