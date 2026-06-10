@@ -908,7 +908,7 @@ async def test_update_path_no_descendants_keeps_depth():
     repo, session, result = make_repo()
     node = make_real_node(name="n", path="/old", depth=2)
     result.scalar_one_or_none = MagicMock(return_value=node)
-    res = await repo.update_path(
+    await repo.update_path(
         node_id=node.id, new_path="/new", update_descendants=False,
     )
     assert node.path == "/new"
@@ -1078,7 +1078,7 @@ async def test_restore_node_no_conflict_check():
     repo, session, result = make_repo()
     node = make_real_node(is_deleted=True)
     result.scalar_one_or_none = MagicMock(return_value=node)
-    res = await repo.restore_node(node_id=node.id, check_conflict=False)
+    await repo.restore_node(node_id=node.id, check_conflict=False)
     assert node.is_deleted is False
 
 

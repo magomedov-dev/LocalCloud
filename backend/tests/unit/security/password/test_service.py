@@ -7,7 +7,6 @@ import pytest
 from core.config import Settings
 from security.password.enums import (
     SUPPORTED_PASSWORD_HASH_SCHEMES,
-    PasswordHashScheme,
 )
 from security.password.service import (
     build_password_context,

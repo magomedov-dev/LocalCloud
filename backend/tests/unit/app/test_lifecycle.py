@@ -62,7 +62,6 @@ class TestStartupBackend:
     @pytest.mark.asyncio
     async def test_startup_initializes_state(self) -> None:
         from app.lifecycle import startup_backend
-        from core.config import Settings
 
         app = MagicMock(spec=FastAPI)
         app.state = MagicMock()

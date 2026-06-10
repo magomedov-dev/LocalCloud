@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import uuid
 
-import pytest
 
 from database.exceptions import (
     ConstraintViolationError,

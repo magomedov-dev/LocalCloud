@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from security.cookies.enums import CookieErrorCode
 from security.cookies.exceptions import CookieError

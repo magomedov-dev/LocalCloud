@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -15,6 +15,7 @@ from database.exceptions import (
     RepositoryError,
 )
 from database.models.enums import PublicLinkStatus
+from database.models.links import PublicLink
 from database.repositories.links import PublicLinksRepository
 
 
@@ -268,7 +269,6 @@ async def test_is_link_available_returns_false_when_not_found():
 async def test_count_returns_int():
     repo, session, result = make_repo()
     result.scalar_one = MagicMock(return_value=3)
-    from database.models.links import PublicLink
     count = await repo.count(PublicLink.node_id == uuid.uuid4())
     assert count == 3
 
@@ -281,7 +281,6 @@ async def test_count_returns_int():
 async def test_exists_returns_false():
     repo, session, result = make_repo()
     result.scalar_one = MagicMock(return_value=0)
-    from database.models.links import PublicLink
     res = await repo.exists(PublicLink.id == uuid.uuid4())
     assert res is False
 
@@ -290,7 +289,6 @@ async def test_exists_returns_false():
 async def test_exists_returns_true():
     repo, session, result = make_repo()
     result.scalar_one = MagicMock(return_value=1)
-    from database.models.links import PublicLink
     res = await repo.exists(PublicLink.id == uuid.uuid4())
     assert res is True
 
@@ -315,7 +313,6 @@ async def test_find_expired_links_returns_list():
 from datetime import datetime as _dt  # noqa: E402
 
 from database.models.enums import PublicLinkPermissionType  # noqa: E402
-from database.models.links import PublicLink  # noqa: E402
 
 
 def _set_link_value(link, **kwargs):
@@ -960,7 +957,7 @@ async def test_register_download_deactivates_at_limit():
     link = make_link()
     link.register_download = MagicMock()
     link.is_download_limit_reached = True
-    res = await repo.register_download(link)
+    await repo.register_download(link)
     assert link.is_active is False
 
 
@@ -988,7 +985,7 @@ async def test_increment_download_count_no_limit():
 async def test_increment_download_count_reaches_limit_deactivates():
     repo, session, result = make_repo()
     link = make_link(download_count=4, max_downloads=5)
-    res = await repo.increment_download_count(link, amount=1)
+    await repo.increment_download_count(link, amount=1)
     assert link.download_count == 5
     assert link.is_active is False
 

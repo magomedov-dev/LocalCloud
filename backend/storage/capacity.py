@@ -121,13 +121,25 @@ class CapacityProvider:
         return result if result >= 0 else None
 
     @classmethod
+    def _first_int(cls, drive: dict[str, Any], keys: tuple[str, ...]) -> int | None:
+        """Возвращает первое разбираемое целое из набора ключей диска."""
+
+        for key in keys:
+            value = cls._coerce_int(drive.get(key))
+            if value is not None:
+                return value
+        return None
+
+    @classmethod
     def _parse_physical(cls, info_json: str) -> tuple[int | None, int | None]:
         """Извлекает суммарные total/available байты из ответа ``info()``.
 
         Разбор устойчив к различиям версий MinIO: дисковый список может
         называться ``drives`` или ``disks``, а поля размеров — ``totalspace``/
-        ``availablespace`` или ``total``/``available``. Отсутствующие и
-        непарсибельные значения игнорируются.
+        ``total`` и ``availspace``/``availablespace``/``available`` (в текущих
+        версиях MinIO поле называется именно ``availspace``). Если свободного
+        поля нет, но есть ``usedspace``/``used``, свободное вычисляется как
+        ``total - used``. Отсутствующие и непарсибельные значения игнорируются.
 
         Args:
             info_json: JSON-строка, возвращённая ``MinioAdmin.info()``.
@@ -164,12 +176,16 @@ class CapacityProvider:
             for drive in drives:
                 if not isinstance(drive, dict):
                     continue
-                total_value = cls._coerce_int(
-                    drive.get("totalspace", drive.get("total")),
+                total_value = cls._first_int(drive, ("totalspace", "total"))
+                available_value = cls._first_int(
+                    drive, ("availspace", "availablespace", "available")
                 )
-                available_value = cls._coerce_int(
-                    drive.get("availablespace", drive.get("available")),
-                )
+                # Фолбэк: если свободного поля нет, но есть использованное —
+                # выводим свободное из total - used.
+                if available_value is None and total_value is not None:
+                    used_value = cls._first_int(drive, ("usedspace", "used"))
+                    if used_value is not None:
+                        available_value = max(total_value - used_value, 0)
                 if total_value is not None:
                     total += total_value
                     saw_total = True

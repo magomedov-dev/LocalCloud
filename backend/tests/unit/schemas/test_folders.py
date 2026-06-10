@@ -7,7 +7,6 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from database.models.enums import BackgroundTaskStatus
 from schemas.folders import (
     BulkArchiveRequest,
     FolderArchiveRequest,

@@ -1,7 +1,6 @@
 """Unit-тесты для иерархии исключений модуля storage."""
 from __future__ import annotations
 
-import pytest
 
 from storage.exceptions import (
     InvalidStorageBucketNameError,

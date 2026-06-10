@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -192,7 +192,6 @@ class TestNormalizeMoment:
             from datetime import timezone as tz
             tz_plus2 = tz(timedelta(hours=2))
 
-        from datetime import timedelta
         aware = datetime(2024, 6, 1, 12, 0, 0, tzinfo=tz_plus2)
         result = normalize_moment(aware)
         # должно быть UTC

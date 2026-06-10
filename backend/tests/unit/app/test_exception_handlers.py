@@ -36,7 +36,6 @@ from security.jwt.exceptions import (
     JwtInvalidTokenTypeError,
     JwtTokenError,
 )
-from security.jwt.enums import JwtTokenType
 from security.permissions.exceptions import PermissionCheckError, PermissionDeniedError
 from services.exceptions import (
     AuthenticationServiceError,

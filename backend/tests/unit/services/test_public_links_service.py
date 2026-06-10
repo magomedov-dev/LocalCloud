@@ -10,7 +10,6 @@ import pytest
 from database.exceptions import DatabaseError
 from database.models.enums import (
     BackgroundTaskStatus,
-    BackgroundTaskType,
     NodeType,
     NodeVisibility,
     PublicLinkPermissionType,

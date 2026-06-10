@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from uuid import uuid4
 
 import pytest
@@ -12,7 +11,6 @@ from database.models.enums import PermissionLevel, PermissionSubjectType
 from schemas.permissions import (
     EffectivePermissionRead,
     NodePermissionCreate,
-    NodePermissionUpdate,
     PermissionFlags,
     PermissionGrantRequest,
     PermissionRevokeRequest,

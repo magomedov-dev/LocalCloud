@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -22,16 +21,11 @@ from security.dependencies.nodes import (
     RequireReadNodeDependency,
     RequireWriteNodeDependency,
     RequireDeleteNodeDependency,
-    get_accessible_node_dependency,
-    get_node_by_id,
-    get_node_permissions,
-    require_node_permission_dependency,
 )
 from services.exceptions import (
     ConflictServiceError,
     NotFoundServiceError,
     PermissionServiceError,
-    ValidationServiceError,
 )
 from tests.integration.conftest import API_V1, _make_mock_user
 
@@ -267,7 +261,6 @@ class TestDeleteNode:
         from security.dependencies.nodes import RequireDeleteNodeDependency
         mock_user = _make_mock_user()
         node_id = uuid.uuid4()
-        now = datetime.now(tz=timezone.utc).isoformat()
         op_response = {
             "node_id": str(node_id),
             "success": True,

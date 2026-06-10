@@ -5,7 +5,6 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
-import pytest
 
 from database.models.enums import SessionStatus
 from database.models.tokens import RefreshToken

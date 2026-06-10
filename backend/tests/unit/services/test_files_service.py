@@ -23,7 +23,6 @@ from schemas.files import (
     FileUpdateRequest,
 )
 from services.exceptions import (
-    NotFoundServiceError,
     PermissionServiceError,
     ServiceError,
     ValidationServiceError,

@@ -1269,7 +1269,6 @@ async def test_execute_file_statement_success():
     repo, session, result = make_repo()
     files = [make_file()]
     result.scalars.return_value.all.return_value = files
-    from database.models.filesystem import File
     res = await repo._execute_file_statement(
         repo.select(), operation="op"
     )

@@ -8,11 +8,6 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from database.models.enums import (
-    FilePreviewStatus,
-    FileProcessingStatus,
-    StorageObjectStatus,
-)
 from schemas.files import (
     FileDownloadRequest,
     FileDownloadResponse,

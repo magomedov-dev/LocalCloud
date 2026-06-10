@@ -569,7 +569,6 @@ async def test_search_tasks_with_query():
 # ---------------------------------------------------------------------------
 
 from database.exceptions import DuplicateEntityError  # noqa: E402
-from database.models.enums import TaskPriority  # noqa: E402
 
 
 def make_integrity_error(sqlstate="23505", constraint="uq_tasks"):

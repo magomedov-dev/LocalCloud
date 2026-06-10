@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -14,6 +14,14 @@ from database.repositories.base import BaseRepository
 from database.models.base import Base
 from database.models.users import User
 from database.models.enums import UserStatus
+from database.exceptions import (
+    ConstraintViolationError,
+    DuplicateEntityError,
+    EntityNotFoundError,
+    InvalidPaginationError,
+    InvalidQueryError,
+    RepositoryError,
+)
 
 
 class _SinglePKModel(Base):
@@ -31,14 +39,6 @@ class _CompositePKModel(Base):
 
     part_a: Mapped[str] = mapped_column(primary_key=True)
     part_b: Mapped[str] = mapped_column(primary_key=True)
-from database.exceptions import (
-    ConstraintViolationError,
-    DuplicateEntityError,
-    EntityNotFoundError,
-    InvalidPaginationError,
-    InvalidQueryError,
-    RepositoryError,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +249,7 @@ class TestCreate:
     async def test_session_add_called(self) -> None:
         repo, session = make_repo()
         user = make_user()
-        result = await repo.create(user, flush=False, refresh=False)
+        await repo.create(user, flush=False, refresh=False)
         session.add.assert_called_once_with(user)
 
     async def test_returns_entity(self) -> None:
