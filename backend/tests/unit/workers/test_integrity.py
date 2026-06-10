@@ -306,7 +306,6 @@ class TestLoadFilesBranches:
             storage_status=DbStorageObjectStatus.AVAILABLE,
             owner_id=None,
             include_deleted_nodes=False,
-            offset=0,
             limit=100,
         )
         assert result.result_data["checked_count"] == 2

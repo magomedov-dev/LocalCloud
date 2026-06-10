@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -19,6 +20,12 @@ from workers.types import (
 )
 
 logger = get_logger(__name__)
+
+# Исходы обработки одной задачи — используются для агрегации статистики цикла.
+_OUTCOME_SKIPPED = "skipped"
+_OUTCOME_COMPLETED = "completed"
+_OUTCOME_RETRIED = "retried"
+_OUTCOME_FAILED = "failed"
 
 
 class WorkerDispatcher:
@@ -58,7 +65,8 @@ class WorkerDispatcher:
 
         Освобождает зависшие RUNNING-задачи, выбирает и блокирует доступные
         задачи, выполняет их обработчики и обновляет статус каждой задачи в
-        зависимости от результата выполнения.
+        зависимости от результата выполнения. Задачи batch-а обрабатываются с
+        ограниченным параллелизмом (см. ``process_tasks``).
 
         Returns:
             Статистика одного цикла работы worker-процесса.
@@ -73,27 +81,97 @@ class WorkerDispatcher:
         stats.fetched_count = len(tasks)
         stats.started_count = len(tasks)
 
-        for task in tasks:
-            if task.status == BackgroundTaskStatus.CANCELLED:
-                stats.skipped_count += 1
-                continue
+        outcomes = await self.process_tasks(tasks)
 
+        for outcome in outcomes:
+            if outcome == _OUTCOME_SKIPPED:
+                stats.skipped_count += 1
+            elif outcome == _OUTCOME_COMPLETED:
+                stats.completed_count += 1
+            elif outcome == _OUTCOME_RETRIED:
+                stats.retried_count += 1
+            else:
+                stats.failed_count += 1
+
+        return stats
+
+    async def process_tasks(self, tasks: list[BackgroundTask]) -> list[str]:
+        """Обрабатывает batch задач с ограниченным параллелизмом.
+
+        Степень параллелизма ограничена настройкой
+        ``worker_max_concurrent_tasks``. Задачи преимущественно I/O-bound
+        (скачивание из объектного хранилища, обработка, загрузка результата
+        обратно), поэтому одновременное ожидание сети и диска сокращает время
+        разгребания очереди без роста нагрузки на CPU. Каждая задача работает в
+        собственных unit of work, поэтому конкурентное выполнение безопасно для
+        сессий БД, а задачи уже заблокированы за worker и не будут выбраны
+        повторно.
+
+        Args:
+            tasks: Заблокированные за worker задачи batch-а.
+
+        Returns:
+            Список исходов обработки в порядке переданных задач.
+        """
+
+        if not tasks:
+            return []
+
+        max_concurrency = max(
+            1,
+            self.context.worker_settings.worker_max_concurrent_tasks,
+        )
+        semaphore = asyncio.Semaphore(max_concurrency)
+
+        async def run_guarded(task: BackgroundTask) -> str:
+            async with semaphore:
+                return await self.process_task(task)
+
+        return await asyncio.gather(*(run_guarded(task) for task in tasks))
+
+    async def process_task(self, task: BackgroundTask) -> str:
+        """Выполняет полный жизненный цикл одной фоновой задачи.
+
+        Запускает обработчик задачи и в зависимости от результата помечает её
+        завершённой, возвращает в очередь для повторной попытки или помечает
+        ошибкой. Метод намеренно не пробрасывает исключения наружу: сбой одной
+        задачи (включая ошибку обновления её статуса) не должен отменять
+        остальные задачи batch-а, выполняющиеся параллельно.
+
+        Args:
+            task: Заблокированная за worker фоновая задача.
+
+        Returns:
+            Исход обработки: ``skipped``, ``completed``, ``retried`` или
+            ``failed``.
+        """
+
+        if task.status == BackgroundTaskStatus.CANCELLED:
+            return _OUTCOME_SKIPPED
+
+        try:
             result = await self.execute_task(task)
 
             if result.success:
                 await self.complete_task(task.id, result)
-                stats.completed_count += 1
-                continue
+                return _OUTCOME_COMPLETED
 
             if result.retry and task.attempts_count < task.max_attempts:
                 await self.release_task_for_retry(task.id, result)
-                stats.retried_count += 1
-                continue
+                return _OUTCOME_RETRIED
 
             await self.fail_task(task.id, result)
-            stats.failed_count += 1
+            return _OUTCOME_FAILED
 
-        return stats
+        except Exception:
+            logger.exception(
+                "Не удалось завершить обработку фоновой задачи",
+                extra={
+                    "task_id": str(task.id),
+                    "worker_id": self.context.worker_id,
+                },
+            )
+            return _OUTCOME_FAILED
 
     async def fetch_and_lock_tasks(self, limit: int) -> list[BackgroundTask]:
         """Выбирает и блокирует задачи для текущего worker.
@@ -293,8 +371,9 @@ class WorkerDispatcher:
     ) -> None:
         """Возвращает фоновую задачу в очередь для повторного выполнения.
 
-        Вычисляет время следующей попытки с учётом настроек worker и переводит
-        задачу обратно в статус `PENDING`.
+        Время следующей попытки вычисляется экспоненциальным backoff по числу
+        уже выполненных попыток (см. ``_compute_retry_delay_seconds``), после
+        чего задача переводится обратно в статус `PENDING`.
 
         Args:
             task_id: Идентификатор задачи, которую нужно вернуть в очередь.
@@ -302,14 +381,10 @@ class WorkerDispatcher:
                 повторной попытки.
         """
 
-        retry_delay_seconds = min(
-            self.context.worker_settings.worker_retry_delay_seconds,
-            self.context.worker_settings.worker_max_retry_delay_seconds,
-        )
-        next_attempt_at = datetime.now(UTC) + timedelta(seconds=retry_delay_seconds)
-
         async with self.context.uow_factory() as uow:
             task = await uow.tasks.get_required_by_id(task_id)
+            delay_seconds = self._compute_retry_delay_seconds(task.attempts_count)
+            next_attempt_at = datetime.now(UTC) + timedelta(seconds=delay_seconds)
             await uow.tasks.update(
                 task,
                 {
@@ -334,6 +409,33 @@ class WorkerDispatcher:
                 refresh=False,
             )
             await uow.commit()
+
+    def _compute_retry_delay_seconds(self, attempts_count: int) -> int:
+        """Вычисляет задержку перед повторной попыткой (экспоненциальный backoff).
+
+        Задержка растёт как ``base * 2 ** (attempts_count - 1)`` и ограничена
+        сверху ``worker_max_retry_delay_seconds``. Экспоненциальный рост гасит
+        «retry storm»: при устойчивом сбое (например, недоступном объектном
+        хранилище) задачи повторяются всё реже, а не каждые ``base`` секунд, что
+        снижает нагрузку на CPU и БД. Первая повторная попытка по-прежнему
+        выполняется через ``base`` секунд.
+
+        Args:
+            attempts_count: Количество уже выполненных попыток задачи.
+
+        Returns:
+            Задержка перед следующей попыткой в секундах.
+        """
+
+        base_seconds = self.context.worker_settings.worker_retry_delay_seconds
+        max_seconds = self.context.worker_settings.worker_max_retry_delay_seconds
+
+        # Показатель степени ограничен, чтобы не считать огромные степени двойки
+        # при нетипично большом max_attempts.
+        exponent = max(0, min(attempts_count - 1, 32))
+        delay_seconds = base_seconds * (2**exponent)
+
+        return min(delay_seconds, max_seconds)
 
     async def mark_stale_running_tasks(self) -> None:
         """Освобождает зависшие RUNNING-задачи с истёкшей блокировкой.

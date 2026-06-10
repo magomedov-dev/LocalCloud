@@ -238,6 +238,88 @@ class BaseRepository(Generic[ModelT]):
 
         return await self.scalars_all(statement, operation="list")
 
+    async def list_keyset(
+        self,
+        *,
+        limit: int = DEFAULT_LIMIT,
+        after: Any | None = None,
+        cursor_column: InstrumentedAttribute[Any] | None = None,
+        ascending: bool = True,
+        conditions: Sequence[Any] | None = None,
+    ) -> builtins.list[ModelT]:
+        """Возвращает страницу данных keyset-пагинацией.
+
+        В отличие от ``list``/``paginate`` метод не использует ``OFFSET`` и не
+        считает общее количество записей: страница выбирается по курсору
+        (``cursor_column > after``) и сортируется по тому же столбцу. Стоимость
+        выборки не зависит от глубины пагинации, поэтому метод подходит для
+        пакетных проходов по большим таблицам.
+
+        Args:
+            limit: Максимальный размер страницы.
+            after: Значение курсора (не включается в результат). Если ``None``,
+                возвращается первая страница.
+            cursor_column: Столбец-курсор. Если ``None``, используется первичный
+                ключ модели. Столбец должен быть уникальным и индексированным,
+                иначе возможны пропуски или дубли строк между страницами.
+            ascending: Направление сортировки и сравнения курсора.
+            conditions: Условия фильтрации SQLAlchemy.
+
+        Returns:
+            Список ORM-сущностей размером не больше ``limit``, отсортированный
+            по ``cursor_column``.
+
+        Raises:
+            InvalidPaginationError: Если ``limit`` некорректен.
+            RepositoryError: Если у модели составной первичный ключ и
+                ``cursor_column`` не задан, или операция чтения завершилась
+                ошибкой.
+        """
+
+        self._validate_pagination(offset=0, limit=limit)
+
+        column = (
+            cursor_column if cursor_column is not None else self._primary_key_column()
+        )
+
+        statement = self.select_where(*(conditions or ()))
+
+        if after is not None:
+            statement = statement.where(
+                column > after if ascending else column < after,
+            )
+
+        statement = statement.order_by(
+            column.asc() if ascending else column.desc(),
+        )
+        statement = statement.limit(limit)
+
+        return await self.scalars_all(statement, operation="list_keyset")
+
+    def _primary_key_column(self) -> InstrumentedAttribute[Any]:
+        """Возвращает столбец первичного ключа модели для keyset-пагинации.
+
+        Returns:
+            ORM-атрибут единственного столбца первичного ключа.
+
+        Raises:
+            RepositoryError: Если модель имеет составной первичный ключ —
+                в этом случае курсорный столбец нужно передавать явно.
+        """
+
+        primary_key = inspect(self.model).primary_key
+
+        if len(primary_key) != 1:
+            raise self._repository_error(
+                operation="list_keyset",
+                reason=(
+                    "Keyset-пагинация по первичному ключу требует одного "
+                    "столбца; для составного ключа передайте cursor_column."
+                ),
+            )
+
+        return getattr(self.model, primary_key[0].name)
+
     async def exists(
         self,
         *conditions: Any,

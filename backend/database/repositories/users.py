@@ -684,31 +684,35 @@ class UsersRepository(BaseRepository[User]):
     async def list_active_users(
         self,
         *,
-        offset: int = 0,
         limit: int = 100,
-        order_by_created_desc: bool = True,
+        after_id: uuid.UUID | None = None,
     ) -> list[User]:
-        """Возвращает список активных пользователей.
+        """Возвращает страницу активных пользователей keyset-пагинацией.
+
+        Метод предназначен для пакетных проходов worker-процесса (пересчёт
+        квот). Используется keyset-пагинация по первичному ключу: страница не
+        зависит от ``OFFSET`` и не требует подсчёта общего количества записей,
+        поэтому стоимость выборки не растёт с глубиной обхода. Для обхода всех
+        пользователей повторно вызывайте метод, передавая ``after_id`` равным
+        идентификатору последнего обработанного пользователя.
 
         Args:
-            offset: Количество записей, которые нужно пропустить.
-            limit: Максимальное количество записей, которое нужно вернуть.
-            order_by_created_desc: Сортировать ли пользователей по дате создания
-                по убыванию.
+            limit: Максимальный размер страницы.
+            after_id: Идентификатор-курсор. Возвращаются пользователи с
+                идентификатором строго больше указанного. Если ``None``,
+                возвращается первая страница.
 
         Returns:
-            Список пользователей со статусом ``UserStatus.ACTIVE``.
+            Список активных пользователей, отсортированный по идентификатору.
 
         Raises:
-            InvalidQueryError: Если параметры пагинации некорректны.
+            InvalidPaginationError: Если ``limit`` некорректен.
         """
 
-        return await self.list_users(
-            offset=offset,
+        return await self.list_keyset(
             limit=limit,
-            statuses=[UserStatus.ACTIVE],
-            include_deleted=False,
-            order_by_created_desc=order_by_created_desc,
+            after=after_id,
+            conditions=[User.status == UserStatus.ACTIVE],
         )
 
     async def list_by_status(

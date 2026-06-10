@@ -2124,36 +2124,48 @@ class FileRepository(BaseRepository[File]):
         storage_status: StorageObjectStatus,
         owner_id: uuid.UUID | None = None,
         include_deleted_nodes: bool = True,
-        offset: int = 0,
+        after_id: uuid.UUID | None = None,
         limit: int = 100,
     ) -> list[File]:
         """Возвращает файлы по статусу объекта в хранилище.
+
+        Метод используется пакетным проходом проверки целостности и применяет
+        keyset-пагинацию по первичному ключу ``File.id``: страница выбирается по
+        курсору без ``OFFSET`` и без подсчёта общего количества, поэтому
+        стоимость выборки не растёт с глубиной обхода больших таблиц. Для обхода
+        всех файлов повторно вызывайте метод, передавая ``after_id`` равным
+        идентификатору последнего обработанного файла.
 
         Args:
             storage_status: Статус объекта файла в хранилище.
             owner_id: Идентификатор владельца файлов.
             include_deleted_nodes: Включать ли файлы, чьи узлы удалены.
-            offset: Количество записей, которые нужно пропустить.
-            limit: Максимальное количество записей.
+            after_id: Идентификатор-курсор. Возвращаются файлы с идентификатором
+                строго больше указанного. Если ``None``, возвращается первая
+                страница.
+            limit: Максимальный размер страницы.
 
         Returns:
-            Список файлов с указанным storage-статусом.
+            Список файлов с указанным storage-статусом, отсортированный по
+            идентификатору файла.
 
         Raises:
-            InvalidQueryError: Если параметры пагинации некорректны.
+            InvalidPaginationError: Если ``limit`` некорректен.
         """
 
-        self._validate_pagination(offset=offset, limit=limit)
+        self._validate_pagination(offset=0, limit=limit)
 
         statement = (
             select(File)
             .join(FileSystemNode, File.node_id == FileSystemNode.id)
             .where(File.storage_status == storage_status)
             .options(selectinload(File.node))
-            .order_by(File.updated_at.desc())
-            .offset(offset)
+            .order_by(File.id)
             .limit(limit)
         )
+
+        if after_id is not None:
+            statement = statement.where(File.id > after_id)
 
         if owner_id is not None:
             statement = statement.where(FileSystemNode.owner_id == owner_id)

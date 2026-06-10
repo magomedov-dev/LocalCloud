@@ -26,6 +26,17 @@ _TEXT_PREVIEW_MAX_BYTES = 4096
 _IMAGE_PREVIEW_QUALITY = 75
 _IMAGE_PREVIEW_MAX_DIMENSION = 400
 
+# Защита от чрезмерного потребления памяти и «decompression bomb».
+# Превью всё равно ужимается до _IMAGE_PREVIEW_MAX_DIMENSION, поэтому исходные
+# изображения, превышающие эти пороги, превью не получают (помечаются
+# NOT_REQUIRED): это снимает пик RAM и класс DoS на worker-процессе.
+_IMAGE_PREVIEW_MAX_SOURCE_BYTES = 25 * 1024 * 1024  # 25 МБ исходного файла
+_IMAGE_PREVIEW_MAX_PIXELS = 40_000_000  # 40 Мпикс (ширина × высота)
+
+# Глобальный предел Pillow на число пикселей растра: декодер сам прерывает
+# распаковку изображений-«бомб», не выделяя память под полный растр.
+Image.MAX_IMAGE_PIXELS = _IMAGE_PREVIEW_MAX_PIXELS
+
 _PREVIEW_SUPPORTED_MIME_PREFIXES: tuple[str, ...] = (
     "image/",
     "text/",
@@ -46,7 +57,10 @@ async def generate_file_preview_handler(
 
     Для изображений создаёт сжатое WebP-превью. Для текстовых файлов и JSON
     создаёт текстовый сниппет ограниченного размера. PDF и неподдерживаемые
-    MIME-типы помечаются как `NOT_REQUIRED`.
+    MIME-типы помечаются как `NOT_REQUIRED`. Изображения, превышающие лимит
+    размера файла или числа пикселей, превью не получают и также помечаются
+    как `NOT_REQUIRED` — это защищает worker от пиков памяти и «decompression
+    bomb».
 
     Args:
         context: Контекст выполнения фоновой задачи.
@@ -115,6 +129,38 @@ async def generate_file_preview_handler(
                 )
 
             if _mime_is_pdf(mime_type):
+                updated = await uow.files.mark_preview_not_required(
+                    file_id=file_row.id,
+                    flush=True,
+                    refresh=True,
+                )
+                await uow.commit()
+                return success_result(
+                    result_data={
+                        "file_id": str(file_row.id),
+                        "preview_status": FilePreviewStatus.NOT_REQUIRED.value,
+                        "preview_storage_key": getattr(
+                            updated, "preview_storage_key", None
+                        ),
+                    },
+                    progress_percent=100,
+                )
+
+            # Слишком большие изображения превью не получают: их декодирование
+            # дало бы пик RAM, способный уронить worker. Размер проверяется до
+            # скачивания, поэтому тяжёлый файл вообще не попадает в память.
+            if (
+                _mime_is_image(mime_type)
+                and file_row.size_bytes > _IMAGE_PREVIEW_MAX_SOURCE_BYTES
+            ):
+                logger.info(
+                    "generate_file_preview: изображение превышает лимит размера",
+                    extra={
+                        "file_id": str(file_row.id),
+                        "size_bytes": file_row.size_bytes,
+                        "max_source_bytes": _IMAGE_PREVIEW_MAX_SOURCE_BYTES,
+                    },
+                )
                 updated = await uow.files.mark_preview_not_required(
                     file_id=file_row.id,
                     flush=True,
@@ -219,9 +265,9 @@ async def generate_file_preview_handler(
             progress_percent=100,
         )
 
-    except MemoryError:
+    except (MemoryError, Image.DecompressionBombError):
         logger.warning(
-            "generate_file_preview: image too large for in-memory compression",
+            "generate_file_preview: изображение слишком большое для генерации preview",
             extra={"file_id": str(file_id)},
         )
         try:
@@ -292,9 +338,20 @@ def _compress_to_webp(data: bytes) -> bytes:
             поддерживаемым изображением.
         OSError: Если Pillow не смог прочитать или сохранить изображение.
         MemoryError: Если изображение слишком большое для обработки в памяти.
+        PIL.Image.DecompressionBombError: Если число пикселей изображения
+            превышает ``_IMAGE_PREVIEW_MAX_PIXELS``.
     """
 
     with Image.open(io.BytesIO(data)) as img:
+        # Размер берётся из заголовка (декодирования ещё нет), поэтому проверка
+        # отсекает «бомбы» до выделения памяти под полный растр.
+        width, height = img.size
+        if width * height > _IMAGE_PREVIEW_MAX_PIXELS:
+            raise Image.DecompressionBombError(
+                f"Изображение {width}x{height} превышает лимит "
+                f"{_IMAGE_PREVIEW_MAX_PIXELS} пикселей для генерации preview."
+            )
+
         if img.mode in ("RGBA", "LA", "PA"):
             img = img.convert("RGBA")
         elif img.mode != "RGB":

@@ -8,6 +8,7 @@ from typing import Any, BinaryIO
 from minio.commonconfig import ComposeSource, CopySource
 from minio.deleteobjects import DeleteObject
 
+from core.constants import StorageConstants
 from storage.buckets import StorageBucketNameValidator
 from storage.client import StorageClient
 from storage.exceptions import (
@@ -311,6 +312,81 @@ class StorageObjectManager:
                 operation="get_object_stream",
                 operation_kind="download",
             ) from exc
+
+    async def calculate_object_checksum(
+        self,
+        *,
+        bucket: str,
+        object_key: str,
+        algorithm: StorageChecksumAlgorithm | str,
+        chunk_size: int | None = None,
+    ) -> str:
+        """Потоково вычисляет контрольную сумму объекта.
+
+        В отличие от ``get_object_bytes`` объект не загружается в память
+        целиком: данные читаются блоками и сразу подаются в hash-функцию,
+        поэтому пик памяти не зависит от размера объекта. Блокирующее чтение и
+        хеширование выполняются в пуле потоков, чтобы не блокировать event loop.
+
+        Args:
+            bucket: Имя bucket.
+            object_key: Ключ объекта.
+            algorithm: Алгоритм контрольной суммы.
+            chunk_size: Размер блока чтения в байтах. Если ``None``, используется
+                ``StorageConstants.STORAGE_DEFAULT_CHECKSUM_CHUNK_SIZE``.
+
+        Returns:
+            Контрольная сумма объекта в hex-формате.
+
+        Raises:
+            StorageDownloadError: Если скачивание объекта не удалось.
+            StorageObjectNotFoundError: Если объект не найден.
+            StorageObjectError: Если операция с объектом не удалась.
+        """
+
+        # Локальный импорт разрывает циклическую зависимость с модулем
+        # storage.integrity, который импортирует StorageObjectManager.
+        from storage.integrity import calculate_stream_checksum
+
+        normalized_bucket = self._validate_bucket_name(bucket)
+        normalized_object_key = normalize_object_key(object_key)
+        resolved_chunk_size = (
+            chunk_size
+            if chunk_size is not None
+            else StorageConstants.STORAGE_DEFAULT_CHECKSUM_CHUNK_SIZE
+        )
+
+        response = None
+
+        try:
+            response = await self.client.execute(
+                self.client.get_raw_client().get_object,
+                normalized_bucket,
+                normalized_object_key,
+                operation_name="get_object",
+            )
+
+            # Чтение из MinIO блокирующее, поэтому потоковое хеширование
+            # выполняется целиком внутри пула потоков storage-клиента.
+            return await self.client.execute(
+                calculate_stream_checksum,
+                response,
+                algorithm=algorithm,
+                chunk_size=resolved_chunk_size,
+                reset_position=False,
+                operation_name="calculate_object_checksum",
+            )
+
+        except StorageError as exc:
+            raise self._object_error(
+                exc,
+                bucket=normalized_bucket,
+                object_key=normalized_object_key,
+                operation="calculate_object_checksum",
+                operation_kind="download",
+            ) from exc
+        finally:
+            await self._close_response(response)
 
     async def stat_object(
         self,

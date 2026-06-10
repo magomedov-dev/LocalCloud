@@ -175,6 +175,17 @@ class User(Base, TimestampMixin):
     # -------------------------------------------------------------------------
     # Связи
     # -------------------------------------------------------------------------
+    #
+    # Стратегия загрузки. Небольшие связи, которые почти всегда нужны при работе
+    # с пользователем (``roles`` для авторизации, ``user_roles`` и ``quota``),
+    # грузятся стратегией ``selectin``. Потенциально неограниченные коллекции
+    # (файлы, журнал аудита, фоновые задачи, публичные ссылки, заявки на
+    # регистрацию, refresh-токены) помечены ``lazy="raise"``: при обычной
+    # материализации пользователя они не нужны, а их жадная загрузка подтягивала
+    # в сессию тысячи строк и десятки мегабайт на одного активного пользователя.
+    # Доступ к ним выполняется через соответствующие репозитории, а не через
+    # навигацию по связи; ссылочная целостность обеспечивается на уровне БД
+    # (``ON DELETE CASCADE``/``SET NULL`` на внешних ключах).
 
     user_roles: Mapped[list[UserRole]] = relationship(
         "UserRole",
@@ -198,7 +209,7 @@ class User(Base, TimestampMixin):
         "UserRole",
         foreign_keys="UserRole.assigned_by",
         back_populates="assigner",
-        lazy="selectin",
+        lazy="raise",
     )
 
     refresh_tokens: Mapped[list[RefreshToken]] = relationship(
@@ -206,35 +217,36 @@ class User(Base, TimestampMixin):
         foreign_keys="RefreshToken.user_id",
         back_populates="user",
         cascade="all, delete-orphan",
-        lazy="selectin",
+        passive_deletes=True,
+        lazy="raise",
     )
 
     registration_requests: Mapped[list[RegistrationRequest]] = relationship(
         "RegistrationRequest",
         foreign_keys="RegistrationRequest.created_user_id",
         back_populates="created_user",
-        lazy="selectin",
+        lazy="raise",
     )
 
     reviewed_registration_requests: Mapped[list[RegistrationRequest]] = relationship(
         "RegistrationRequest",
         foreign_keys="RegistrationRequest.reviewed_by",
         back_populates="reviewer",
-        lazy="selectin",
+        lazy="raise",
     )
 
     file_system_nodes: Mapped[list[FileSystemNode]] = relationship(
         "FileSystemNode",
         foreign_keys="FileSystemNode.owner_id",
         back_populates="owner",
-        lazy="selectin",
+        lazy="raise",
     )
 
     public_links: Mapped[list[PublicLink]] = relationship(
         "PublicLink",
         foreign_keys="PublicLink.created_by",
         back_populates="creator",
-        lazy="selectin",
+        lazy="raise",
     )
 
     quota: Mapped[UserQuota | None] = relationship(
@@ -250,14 +262,14 @@ class User(Base, TimestampMixin):
         "AuditLog",
         foreign_keys="AuditLog.user_id",
         back_populates="user",
-        lazy="selectin",
+        lazy="raise",
     )
 
     background_tasks: Mapped[list[BackgroundTask]] = relationship(
         "BackgroundTask",
         foreign_keys="BackgroundTask.created_by",
         back_populates="creator",
-        lazy="selectin",
+        lazy="raise",
     )
 
     # -------------------------------------------------------------------------

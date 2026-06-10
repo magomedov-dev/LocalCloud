@@ -22,6 +22,15 @@ class _SinglePKModel(Base):
     __tablename__ = "_single_pk_model_test_tbl"
 
     code: Mapped[str] = mapped_column(primary_key=True)
+
+
+class _CompositePKModel(Base):
+    """Вспомогательная модель с составным первичным ключом."""
+
+    __tablename__ = "_composite_pk_model_test_tbl"
+
+    part_a: Mapped[str] = mapped_column(primary_key=True)
+    part_b: Mapped[str] = mapped_column(primary_key=True)
 from database.exceptions import (
     ConstraintViolationError,
     DuplicateEntityError,
@@ -801,6 +810,91 @@ class TestList:
         session.execute.side_effect = SQLAlchemyError("fail")
         with pytest.raises(RepositoryError):
             await repo.list()
+
+
+# ---------------------------------------------------------------------------
+# list_keyset
+# ---------------------------------------------------------------------------
+
+class TestListKeyset:
+    async def test_returns_entities(self) -> None:
+        repo, session = make_repo()
+        users = [make_user(), make_user()]
+        session.execute.return_value = make_scalars_all_result(users)
+        result = await repo.list_keyset(limit=10)
+        assert result == users
+
+    async def test_no_offset_and_limit_applied(self) -> None:
+        repo, session = make_repo()
+        session.execute.return_value = make_scalars_all_result([])
+        await repo.list_keyset(limit=25)
+        statement = session.execute.await_args.args[0]
+        assert statement._offset is None
+        assert statement._limit == 25
+
+    async def test_orders_by_primary_key(self) -> None:
+        repo, session = make_repo()
+        session.execute.return_value = make_scalars_all_result([])
+        await repo.list_keyset(limit=10)
+        statement = session.execute.await_args.args[0]
+        assert len(statement._order_by_clauses) == 1
+        assert "users.id" in str(statement)
+
+    async def test_first_page_has_no_whereclause(self) -> None:
+        repo, session = make_repo()
+        session.execute.return_value = make_scalars_all_result([])
+        await repo.list_keyset(limit=10)
+        statement = session.execute.await_args.args[0]
+        assert statement.whereclause is None
+
+    async def test_after_applies_keyset_condition(self) -> None:
+        repo, session = make_repo()
+        session.execute.return_value = make_scalars_all_result([])
+        await repo.list_keyset(limit=10, after=uuid.uuid4())
+        statement = session.execute.await_args.args[0]
+        assert statement.whereclause is not None
+        assert "users.id >" in str(statement)
+
+    async def test_conditions_applied(self) -> None:
+        repo, session = make_repo()
+        session.execute.return_value = make_scalars_all_result([])
+        await repo.list_keyset(limit=10, conditions=[User.email == "x@x.com"])
+        statement = session.execute.await_args.args[0]
+        assert statement.whereclause is not None
+
+    async def test_descending_uses_desc_and_less_than(self) -> None:
+        repo, session = make_repo()
+        session.execute.return_value = make_scalars_all_result([])
+        await repo.list_keyset(limit=10, after=uuid.uuid4(), ascending=False)
+        rendered = str(session.execute.await_args.args[0])
+        assert "users.id <" in rendered
+        assert "DESC" in rendered
+
+    async def test_custom_cursor_column(self) -> None:
+        repo, session = make_repo()
+        session.execute.return_value = make_scalars_all_result([])
+        await repo.list_keyset(limit=10, cursor_column=User.created_at)
+        assert "users.created_at" in str(session.execute.await_args.args[0])
+
+    async def test_invalid_limit_raises_before_query(self) -> None:
+        repo, session = make_repo()
+        with pytest.raises(InvalidPaginationError):
+            await repo.list_keyset(limit=0)
+        session.execute.assert_not_awaited()
+
+    async def test_non_id_primary_key_resolved(self) -> None:
+        # Курсор по умолчанию берётся из первичного ключа, даже если он не ``id``.
+        repo = BaseRepository(session=AsyncMock(), model=_SinglePKModel)
+        repo.session.execute.return_value = make_scalars_all_result([])
+        await repo.list_keyset(limit=10, after="abc")
+        rendered = str(repo.session.execute.await_args.args[0])
+        assert "_single_pk_model_test_tbl.code >" in rendered
+
+    async def test_composite_primary_key_without_cursor_raises(self) -> None:
+        repo = BaseRepository(session=AsyncMock(), model=_CompositePKModel)
+        with pytest.raises(RepositoryError):
+            await repo.list_keyset(limit=10)
+        repo.session.execute.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

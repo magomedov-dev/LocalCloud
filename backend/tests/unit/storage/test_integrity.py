@@ -23,7 +23,6 @@ from storage.integrity import (
 )
 from storage.types import (
     StorageChecksumAlgorithm,
-    StorageDownloadResult,
     StorageIntegrityProblemType,
     StorageObjectInfo,
     StorageObjectMetadata,
@@ -58,22 +57,11 @@ def _make_object_info(
     )
 
 
-def _make_download_result(data: bytes = b"file content") -> StorageDownloadResult:
-    return StorageDownloadResult(
-        bucket=_BUCKET,
-        object_key=_KEY,
-        data=data,
-        size_bytes=len(data),
-        content_type="application/octet-stream",
-        etag="etag-abc",
-    )
-
-
 def _make_checker() -> tuple[StorageIntegrityChecker, MagicMock]:
     manager = MagicMock()
     manager.object_exists = AsyncMock()
     manager.stat_object = AsyncMock()
-    manager.get_object_bytes = AsyncMock()
+    manager.calculate_object_checksum = AsyncMock()
     checker = StorageIntegrityChecker(object_manager=manager)
     return checker, manager
 
@@ -484,8 +472,8 @@ class TestVerifyObjectChecksum:
     async def test_checksum_match(self) -> None:
         checker, manager = _make_checker()
         data = b"file content"
-        manager.get_object_bytes.return_value = _make_download_result(data)
         expected = hashlib.sha256(data).hexdigest()
+        manager.calculate_object_checksum.return_value = expected
         status = await checker.verify_object_checksum(
             bucket=_BUCKET,
             object_key=_KEY,
@@ -498,8 +486,9 @@ class TestVerifyObjectChecksum:
     async def test_checksum_uppercase_expected_normalized(self) -> None:
         checker, manager = _make_checker()
         data = b"file content"
-        manager.get_object_bytes.return_value = _make_download_result(data)
-        expected = hashlib.sha256(data).hexdigest().upper()
+        actual = hashlib.sha256(data).hexdigest()
+        manager.calculate_object_checksum.return_value = actual
+        expected = actual.upper()
         status = await checker.verify_object_checksum(
             bucket=_BUCKET,
             object_key=_KEY,
@@ -510,7 +499,9 @@ class TestVerifyObjectChecksum:
 
     async def test_checksum_mismatch(self) -> None:
         checker, manager = _make_checker()
-        manager.get_object_bytes.return_value = _make_download_result(b"actual")
+        manager.calculate_object_checksum.return_value = hashlib.sha256(
+            b"actual"
+        ).hexdigest()
         status = await checker.verify_object_checksum(
             bucket=_BUCKET,
             object_key=_KEY,
@@ -523,7 +514,7 @@ class TestVerifyObjectChecksum:
 
     async def test_object_not_found(self) -> None:
         checker, manager = _make_checker()
-        manager.get_object_bytes.side_effect = StorageObjectNotFoundError(
+        manager.calculate_object_checksum.side_effect = StorageObjectNotFoundError(
             bucket=_BUCKET, object_key=_KEY
         )
         status = await checker.verify_object_checksum(
@@ -558,7 +549,7 @@ class TestVerifyObjectChecksum:
 
     async def test_connection_error_raises_critical(self) -> None:
         checker, manager = _make_checker()
-        manager.get_object_bytes.side_effect = StorageConnectionError("down")
+        manager.calculate_object_checksum.side_effect = StorageConnectionError("down")
         with pytest.raises(StorageIntegrityError):
             await checker.verify_object_checksum(
                 bucket=_BUCKET,
@@ -569,7 +560,7 @@ class TestVerifyObjectChecksum:
 
     async def test_storage_error_raises_critical(self) -> None:
         checker, manager = _make_checker()
-        manager.get_object_bytes.side_effect = StorageError("boom")
+        manager.calculate_object_checksum.side_effect = StorageError("boom")
         with pytest.raises(StorageIntegrityError):
             await checker.verify_object_checksum(
                 bucket=_BUCKET,
@@ -764,7 +755,7 @@ class TestBuildIntegrityReport:
             metadata={"a": "1"},
             status=StorageObjectStatus.AVAILABLE,
         )
-        manager.get_object_bytes.return_value = _make_download_result(data)
+        manager.calculate_object_checksum.return_value = checksum
 
         report = await checker.build_integrity_report(
             bucket=_BUCKET,
@@ -791,7 +782,9 @@ class TestBuildIntegrityReport:
             metadata={"a": "wrong"},
             status=StorageObjectStatus.CORRUPTED,
         )
-        manager.get_object_bytes.return_value = _make_download_result(data)
+        manager.calculate_object_checksum.return_value = hashlib.sha256(
+            data
+        ).hexdigest()
 
         report = await checker.build_integrity_report(
             bucket=_BUCKET,

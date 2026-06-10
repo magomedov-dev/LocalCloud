@@ -1,7 +1,9 @@
 """Unit-тесты для WorkerDispatcher."""
 from __future__ import annotations
 
+import asyncio
 import uuid
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -9,7 +11,7 @@ import pytest
 from database.models.enums import BackgroundTaskStatus, BackgroundTaskType
 from workers.dispatcher import WorkerDispatcher
 from workers.registry import WorkerTaskRegistry
-from workers.types import WorkerRuntimeStats, WorkerTaskExecutionResult
+from workers.types import WorkerTaskExecutionResult
 
 
 # ---------------------------------------------------------------------------
@@ -24,7 +26,9 @@ def make_uow():
     uow.tasks = AsyncMock()
     uow.tasks.lock_due_tasks = AsyncMock(return_value=[])
     uow.tasks.release_stale_running_tasks = AsyncMock(return_value=0)
-    uow.tasks.get_required_by_id = AsyncMock(return_value=MagicMock())
+    uow.tasks.get_required_by_id = AsyncMock(
+        return_value=MagicMock(attempts_count=1)
+    )
     uow.tasks.update = AsyncMock()
     return uow
 
@@ -37,6 +41,7 @@ def make_context(uow=None):
     ctx.worker_id = "w-001"
     ctx.worker_settings = MagicMock()
     ctx.worker_settings.worker_batch_size = 5
+    ctx.worker_settings.worker_max_concurrent_tasks = 4
     ctx.worker_settings.worker_task_lock_ttl_seconds = 300
     ctx.worker_settings.worker_stale_task_lock_seconds = 900
     ctx.worker_settings.worker_retry_delay_seconds = 60
@@ -398,3 +403,160 @@ class TestReleaseTaskForRetry:
         uow.tasks.update.assert_called_once()
         call_kwargs = uow.tasks.update.call_args[0]
         assert call_kwargs[1]["status"] == BackgroundTaskStatus.PENDING
+
+
+# ---------------------------------------------------------------------------
+# process_tasks — параллелизм batch-а
+# ---------------------------------------------------------------------------
+
+class TestProcessTasksConcurrency:
+    @pytest.mark.asyncio
+    async def test_respects_max_concurrency_limit(self) -> None:
+        ctx, uow = make_context()
+        ctx.worker_settings.worker_max_concurrent_tasks = 2
+        dispatcher, _ = make_dispatcher(ctx=ctx)
+
+        active = 0
+        max_active = 0
+
+        async def fake_execute(task):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            await asyncio.sleep(0.01)  # имитируем I/O-ожидание
+            active -= 1
+            return WorkerTaskExecutionResult(success=True, progress_percent=100)
+
+        dispatcher.execute_task = fake_execute
+        dispatcher.complete_task = AsyncMock()
+
+        tasks = [make_task() for _ in range(6)]
+        outcomes = await dispatcher.process_tasks(tasks)
+
+        assert outcomes == ["completed"] * 6
+        # Параллелизм реально используется, но не превышает лимит.
+        assert max_active == 2
+        assert dispatcher.complete_task.await_count == 6
+
+    @pytest.mark.asyncio
+    async def test_concurrency_one_is_sequential(self) -> None:
+        ctx, uow = make_context()
+        ctx.worker_settings.worker_max_concurrent_tasks = 1
+        dispatcher, _ = make_dispatcher(ctx=ctx)
+
+        active = 0
+        max_active = 0
+
+        async def fake_execute(task):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            await asyncio.sleep(0.005)
+            active -= 1
+            return WorkerTaskExecutionResult(success=True, progress_percent=100)
+
+        dispatcher.execute_task = fake_execute
+        dispatcher.complete_task = AsyncMock()
+
+        outcomes = await dispatcher.process_tasks([make_task() for _ in range(4)])
+
+        assert outcomes == ["completed"] * 4
+        assert max_active == 1
+
+    @pytest.mark.asyncio
+    async def test_one_task_failure_does_not_cancel_others(self) -> None:
+        ctx, uow = make_context()
+        dispatcher, _ = make_dispatcher(ctx=ctx)
+
+        dispatcher.execute_task = AsyncMock(
+            return_value=WorkerTaskExecutionResult(success=True, progress_percent=100)
+        )
+
+        calls = 0
+
+        async def flaky_complete(task_id, result):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("сбой записи статуса в БД")
+
+        dispatcher.complete_task = flaky_complete
+
+        outcomes = await dispatcher.process_tasks([make_task() for _ in range(3)])
+
+        # Сбой одной задачи не отменяет остальные.
+        assert len(outcomes) == 3
+        assert outcomes.count("completed") == 2
+        assert outcomes.count("failed") == 1
+
+    @pytest.mark.asyncio
+    async def test_empty_batch_returns_empty(self) -> None:
+        dispatcher, _ = make_dispatcher()
+        assert await dispatcher.process_tasks([]) == []
+
+    @pytest.mark.asyncio
+    async def test_run_once_aggregates_mixed_batch(self) -> None:
+        ctx, uow = make_context()
+        dispatcher, _ = make_dispatcher(ctx=ctx)
+
+        cancelled = make_task(status=BackgroundTaskStatus.CANCELLED)
+        uow.tasks.lock_due_tasks = AsyncMock(
+            return_value=[make_task(), make_task(), cancelled]
+        )
+        dispatcher.execute_task = AsyncMock(
+            return_value=WorkerTaskExecutionResult(success=True, progress_percent=100)
+        )
+        dispatcher.complete_task = AsyncMock()
+
+        stats = await dispatcher.run_once()
+
+        assert stats.fetched_count == 3
+        assert stats.completed_count == 2
+        assert stats.skipped_count == 1
+        assert dispatcher.execute_task.await_count == 2  # отменённая не исполняется
+
+
+# ---------------------------------------------------------------------------
+# Экспоненциальный backoff повторных попыток
+# ---------------------------------------------------------------------------
+
+class TestRetryBackoff:
+    def test_first_retry_uses_base_delay(self) -> None:
+        dispatcher, _ = make_dispatcher()
+        # base=60, max=3600 (см. make_context).
+        assert dispatcher._compute_retry_delay_seconds(1) == 60
+
+    def test_delay_grows_exponentially(self) -> None:
+        dispatcher, _ = make_dispatcher()
+        assert dispatcher._compute_retry_delay_seconds(2) == 120
+        assert dispatcher._compute_retry_delay_seconds(3) == 240
+        assert dispatcher._compute_retry_delay_seconds(4) == 480
+
+    def test_delay_capped_at_max(self) -> None:
+        dispatcher, _ = make_dispatcher()
+        # 60 * 2^(10-1) = 30720 > 3600 → потолок.
+        assert dispatcher._compute_retry_delay_seconds(10) == 3600
+
+    def test_zero_attempts_uses_base(self) -> None:
+        dispatcher, _ = make_dispatcher()
+        assert dispatcher._compute_retry_delay_seconds(0) == 60
+
+    @pytest.mark.asyncio
+    async def test_release_schedules_with_backoff(self) -> None:
+        ctx, uow = make_context()
+        uow.tasks.get_required_by_id = AsyncMock(
+            return_value=MagicMock(attempts_count=3)
+        )
+        dispatcher, _ = make_dispatcher(ctx=ctx)
+
+        before = datetime.now(UTC)
+        await dispatcher.release_task_for_retry(
+            uuid.uuid4(),
+            WorkerTaskExecutionResult(success=False, retry=True),
+        )
+
+        values = uow.tasks.update.call_args[0][1]
+        assert values["status"] == BackgroundTaskStatus.PENDING
+        delay = (values["scheduled_at"] - before).total_seconds()
+        # attempts_count=3 → 60 * 2^2 = 240 c.
+        assert 235 <= delay <= 250

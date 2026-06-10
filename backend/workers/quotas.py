@@ -69,7 +69,7 @@ async def recalculate_user_quota_handler(
             )
 
         async with context.uow_factory() as uow:
-            users = await uow.users.list_active_users(offset=0, limit=limit)
+            users = await uow.users.list_active_users(limit=limit)
 
         users_processed = len(users)
 
