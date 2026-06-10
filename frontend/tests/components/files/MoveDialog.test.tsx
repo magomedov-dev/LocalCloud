@@ -7,7 +7,7 @@ import { nodesApi } from "@/api/nodes";
 import type { NodeListItem } from "@/types/nodes";
 
 vi.mock("@/api/nodes", () => ({
-  nodesApi: { list: vi.fn(), content: vi.fn(), move: vi.fn() },
+  nodesApi: { list: vi.fn(), content: vi.fn(), move: vi.fn(), copy: vi.fn() },
 }));
 
 vi.mock("@/lib/folderCache", () => ({
@@ -33,6 +33,7 @@ import { optimisticallyRemoveNodes } from "@/lib/folderCache";
 const mockList = vi.mocked(nodesApi.list);
 const mockContent = vi.mocked(nodesApi.content);
 const mockMove = vi.mocked(nodesApi.move);
+const mockCopy = vi.mocked(nodesApi.copy);
 
 function folder(id: string, name: string): NodeListItem {
   return {
@@ -73,6 +74,7 @@ describe("MoveDialog", () => {
     mockList.mockResolvedValue({ items: [folder("f1", "Документы"), folder("f2", "Картинки")] } as never);
     mockContent.mockResolvedValue({ items: [folder("f3", "Вложенная")] } as never);
     mockMove.mockResolvedValue({});
+    mockCopy.mockResolvedValue({});
   });
 
   it("показывает корневые папки, исключая перемещаемые элементы", async () => {
@@ -183,5 +185,57 @@ describe("MoveDialog", () => {
     const crumbs = screen.getByText("Файлы");
     await user.click(crumbs);
     expect(await screen.findByText("Документы")).toBeInTheDocument();
+  });
+
+  describe("режим copy", () => {
+    it("отображает заголовок и кнопку копирования", async () => {
+      renderDialog({ mode: "copy", nodeIds: ["a"], label: "файл.txt" });
+      expect(screen.getByText("Копировать «файл.txt»")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Копировать сюда" })).toBeInTheDocument();
+      await screen.findByText("Документы");
+    });
+
+    it("копирует в выбранную папку через nodesApi.copy без move", async () => {
+      const user = userEvent.setup();
+      renderDialog({ mode: "copy", nodeIds: ["a"], label: "файл.txt" });
+      await user.click(await screen.findByText("Документы"));
+      await screen.findByText("Вложенная");
+
+      await user.click(screen.getByRole("button", { name: "Копировать сюда" }));
+
+      await waitFor(() =>
+        expect(mockCopy).toHaveBeenCalledWith("a", { target_parent_id: "f1" }),
+      );
+      expect(mockMove).not.toHaveBeenCalled();
+      // Источник не удаляется оптимистично при копировании.
+      expect(optimisticallyRemoveNodes).not.toHaveBeenCalled();
+      await waitFor(() => expect(toast.success).toHaveBeenCalledWith("«файл.txt» скопировано"));
+    });
+
+    it("копирует в корень для нескольких элементов с toast и счётчиком", async () => {
+      const user = userEvent.setup();
+      renderDialog({ mode: "copy", nodeIds: ["a", "b"], label: "2 элемента" });
+      await screen.findByText("Документы");
+
+      await user.click(screen.getByRole("button", { name: "Копировать сюда" }));
+
+      await waitFor(() => expect(mockCopy).toHaveBeenCalledTimes(2));
+      expect(mockCopy).toHaveBeenCalledWith("a", { target_parent_id: null });
+      expect(mockCopy).toHaveBeenCalledWith("b", { target_parent_id: null });
+      await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Скопировано 2 элементов"));
+    });
+
+    it("при полной ошибке копирования показывает причину без отката", async () => {
+      mockCopy.mockRejectedValue(new Error("fail"));
+      const user = userEvent.setup();
+      renderDialog({ mode: "copy", nodeIds: ["a"], label: "файл.txt" });
+      await screen.findByText("Документы");
+
+      await user.click(screen.getByRole("button", { name: "Копировать сюда" }));
+
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      expect(optimisticallyRemoveNodes).not.toHaveBeenCalled();
+      expect(toast.success).not.toHaveBeenCalled();
+    });
   });
 });

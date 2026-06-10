@@ -19,6 +19,7 @@
 export type FileOperation =
   | "upload"
   | "move"
+  | "copy"
   | "rename"
   | "createFolder"
   | "delete"
@@ -144,6 +145,10 @@ function genericMessage(operation: FileOperation, quoted?: string): string {
       return quoted
         ? `Не удалось переместить ${quoted}. Попробуйте ещё раз.`
         : "Не удалось переместить. Попробуйте ещё раз.";
+    case "copy":
+      return quoted
+        ? `Не удалось скопировать ${quoted}. Попробуйте ещё раз.`
+        : "Не удалось скопировать. Попробуйте ещё раз.";
     case "rename":
       return "Не удалось переименовать. Попробуйте ещё раз.";
     case "createFolder":
@@ -172,6 +177,10 @@ function conflictMessage(operation: FileOperation, quoted?: string): string {
       return quoted
         ? `В папке назначения уже есть элемент с именем ${quoted}.`
         : "В папке назначения уже есть элементы с такими именами.";
+    case "copy":
+      // При копировании backend сам переименовывает копию, поэтому конфликт
+      // имён маловероятен — используем общую формулировку на всякий случай.
+      return "Элемент с таким именем уже существует. Будет создана копия.";
     case "rename":
       return quoted
         ? `Имя ${quoted} уже занято в этой папке. Выберите другое.`
@@ -197,6 +206,7 @@ function notFoundMessage(operation: FileOperation): string {
     case "upload":
       return "Папка для загрузки не найдена — возможно, её удалили. Обновите страницу.";
     case "move":
+    case "copy":
       return "Папка назначения не найдена — возможно, её удалили. Обновите страницу.";
     case "createFolder":
       return "Папка не найдена — возможно, её удалили. Обновите страницу.";
@@ -219,6 +229,8 @@ function permissionMessage(operation: FileOperation): string {
       return "Недостаточно прав, чтобы загружать файлы в эту папку.";
     case "move":
       return "Недостаточно прав, чтобы переместить элемент сюда.";
+    case "copy":
+      return "Недостаточно прав, чтобы скопировать сюда.";
     case "rename":
       return "Недостаточно прав, чтобы переименовать этот элемент.";
     case "createFolder":
@@ -240,6 +252,9 @@ function quotaMessage(operation: FileOperation, quoted?: string): string {
     return quoted
       ? `Недостаточно места, чтобы загрузить ${quoted}. Освободите место в хранилище и попробуйте снова.`
       : "Недостаточно места в хранилище. Освободите место и попробуйте снова.";
+  }
+  if (operation === "copy") {
+    return "Недостаточно места для копирования. Освободите место и попробуйте снова.";
   }
   return "Превышен лимит хранилища. Освободите место и попробуйте снова.";
 }

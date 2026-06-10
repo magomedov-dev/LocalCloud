@@ -173,6 +173,7 @@ describe("friendlyError", () => {
     ["upload", /папк/i],
     ["createFolder", /папк/i],
     ["restore", /исходн/i],
+    ["copy", /папк/i],
     ["rename", /не найден/i],
     ["delete", /не найден/i],
     ["generic", /не найден/i],
@@ -185,6 +186,7 @@ describe("friendlyError", () => {
   it.each([
     ["upload"],
     ["move"],
+    ["copy"],
     ["rename"],
     ["createFolder"],
     ["delete"],
@@ -197,10 +199,11 @@ describe("friendlyError", () => {
     expect(msg).toMatch(/прав/i);
   });
 
-  // Конфликт для delete/download/generic операций.
+  // Конфликт для delete/download/copy/generic операций.
   it.each([
     ["delete"],
     ["download"],
+    ["copy"],
     ["generic"],
   ] as const)("конфликт для операции %s", (operation) => {
     const msg = friendlyError(axiosError(409, { error: "conflict_error" }), {
@@ -213,6 +216,7 @@ describe("friendlyError", () => {
   it.each([
     ["upload", /загруз/i],
     ["move", /перемест/i],
+    ["copy", /скопировать/i],
     ["createFolder", /папк/i],
     ["delete", /удал/i],
     ["restore", /восстанов/i],
@@ -227,5 +231,12 @@ describe("friendlyError", () => {
       operation: "move",
     });
     expect(msg).toMatch(/лимит хранилища/i);
+  });
+
+  it("квота при копировании → нехватка места для копирования", () => {
+    const msg = friendlyError(axiosError(413, { error: "quota_exceeded" }), {
+      operation: "copy",
+    });
+    expect(msg).toMatch(/недостаточно места для копирования/i);
   });
 });

@@ -1,16 +1,36 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "@tests/utils";
 import { ItemContextMenu } from "@/components/files/ItemContextMenu";
+import { nodesApi } from "@/api/nodes";
+import { toast } from "sonner";
 import type { NodeListItem } from "@/types/nodes";
+
+vi.mock("@/api/nodes", () => ({
+  nodesApi: { copy: vi.fn() },
+}));
+
+vi.mock("sonner", () => ({
+  toast: Object.assign(vi.fn(), {
+    success: vi.fn(),
+    error: vi.fn(),
+    loading: vi.fn(),
+    dismiss: vi.fn(),
+  }),
+}));
+
+vi.mock("@/lib/errors", () => ({
+  friendlyError: vi.fn(() => "Ошибка копирования"),
+}));
 
 vi.mock("@/components/files/RenameDialog", () => ({
   RenameDialog: ({ open }: { open: boolean }) =>
     open ? <div data-testid="rename-dialog" /> : null,
 }));
 vi.mock("@/components/files/MoveDialog", () => ({
-  MoveDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="move-dialog" /> : null),
+  MoveDialog: ({ open, mode }: { open: boolean; mode?: "move" | "copy" }) =>
+    open ? <div data-testid={mode === "copy" ? "copy-dialog" : "move-dialog"} /> : null,
 }));
 vi.mock("@/components/files/ShareDialog", () => ({
   ShareDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="share-dialog" /> : null),
@@ -166,6 +186,32 @@ describe("ItemContextMenu", () => {
     user = await openMenu();
     await user.click(screen.getByText("Удалить"));
     expect(screen.getByTestId("delete-dialog")).toBeInTheDocument();
+  });
+
+  it("дублирует элемент: copy с текущей папкой без имени и toast success", async () => {
+    vi.mocked(nodesApi.copy).mockResolvedValueOnce({});
+    renderMenu(file({ parent_id: "parent-1" }));
+    const user = await openMenu();
+    await user.click(screen.getByText("Дублировать"));
+    await waitFor(() =>
+      expect(nodesApi.copy).toHaveBeenCalledWith("f1", { target_parent_id: "parent-1" }),
+    );
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Дублировано"));
+  });
+
+  it("показывает ошибку, если дублирование не удалось", async () => {
+    vi.mocked(nodesApi.copy).mockRejectedValueOnce(new Error("fail"));
+    renderMenu(file());
+    const user = await openMenu();
+    await user.click(screen.getByText("Дублировать"));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Ошибка копирования"));
+  });
+
+  it("открывает диалог копирования в режиме copy", async () => {
+    renderMenu(file());
+    const user = await openMenu();
+    await user.click(screen.getByText("Копировать в…"));
+    expect(screen.getByTestId("copy-dialog")).toBeInTheDocument();
   });
 
   it("открывает диалог цвета папки", async () => {

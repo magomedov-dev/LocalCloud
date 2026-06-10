@@ -136,6 +136,15 @@ describe("nodesApi", () => {
     expect(result).toEqual(expected);
   });
 
+  it("copy posts copy data", async () => {
+    const expected = { ok: true };
+    mockApi.post.mockResolvedValueOnce({ data: expected });
+    const data = { target_parent_id: "p2", new_name: null };
+    const result = await nodesApi.copy("n1", data);
+    expect(mockApi.post).toHaveBeenCalledWith("/nodes/n1/copy", data);
+    expect(result).toEqual(expected);
+  });
+
   it("streamUrl builds the stream URL", () => {
     expect(nodesApi.streamUrl("n1")).toBe("/api/v1/nodes/n1/stream");
   });

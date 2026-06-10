@@ -67,6 +67,7 @@ from schemas.health import (
 from schemas.nodes import (
     NodeBase,
     NodeBreadcrumbItem,
+    NodeCopyRequest,
     NodeCreate,
     NodeListItem,
     NodeMoveRequest,
@@ -226,6 +227,7 @@ __all__ = [
     "NodeUpdate",
     "NodeRenameRequest",
     "NodeMoveRequest",
+    "NodeCopyRequest",
     "NodeRead",
     "NodeListItem",
     "NodeTreeItem",

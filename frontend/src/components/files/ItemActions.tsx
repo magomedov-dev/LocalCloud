@@ -1,5 +1,9 @@
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import {
+  Copy,
+  CopyPlus,
   Download,
   Eye,
   FolderInput,
@@ -20,6 +24,8 @@ import { MoveDialog } from "./MoveDialog";
 import { useFolderDownload } from "@/hooks/useFolderDownload";
 import { useInfoPanel } from "@/contexts/infoPanel-context";
 import { downloadNodeFile } from "@/lib/download";
+import { nodesApi } from "@/api/nodes";
+import { friendlyError } from "@/lib/errors";
 import type { NodeListItem } from "@/types/nodes";
 import { Button } from "@/components/ui/button";
 import {
@@ -67,6 +73,7 @@ export function ItemActions({
   onOpenChange,
   onPreview,
 }: Props) {
+  const queryClient = useQueryClient();
   const { downloadFolder, downloading } = useFolderDownload();
   const { openInfo } = useInfoPanel();
   const isFolderDownloading = downloading === item.id;
@@ -75,9 +82,11 @@ export function ItemActions({
   const [menuOpen, setMenuOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
+  const [copyOpen, setCopyOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [colorOpen, setColorOpen] = useState(false);
+  const [duplicating, setDuplicating] = useState(false);
 
   /**
    * Синхронизирует состояние dropdown-меню
@@ -86,6 +95,26 @@ export function ItemActions({
   function handleMenuOpenChange(open: boolean) {
     setMenuOpen(open);
     onOpenChange?.(open);
+  }
+
+  /**
+   * Дублирует элемент в его текущей папке.
+   *
+   * Имя копии не передаётся — backend сам добавит суффикс «(копия)».
+   * После успеха обновляет кеш текущей папки и квоту.
+   */
+  async function handleDuplicate() {
+    setDuplicating(true);
+    try {
+      await nodesApi.copy(item.id, { target_parent_id: item.parent_id });
+      queryClient.invalidateQueries({ queryKey: folderQueryKey });
+      queryClient.invalidateQueries({ queryKey: ["quota", "me"] });
+      toast.success("Дублировано");
+    } catch (err) {
+      toast.error(friendlyError(err, { operation: "copy", name: item.name }));
+    } finally {
+      setDuplicating(false);
+    }
   }
 
   return (
@@ -136,6 +165,18 @@ export function ItemActions({
             <FolderInput className="mr-2 h-4 w-4" />
             Переместить
           </DropdownMenuItem>
+          <DropdownMenuItem disabled={duplicating} onClick={handleDuplicate}>
+            {duplicating ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <CopyPlus className="mr-2 h-4 w-4" />
+            )}
+            Дублировать
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => setCopyOpen(true)}>
+            <Copy className="mr-2 h-4 w-4" />
+            Копировать в…
+          </DropdownMenuItem>
           {item.node_type === "folder" && (
             <DropdownMenuItem onClick={() => setColorOpen(true)}>
               <Palette className="mr-2 h-4 w-4" />
@@ -171,6 +212,14 @@ export function ItemActions({
       <MoveDialog
         open={moveOpen}
         onOpenChange={setMoveOpen}
+        nodeIds={[item.id]}
+        label={item.name}
+        folderQueryKey={folderQueryKey}
+      />
+      <MoveDialog
+        mode="copy"
+        open={copyOpen}
+        onOpenChange={setCopyOpen}
         nodeIds={[item.id]}
         label={item.name}
         folderQueryKey={folderQueryKey}

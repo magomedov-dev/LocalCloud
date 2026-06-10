@@ -32,6 +32,7 @@ from services.tasks import get_tasks_service
 from services.trash import get_trash_service
 from services.uploads import get_uploads_service
 from services.users import get_users_service
+from storage import StorageService
 from storage.capacity import CapacityProvider
 
 
@@ -116,17 +117,38 @@ def get_quotas_service_dependency(request: Request) -> QuotasService:
     )
 
 
-def get_nodes_service_dependency() -> NodesService:
+def _storage_service_from_request(request: Request) -> StorageService | None:
+    """Возвращает сервис хранилища из состояния приложения.
+
+    Args:
+        request: Текущий HTTP-запрос FastAPI.
+
+    Returns:
+        Сервис хранилища из ``app.state`` или ``None``, если он не сконструирован
+        (тогда сервис создаст его самостоятельно из настроек).
+    """
+
+    storage_service = getattr(request.app.state, "storage_service", None)
+    return storage_service if isinstance(storage_service, StorageService) else None
+
+
+def get_nodes_service_dependency(request: Request) -> NodesService:
     """Возвращает сервис узлов файловой структуры.
 
-    Получает экземпляр `NodesService` через фабричную функцию сервисного слоя.
-    Используется как зависимость FastAPI в эндпоинтах работы с узлами.
+    Получает экземпляр `NodesService` через фабричную функцию сервисного слоя,
+    передавая сервис хранилища из состояния приложения для операций копирования
+    объектов. Используется как зависимость FastAPI в эндпоинтах работы с узлами.
+
+    Args:
+        request: Текущий HTTP-запрос FastAPI, содержащий ссылку на приложение.
 
     Returns:
         Сервис узлов файловой структуры.
     """
 
-    return get_nodes_service()
+    return get_nodes_service(
+        storage_service=_storage_service_from_request(request),
+    )
 
 
 def get_folders_service_dependency() -> FoldersService:

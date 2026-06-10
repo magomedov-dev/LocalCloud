@@ -28,6 +28,11 @@ interface StackEntry {
 }
 
 /**
+ * Режим работы диалога: перемещение или копирование элементов.
+ */
+type DialogMode = "move" | "copy";
+
+/**
  * Свойства диалога перемещения.
  *
  * `open` определяет, открыт ли диалог.
@@ -35,7 +40,8 @@ interface StackEntry {
  * `nodeIds` — идентификаторы перемещаемых элементов.
  * `label` — текстовая подпись перемещаемого элемента или группы элементов.
  * `folderQueryKey` используется для обновления кеша исходной папки.
- * `onMoved` вызывается после успешного перемещения.
+ * `mode` — `move` (по умолчанию) перемещает элементы, `copy` копирует их.
+ * `onMoved` вызывается после успешного перемещения или копирования.
  */
 interface Props {
   open: boolean;
@@ -43,19 +49,31 @@ interface Props {
   nodeIds: string[];
   label: string;
   folderQueryKey: unknown[];
+  mode?: DialogMode;
   onMoved?: () => void;
 }
 
 /**
- * Диалог выбора папки для перемещения элементов.
+ * Диалог выбора папки для перемещения или копирования элементов.
  *
  * Позволяет перейти по дереву папок, выбрать текущую папку как целевую
- * и переместить один или несколько элементов.
+ * и переместить или скопировать один или несколько элементов.
  *
  * При перемещении элементы оптимистично удаляются из кеша исходной папки,
- * а при ошибке состояние откатывается.
+ * а при ошибке состояние откатывается. При копировании исходная папка не
+ * меняется, поэтому оптимистичного удаления нет — обновляются лишь целевая
+ * папка и квота.
  */
-export function MoveDialog({ open, onOpenChange, nodeIds, label, folderQueryKey, onMoved }: Props) {
+export function MoveDialog({
+  open,
+  onOpenChange,
+  nodeIds,
+  label,
+  folderQueryKey,
+  mode = "move",
+  onMoved,
+}: Props) {
+  const isCopy = mode === "copy";
   const queryClient = useQueryClient();
   const [stack, setStack] = useState<StackEntry[]>([{ id: null, name: "Файлы" }]);
   const [moving, setMoving] = useState(false);
@@ -106,6 +124,14 @@ export function MoveDialog({ open, onOpenChange, nodeIds, label, folderQueryKey,
     setStack((prev) => prev.slice(0, index + 1));
   }
 
+  const invalidateDestination = () => {
+    if (currentFolderId) {
+      queryClient.invalidateQueries({ queryKey: ["nodes", currentFolderId, "content"] });
+    } else {
+      queryClient.invalidateQueries({ queryKey: ["nodes", "root"] });
+    }
+  };
+
   /**
    * Перемещает выбранные элементы в текущую папку.
    *
@@ -120,14 +146,6 @@ export function MoveDialog({ open, onOpenChange, nodeIds, label, folderQueryKey,
 
     const rollback = optimisticallyRemoveNodes(queryClient, folderQueryKey, nodeIds);
     onOpenChange(false);
-
-    const invalidateDestination = () => {
-      if (currentFolderId) {
-        queryClient.invalidateQueries({ queryKey: ["nodes", currentFolderId, "content"] });
-      } else {
-        queryClient.invalidateQueries({ queryKey: ["nodes", "root"] });
-      }
-    };
 
     try {
       const results = await Promise.allSettled(
@@ -175,7 +193,66 @@ export function MoveDialog({ open, onOpenChange, nodeIds, label, folderQueryKey,
     }
   }
 
-  const title = nodeIds.length === 1 ? `Переместить «${label}»` : `Переместить ${label}`;
+  /**
+   * Копирует выбранные элементы в текущую папку.
+   *
+   * В отличие от перемещения, исходная папка не меняется, поэтому
+   * оптимистичного удаления нет. После завершения обновляются целевая папка,
+   * кеш исходной папки (для актуализации при копировании «на месте») и квота.
+   */
+  async function handleCopy() {
+    setMoving(true);
+    onOpenChange(false);
+
+    try {
+      const results = await Promise.allSettled(
+        nodeIds.map((id) => nodesApi.copy(id, { target_parent_id: currentFolderId })),
+      );
+      const rejected = results.filter(
+        (r): r is PromiseRejectedResult => r.status === "rejected",
+      );
+      const failed = rejected.length;
+
+      if (failed === nodeIds.length) {
+        toast.error(
+          friendlyError(rejected[0]?.reason, {
+            operation: "copy",
+            name: nodeIds.length === 1 ? label : undefined,
+          }),
+        );
+        return;
+      }
+
+      if (failed > 0) {
+        toast.error(`Не удалось скопировать ${failed} из ${nodeIds.length} элементов`);
+      } else if (nodeIds.length === 1) {
+        toast.success(`«${label}» скопировано`);
+      } else {
+        toast.success(`Скопировано ${nodeIds.length} элементов`);
+      }
+      queryClient.invalidateQueries({ queryKey: folderQueryKey });
+      invalidateDestination();
+      queryClient.invalidateQueries({ queryKey: ["quota", "me"] });
+      onMoved?.();
+    } catch (err) {
+      toast.error(
+        friendlyError(err, {
+          operation: "copy",
+          name: nodeIds.length === 1 ? label : undefined,
+        }),
+      );
+    } finally {
+      setMoving(false);
+    }
+  }
+
+  const title = isCopy
+    ? nodeIds.length === 1
+      ? `Копировать «${label}»`
+      : `Копировать ${label}`
+    : nodeIds.length === 1
+      ? `Переместить «${label}»`
+      : `Переместить ${label}`;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -235,9 +312,9 @@ export function MoveDialog({ open, onOpenChange, nodeIds, label, folderQueryKey,
           <Button variant="outline" disabled={moving} onClick={() => onOpenChange(false)}>
             Отмена
           </Button>
-          <Button disabled={moving} onClick={handleMove}>
+          <Button disabled={moving} onClick={isCopy ? handleCopy : handleMove}>
             {moving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Переместить сюда
+            {isCopy ? "Копировать сюда" : "Переместить сюда"}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -14,6 +14,7 @@ from schemas.files import FileDownloadRequest, FileDownloadResponse
 from schemas.folders import FolderContentRead
 from schemas.nodes import (
     NodeBreadcrumbItem,
+    NodeCopyRequest,
     NodeListItem,
     NodeMoveRequest,
     NodeOperationResponse,
@@ -327,6 +328,50 @@ async def move_node(
     """
 
     return await nodes_service.move_node(
+        node_id,
+        data,
+        actor_id=current_user.id,
+    )
+
+
+@router.post(
+    "/{node_id}/copy",
+    response_model=NodeOperationResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def copy_node(
+    data: NodeCopyRequest,
+    current_user: CurrentActiveUserDependency,
+    _: None = RequireReadNodeDependency,
+    node_id: UUID = Path(...),
+    nodes_service: NodesService = Depends(get_nodes_service_dependency),
+) -> NodeOperationResponse:
+    """Копирует (дублирует) узел файловой системы.
+
+    Создаёт независимую копию файла или папки от имени текущего пользователя.
+    Папка копируется рекурсивно вместе со всем содержимым, а файлы физически
+    дублируются в объектном хранилище. При необходимости копия может быть
+    помещена в другую папку и/или получить новое имя.
+
+    Args:
+        data: Данные копирования, включая целевую папку и необязательное новое
+            имя.
+        current_user: Текущий активный пользователь, выполняющий копирование.
+        _: Зависимость проверки права чтения узла. Используется только для
+            авторизации и не применяется внутри функции напрямую.
+        node_id: Уникальный идентификатор копируемого узла.
+        nodes_service: Сервис узлов, выполняющий копирование узла.
+
+    Returns:
+        Результат операции копирования узла с корневым узлом созданной копии.
+
+    Raises:
+        HTTPException: Если пользователь не аутентифицирован, узел или целевая
+            папка не найдены, у пользователя нет нужных прав либо превышена
+            квота.
+    """
+
+    return await nodes_service.copy_node(
         node_id,
         data,
         actor_id=current_user.id,
