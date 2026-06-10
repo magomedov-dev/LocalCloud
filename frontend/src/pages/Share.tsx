@@ -1,11 +1,13 @@
 import { useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { useState, useEffect, useRef } from "react";
-import { Download, FileText, Folder, Loader2, AlertTriangle, ImageIcon } from "lucide-react";
+import { Download, FileText, Folder, Loader2, AlertTriangle, ImageIcon, Lock } from "lucide-react";
 import { toast } from "sonner";
 import { publicLinksApi } from "@/api/public-links";
 import { downloadBlobFromUrl } from "@/lib/download";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatBytes } from "@/hooks/useQuota";
 import type { ArchiveTaskStatus } from "@/types/public-links";
@@ -43,11 +45,29 @@ export function SharePage() {
   const isFolder = node?.node_type === "folder";
   const isImage = !isFolder && isImageFile(node?.name, node?.file_mime_type);
 
+  // Пароль публичной ссылки: вводится на шлюзе и подтверждается через /access.
+  // До разблокировки скачивание не запускаем, иначе сервер вернёт 403.
+  const [password, setPassword] = useState("");
+  const [unlockedPassword, setUnlockedPassword] = useState<string | null>(null);
+  const needsUnlock = !!link && link.has_password && unlockedPassword === null;
+
+  const access = useMutation({
+    mutationFn: (pwd: string) => publicLinksApi.validateAccess(token!, pwd),
+    onSuccess: (res, pwd) => {
+      if (res.allowed) {
+        setUnlockedPassword(pwd);
+      } else {
+        toast.error(res.message ?? "Неверный пароль");
+      }
+    },
+    onError: () => toast.error("Не удалось проверить пароль"),
+  });
+
   // Pre-fetch the presigned URL — used for both image preview and download.
   const { data: fileData, isLoading: fileLoading } = useQuery({
-    queryKey: ["share-file", token],
-    queryFn: () => publicLinksApi.download(token!),
-    enabled: !!token && !!link && link.status === "active" && !isFolder,
+    queryKey: ["share-file", token, unlockedPassword],
+    queryFn: () => publicLinksApi.download(token!, unlockedPassword ?? undefined),
+    enabled: !!token && !!link && link.status === "active" && !isFolder && !needsUnlock,
     staleTime: 3 * 60 * 1000,
   });
 
@@ -69,7 +89,7 @@ export function SharePage() {
       return;
     }
     publicLinksApi
-      .download(token!)
+      .download(token!, unlockedPassword ?? undefined)
       .then((r) => downloadBlobFromUrl(r.presigned_url, r.filename ?? "download"))
       .catch(() => toast.error("Не удалось скачать файл"));
   }
@@ -81,7 +101,7 @@ export function SharePage() {
     stopPolling();
     setFolderArchiving(true);
     try {
-      const resp = await publicLinksApi.startFolderArchive(token!);
+      const resp = await publicLinksApi.startFolderArchive(token!, unlockedPassword ?? undefined);
       setFolderStatus(resp.status);
       if (resp.status === "completed" && resp.presigned_url) {
         downloadBlobFromUrl(resp.presigned_url, resp.filename ?? "archive.zip");
@@ -152,6 +172,62 @@ export function SharePage() {
             </p>
           </div>
         </div>
+      </div>
+    );
+  }
+
+  // ── Требуется пароль ───────────────────────────────────────────────────────
+
+  if (needsUnlock) {
+    return (
+      <div className="bg-muted/20 flex min-h-screen items-center justify-center p-4">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            const pwd = password.trim();
+            if (pwd) access.mutate(pwd);
+          }}
+          className="bg-card flex w-full max-w-sm flex-col items-center gap-4 rounded-2xl border p-8 text-center shadow-lg"
+        >
+          <div className="bg-muted flex h-14 w-14 items-center justify-center rounded-full">
+            <Lock className="text-muted-foreground h-7 w-7" />
+          </div>
+          <div>
+            <h1 className="text-lg font-semibold">Ссылка защищена паролем</h1>
+            <p className="text-muted-foreground mt-1 text-sm">
+              Введите пароль, чтобы открыть {isFolder ? "папку" : "файл"}.
+            </p>
+          </div>
+          <div className="flex w-full flex-col gap-1.5 text-left">
+            <Label htmlFor="access-password" className="sr-only">
+              Пароль
+            </Label>
+            <Input
+              id="access-password"
+              type="password"
+              autoComplete="current-password"
+              placeholder="Пароль"
+              maxLength={128}
+              autoFocus
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </div>
+          <Button
+            type="submit"
+            className="w-full"
+            disabled={access.isPending || !password.trim()}
+          >
+            {access.isPending ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Проверка…
+              </>
+            ) : (
+              "Открыть"
+            )}
+          </Button>
+        </form>
       </div>
     );
   }

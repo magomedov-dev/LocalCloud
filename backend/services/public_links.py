@@ -418,29 +418,35 @@ class PublicLinksService:
                     operation=operation,
                 )
 
-                password_hash: str | None | object = _UNSET
+                # В репозиторий передаём только реально изменяемые поля.
+                # Неустановленные nullable-поля НЕ пробрасываем: у репозитория
+                # свой sentinel _UNSET, и передача чужого sentinel ломала
+                # частичное обновление (например, только пароль) в
+                # _validate_max_downloads. Опуская такие поля, мы позволяем
+                # репозиторию применить собственное значение «не изменять».
+                update_kwargs: dict[str, Any] = {
+                    "permission_type": data.permission_type,
+                    "status": data.status,
+                    "is_active": data.is_active,
+                }
+
                 if data.password is not None:
-                    password_hash = hash_password(data.password)
+                    update_kwargs["password_hash"] = hash_password(data.password)
                 elif data.clear_password:
-                    password_hash = None
+                    update_kwargs["password_hash"] = None
+
+                if "expires_at" in data.model_fields_set:
+                    update_kwargs["expires_at"] = data.expires_at
+                if "max_downloads" in data.model_fields_set:
+                    update_kwargs["max_downloads"] = data.max_downloads
+                if "description" in data.model_fields_set:
+                    update_kwargs["description"] = data.description
 
                 updated = await uow.links.update_link(
                     link,
-                    permission_type=data.permission_type,
-                    status=data.status,
-                    expires_at=data.expires_at
-                    if "expires_at" in data.model_fields_set
-                    else _UNSET,
-                    max_downloads=data.max_downloads
-                    if "max_downloads" in data.model_fields_set
-                    else _UNSET,
-                    description=data.description
-                    if "description" in data.model_fields_set
-                    else _UNSET,
-                    is_active=data.is_active,
-                    password_hash=password_hash,
                     flush=True,
                     refresh=True,
+                    **update_kwargs,
                 )
                 snapshot = _link_snapshot(updated)
                 await uow.commit()
@@ -1116,9 +1122,6 @@ class PublicLinksService:
                 "Не удалось записать событие аудита безопасности для сбоя пароля по общедоступной ссылке.",
                 exc_info=True,
             )
-
-
-_UNSET: object = object()
 
 
 def _ensure_supported_node_type(node: FileSystemNode, *, operation: str) -> None:
