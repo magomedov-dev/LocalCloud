@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Trash2, RotateCcw, X } from "lucide-react";
 import { toast } from "sonner";
 import { trashApi } from "@/api/trash";
+import { friendlyError } from "@/lib/errors";
 import { useBreadcrumb } from "@/contexts/breadcrumb-context";
 import { FileIcon } from "@/components/files/FileIcon";
 import { Button } from "@/components/ui/button";
@@ -48,7 +49,8 @@ function TrashRow({ item, selected, isBatchRunning, onToggle }: RowProps) {
       queryClient.invalidateQueries({ queryKey: ["nodes"] });
       toast.success("Восстановлено");
     },
-    onError: () => toast.error("Не удалось восстановить"),
+    onError: (err) =>
+      toast.error(friendlyError(err, { operation: "restore", name: item.node?.name })),
   });
 
   const purge = useMutation({
@@ -59,7 +61,8 @@ function TrashRow({ item, selected, isBatchRunning, onToggle }: RowProps) {
       toast.success("Удалено навсегда");
       setPurgeOpen(false);
     },
-    onError: () => toast.error("Не удалось удалить"),
+    onError: (err) =>
+      toast.error(friendlyError(err, { operation: "delete", name: item.node?.name })),
   });
 
   const node = item.node;
@@ -196,13 +199,15 @@ export function TrashPage() {
     setBulkPurging(true);
 
     let failed = 0;
+    let firstError: unknown;
     await Promise.all(
       ids.map(async (id) => {
         try {
           await trashApi.purge(id);
           setDeletedIds((prev) => new Set([...prev, id]));
-        } catch {
+        } catch (err) {
           failed++;
+          firstError ??= err;
         }
       }),
     );
@@ -210,7 +215,9 @@ export function TrashPage() {
     setBulkPurging(false);
     queryClient.invalidateQueries({ queryKey: QUERY_KEY });
     queryClient.invalidateQueries({ queryKey: ["quota", "me"] });
-    if (failed > 0) {
+    if (failed === ids.length) {
+      toast.error(friendlyError(firstError, { operation: "delete" }));
+    } else if (failed > 0) {
       toast.error(`Не удалось удалить ${failed} элем.`);
     } else {
       toast.success("Удалено навсегда");
@@ -227,13 +234,15 @@ export function TrashPage() {
     setBulkRestoring(true);
 
     let failed = 0;
+    let firstError: unknown;
     await Promise.all(
       ids.map(async (id) => {
         try {
           await trashApi.restore(id);
           setDeletedIds((prev) => new Set([...prev, id]));
-        } catch {
+        } catch (err) {
           failed++;
+          firstError ??= err;
         }
       }),
     );
@@ -241,7 +250,9 @@ export function TrashPage() {
     setBulkRestoring(false);
     queryClient.invalidateQueries({ queryKey: QUERY_KEY });
     queryClient.invalidateQueries({ queryKey: ["nodes"] });
-    if (failed > 0) {
+    if (failed === ids.length) {
+      toast.error(friendlyError(firstError, { operation: "restore" }));
+    } else if (failed > 0) {
       toast.error(`Не удалось восстановить ${failed} элем.`);
     } else {
       toast.success("Файлы восстановлены");

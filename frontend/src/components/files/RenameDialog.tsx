@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { nodesApi } from "@/api/nodes";
 import { optimisticallyPatchNode } from "@/lib/folderCache";
+import { friendlyError } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -67,10 +68,11 @@ export function RenameDialog({ open, onOpenChange, nodeId, currentName, folderQu
       setError("");
       onOpenChange(false);
     },
-    onError: (_err, _vars, ctx) => {
+    onError: (err, _vars, ctx) => {
       ctx?.rollback();
-      setError("Не удалось переименовать. Попробуйте ещё раз.");
-      toast.error("Не удалось переименовать");
+      const msg = friendlyError(err, { operation: "rename", name: name.trim() });
+      setError(msg);
+      toast.error(msg);
     },
   });
 
