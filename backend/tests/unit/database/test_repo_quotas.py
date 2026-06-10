@@ -1519,3 +1519,59 @@ def test_validate_storage_used_violation():
         repo._validate_storage_used(
             storage_used_bytes=2000, storage_limit_bytes=1000,
         )
+
+
+# ---------------------------------------------------------------------------
+# Тесты: контроль ёмкости (advisory lock + сумма аллокаций)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_total_allocated_storage_bytes_returns_sum():
+    repo, session, result = make_repo()
+    result.scalar_one = MagicMock(return_value=42_000)
+
+    total = await repo.total_allocated_storage_bytes()
+
+    assert total == 42_000
+    session.execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_total_allocated_storage_bytes_zero_when_empty():
+    repo, session, result = make_repo()
+    result.scalar_one = MagicMock(return_value=0)
+
+    assert await repo.total_allocated_storage_bytes(
+        exclude_user_id=uuid.uuid4(),
+    ) == 0
+
+
+@pytest.mark.asyncio
+async def test_total_allocated_storage_bytes_wraps_sql_error():
+    repo, session, result = make_repo()
+    session.execute = AsyncMock(side_effect=SQLAlchemyError("boom"))
+
+    with pytest.raises(RepositoryError):
+        await repo.total_allocated_storage_bytes()
+
+
+@pytest.mark.asyncio
+async def test_acquire_capacity_lock_executes_advisory_lock():
+    repo, session, result = make_repo()
+
+    await repo.acquire_capacity_lock()
+
+    session.execute.assert_awaited_once()
+    args, _ = session.execute.call_args
+    # Первым аргументом идёт текстовый SQL pg_advisory_xact_lock.
+    assert "pg_advisory_xact_lock" in str(args[0])
+
+
+@pytest.mark.asyncio
+async def test_acquire_capacity_lock_wraps_sql_error():
+    repo, session, result = make_repo()
+    session.execute = AsyncMock(side_effect=SQLAlchemyError("boom"))
+
+    with pytest.raises(RepositoryError):
+        await repo.acquire_capacity_lock()

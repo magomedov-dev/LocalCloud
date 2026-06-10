@@ -20,6 +20,7 @@ from database import (
 )
 from services import get_health_service
 from storage import StorageService, get_storage_service, shutdown_storage_executor
+from storage.capacity import get_capacity_provider
 
 logger = get_logger("app.lifecycle")
 
@@ -64,7 +65,13 @@ async def startup_backend(app: FastAPI) -> None:
         storage_service = get_storage_service(settings=settings.storage)
         await storage_service.ensure_buckets_ready(create_missing=True)
 
+        # Определяем пул хранилища и проверяем конфигурацию ёмкости. Падаем на
+        # старте, если задано больше реального диска или пул нельзя определить.
+        capacity_provider = get_capacity_provider(settings.storage)
+        await capacity_provider.validate_on_startup()
+
         app.state.storage_service = storage_service
+        app.state.capacity_provider = capacity_provider
         app.state.health_service = get_health_service(
             settings=settings,
             storage_service=storage_service,

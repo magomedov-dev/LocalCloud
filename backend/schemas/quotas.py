@@ -252,6 +252,66 @@ class UserQuotaRead(UserQuotaBase):
     )
 
 
+class ServerCapacityRead(BaseSchema):
+    """Состояние общей ёмкости хранилища сервера.
+
+    Описывает пул хранилища, суммарно выделенный объём и физические показатели
+    диска. Используется административным эндпоинтом для контроля распределения
+    места и обнаружения переподписки.
+
+    Attributes:
+        pool_bytes: Общий пул хранилища, доступный для выдачи в квоты, в байтах.
+        allocated_bytes: Суммарно выделенный объём по всем активным
+            пользователям в байтах.
+        available_bytes: Свободный остаток пула для новых выдач в байтах.
+        physical_total_bytes: Физическая ёмкость диска по данным MinIO в байтах
+            (``None``, если MinIO admin API недоступен).
+        physical_available_bytes: Свободное место на диске по данным MinIO в
+            байтах (``None``, если недоступно).
+        source: Источник значения пула: ``config`` или ``auto``.
+        is_overcommitted: Признак переподписки (выделено больше пула).
+        minio_reachable: Доступен ли MinIO admin API.
+    """
+
+    pool_bytes: int = Field(
+        ...,
+        ge=0,
+        description="Общий пул хранилища для выдачи в квоты, в байтах.",
+    )
+    allocated_bytes: int = Field(
+        ...,
+        ge=0,
+        description="Суммарно выделенный объём по всем пользователям в байтах.",
+    )
+    available_bytes: int = Field(
+        ...,
+        ge=0,
+        description="Свободный остаток пула для новых выдач в байтах.",
+    )
+    physical_total_bytes: int | None = Field(
+        default=None,
+        ge=0,
+        description="Физическая ёмкость диска по данным MinIO в байтах.",
+    )
+    physical_available_bytes: int | None = Field(
+        default=None,
+        ge=0,
+        description="Свободное место на диске по данным MinIO в байтах.",
+    )
+    source: str = Field(
+        ...,
+        description="Источник значения пула: config или auto.",
+    )
+    is_overcommitted: bool = Field(
+        ...,
+        description="Признак переподписки: выделено больше доступного пула.",
+    )
+    minio_reachable: bool = Field(
+        ...,
+        description="Доступен ли MinIO admin API на момент запроса.",
+    )
+
+
 class QuotaUsageRead(BaseSchema):
     """Сводка использования квот пользователя.
 

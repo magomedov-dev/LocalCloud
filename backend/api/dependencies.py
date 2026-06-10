@@ -32,6 +32,22 @@ from services.tasks import get_tasks_service
 from services.trash import get_trash_service
 from services.uploads import get_uploads_service
 from services.users import get_users_service
+from storage.capacity import CapacityProvider
+
+
+def _capacity_provider_from_request(request: Request) -> CapacityProvider | None:
+    """Возвращает провайдер ёмкости хранилища из состояния приложения.
+
+    Args:
+        request: Текущий HTTP-запрос FastAPI.
+
+    Returns:
+        Провайдер ёмкости из ``app.state`` или ``None``, если он не сконструирован
+        (тогда сервис создаст его самостоятельно из настроек).
+    """
+
+    provider = getattr(request.app.state, "capacity_provider", None)
+    return provider if isinstance(provider, CapacityProvider) else None
 
 
 def get_auth_service_dependency() -> AuthService:
@@ -47,18 +63,24 @@ def get_auth_service_dependency() -> AuthService:
     return get_auth_service()
 
 
-def get_registration_service_dependency() -> RegistrationService:
+def get_registration_service_dependency(request: Request) -> RegistrationService:
     """Возвращает сервис регистрации.
 
     Получает экземпляр `RegistrationService` через фабричную функцию
-    сервисного слоя. Используется как зависимость FastAPI в эндпоинтах
-    регистрации пользователей.
+    сервисного слоя, передавая провайдер ёмкости хранилища из состояния
+    приложения для контроля переподписки при одобрении заявок. Используется как
+    зависимость FastAPI в эндпоинтах регистрации пользователей.
+
+    Args:
+        request: Текущий HTTP-запрос FastAPI, содержащий ссылку на приложение.
 
     Returns:
         Сервис регистрации.
     """
 
-    return get_registration_service()
+    return get_registration_service(
+        capacity_provider=_capacity_provider_from_request(request),
+    )
 
 
 def get_users_service_dependency() -> UsersService:
@@ -74,17 +96,24 @@ def get_users_service_dependency() -> UsersService:
     return get_users_service()
 
 
-def get_quotas_service_dependency() -> QuotasService:
+def get_quotas_service_dependency(request: Request) -> QuotasService:
     """Возвращает сервис квот.
 
-    Получает экземпляр `QuotasService` через фабричную функцию сервисного слоя.
-    Используется как зависимость FastAPI в эндпоинтах работы с квотами.
+    Получает экземпляр `QuotasService` через фабричную функцию сервисного слоя,
+    передавая провайдер ёмкости хранилища из состояния приложения для контроля
+    переподписки. Используется как зависимость FastAPI в эндпоинтах работы с
+    квотами.
+
+    Args:
+        request: Текущий HTTP-запрос FastAPI, содержащий ссылку на приложение.
 
     Returns:
         Сервис квот.
     """
 
-    return get_quotas_service()
+    return get_quotas_service(
+        capacity_provider=_capacity_provider_from_request(request),
+    )
 
 
 def get_nodes_service_dependency() -> NodesService:

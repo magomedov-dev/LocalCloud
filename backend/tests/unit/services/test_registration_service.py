@@ -68,11 +68,27 @@ def make_user_mock(user_id: uuid.UUID | None = None) -> MagicMock:
     return user
 
 
-def make_service(uow_mock, audit_mock=None):
+def make_capacity_provider(pool=10**18):
+    """Мок провайдера ёмкости с заведомо большим пулом."""
+    provider = MagicMock()
+    provider.get_pool_bytes = AsyncMock(return_value=pool)
+    return provider
+
+
+def make_service(uow_mock, audit_mock=None, capacity_provider=None):
     from services.registration import RegistrationService
     audit = audit_mock or make_audit_service()
     factory = make_uow_factory(uow_mock)
-    return RegistrationService(uow_factory=factory, audit_service=audit)
+    # Контроль ёмкости по умолчанию не должен блокировать позитивные тесты.
+    quotas_repo = getattr(uow_mock, "quotas", None)
+    if quotas_repo is not None:
+        quotas_repo.acquire_capacity_lock = AsyncMock()
+        quotas_repo.total_allocated_storage_bytes = AsyncMock(return_value=0)
+    return RegistrationService(
+        uow_factory=factory,
+        audit_service=audit,
+        capacity_provider=capacity_provider or make_capacity_provider(),
+    )
 
 
 # ---------------------------------------------------------------------------

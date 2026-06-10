@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock
 
-import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -123,6 +122,57 @@ class TestGetUserQuotaUsage:
         app.dependency_overrides.clear()
         with TestClient(app, raise_server_exceptions=False) as c:
             resp = c.get(f"{API_V1}/quotas/users/{uuid.uuid4()}")
+        assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# GET /quotas/server/capacity
+# ---------------------------------------------------------------------------
+
+
+def _server_capacity_dict() -> dict[str, Any]:
+    """Минимальный словарь, совместимый с ServerCapacityRead."""
+    return {
+        "pool_bytes": 100 * 1024 ** 3,
+        "allocated_bytes": 30 * 1024 ** 3,
+        "available_bytes": 70 * 1024 ** 3,
+        "physical_total_bytes": 120 * 1024 ** 3,
+        "physical_available_bytes": 90 * 1024 ** 3,
+        "source": "auto",
+        "is_overcommitted": False,
+        "minio_reachable": True,
+    }
+
+
+class TestGetServerCapacity:
+    def test_returns_200_for_admin(self) -> None:
+        admin = _make_mock_user()
+
+        mock_svc = AsyncMock()
+        mock_svc.get_server_capacity = AsyncMock(
+            return_value=_server_capacity_dict(),
+        )
+
+        app.dependency_overrides[get_current_active_user] = lambda: admin
+        app.dependency_overrides[get_current_admin_user] = lambda: admin
+        app.dependency_overrides[get_quotas_service_dependency] = lambda: mock_svc
+        try:
+            with TestClient(app, raise_server_exceptions=False) as c:
+                resp = c.get(f"{API_V1}/quotas/server/capacity")
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["pool_bytes"] == 100 * 1024 ** 3
+            assert body["available_bytes"] == 70 * 1024 ** 3
+            assert body["is_overcommitted"] is False
+        finally:
+            app.dependency_overrides.pop(get_current_active_user, None)
+            app.dependency_overrides.pop(get_current_admin_user, None)
+            app.dependency_overrides.pop(get_quotas_service_dependency, None)
+
+    def test_unauthenticated_returns_401(self) -> None:
+        app.dependency_overrides.clear()
+        with TestClient(app, raise_server_exceptions=False) as c:
+            resp = c.get(f"{API_V1}/quotas/server/capacity")
         assert resp.status_code == 401
 
 

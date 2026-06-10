@@ -8,6 +8,7 @@ from schemas.quotas import (
     QuotaCheckResponse,
     QuotaRecalculateRequest,
     QuotaUsageRead,
+    ServerCapacityRead,
     UserQuotaCreate,
     UserQuotaRead,
     UserQuotaUpdate,
@@ -48,6 +49,38 @@ async def get_my_quota_usage(
     """
 
     return await quotas_service.get_usage(current_user.id)
+
+
+@router.get(
+    "/server/capacity",
+    response_model=ServerCapacityRead,
+    status_code=status.HTTP_200_OK,
+)
+async def get_server_capacity(
+    _: CurrentAdminUserDependency,
+    quotas_service: QuotasService = Depends(get_quotas_service_dependency),
+) -> ServerCapacityRead:
+    """Возвращает состояние общей ёмкости хранилища сервера.
+
+    Показывает общий пул хранилища, суммарно выделенный объём, свободный остаток
+    для новых выдач и физические показатели диска по данным MinIO. Позволяет
+    администратору контролировать распределение места и обнаруживать
+    переподписку. Эндпоинт доступен только администратору.
+
+    Args:
+        _: Текущий авторизованный администратор. Используется как зависимость
+            безопасности и не применяется внутри функции напрямую.
+        quotas_service: Сервис квот, собирающий состояние ёмкости хранилища.
+
+    Returns:
+        Состояние общей ёмкости хранилища сервера.
+
+    Raises:
+        HTTPException: Если администратор не аутентифицирован, доступ запрещён
+            или ёмкость хранилища не может быть определена.
+    """
+
+    return await quotas_service.get_server_capacity()
 
 
 @router.get(

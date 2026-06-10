@@ -90,10 +90,31 @@ def make_quota_mock(
     return quota
 
 
-def make_quotas_service(uow, audit_svc=None):
+def make_capacity_provider(pool=10**18):
+    """Мок провайдера ёмкости с заведомо большим пулом."""
+    provider = MagicMock()
+    provider.get_pool_bytes = AsyncMock(return_value=pool)
+    status = MagicMock()
+    status.pool_bytes = pool
+    status.physical_total_bytes = pool
+    status.physical_available_bytes = pool
+    status.source = "config"
+    status.minio_reachable = True
+    provider.resolve = AsyncMock(return_value=status)
+    return provider
+
+
+def make_quotas_service(uow, audit_svc=None, capacity_provider=None):
+    # Контроль ёмкости по умолчанию не должен блокировать позитивные тесты:
+    # репозиторий квот возвращает нулевую аллокацию, пул — заведомо большой.
+    quotas_repo = getattr(uow, "quotas", None)
+    if quotas_repo is not None:
+        quotas_repo.acquire_capacity_lock = AsyncMock()
+        quotas_repo.total_allocated_storage_bytes = AsyncMock(return_value=0)
     return QuotasService(
         uow_factory=make_factory(uow),
         audit_service=audit_svc or make_audit(),
+        capacity_provider=capacity_provider or make_capacity_provider(),
     )
 
 
