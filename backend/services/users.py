@@ -28,6 +28,7 @@ from schemas.users import (
 from security.password import hash_password, require_strong_password
 from services.audit import AuditService, get_audit_service
 from services.exceptions import (
+    PermissionServiceError,
     ServiceError,
     ValidationServiceError,
     service_error_from_database,
@@ -234,7 +235,12 @@ class UsersService:
                 roles = await uow.roles.get_user_roles(
                     user.id, only_active_roles=False, order_by_name=True
                 )
-                result = _user_with_roles_read(_user_snapshot(user), roles)
+                first_admin_id = await uow.roles.get_first_admin_user_id()
+                snapshot = _user_snapshot(user)
+                snapshot["is_primary_admin"] = (
+                    first_admin_id is not None and user.id == first_admin_id
+                )
+                result = _user_with_roles_read(snapshot, roles)
             return self._require_result(result, operation=operation)
         except DatabaseError as exc:
             raise self._database_error(
@@ -436,12 +442,17 @@ class UsersService:
         try:
             async with self.uow_factory() as uow:
                 snapshots = await self._collect_user_snapshots(uow=uow, params=params)
+                first_admin_id = await uow.roles.get_first_admin_user_id()
 
             snapshots = self._sort_snapshots(
                 snapshots, sort_by=params.sort_by, sort_desc=params.sort_desc
             )
             total = len(snapshots)
             page = snapshots[params.offset : params.offset + params.limit]
+            for snapshot in page:
+                snapshot["is_primary_admin"] = (
+                    first_admin_id is not None and snapshot["id"] == first_admin_id
+                )
 
             return PageResponse[UserListItem](
                 items=[_user_list_item(snapshot) for snapshot in page],
@@ -843,6 +854,29 @@ class UsersService:
         )
         return _user_read(snapshot)
 
+    async def _get_first_admin_id(self, *, operation: str) -> UUID | None:
+        """Возвращает идентификатор первичного администратора.
+
+        Args:
+            operation: Название операции для контекста ошибок.
+
+        Returns:
+            Идентификатор первого администратора или ``None``.
+
+        Raises:
+            ServiceError: Если произошла ошибка базы данных.
+        """
+
+        try:
+            async with self.uow_factory() as uow:
+                return await uow.roles.get_first_admin_user_id()
+        except DatabaseError as exc:
+            raise self._database_error(
+                exc,
+                operation=operation,
+                message="Не удалось определить первичного администратора.",
+            ) from exc
+
     async def delete_user(
         self,
         user_id: UUID,
@@ -861,15 +895,37 @@ class UsersService:
             Данные мягко удаленного пользователя.
 
         Raises:
+            PermissionServiceError: Если администратор пытается удалить
+                собственную учётную запись или учётную запись первичного
+                администратора.
             ServiceError: Если пользователь не найден, произошла ошибка базы данных
                 или непредвиденная ошибка сервиса.
         """
+
+        operation = "delete_user"
+
+        # Администратор не может удалить сам себя.
+        if actor_id is not None and actor_id == user_id:
+            raise PermissionServiceError(
+                "Невозможно удалить собственную учётную запись.",
+                reason="cannot_delete_self",
+                details={"operation": operation},
+            )
+
+        # Учётная запись первичного администратора защищена от удаления.
+        first_admin_id = await self._get_first_admin_id(operation=operation)
+        if first_admin_id is not None and user_id == first_admin_id:
+            raise PermissionServiceError(
+                "Невозможно удалить учётную запись первичного администратора.",
+                reason="cannot_delete_first_admin",
+                details={"operation": operation},
+            )
 
         snapshot = await self._mutate_status(
             user_id=user_id,
             actor_id=actor_id,
             action=AuditAction.USER_DELETED,
-            operation="delete_user",
+            operation=operation,
             message="Пользователь был мягко удален.",
             mutator=lambda uow, user: uow.users.mark_deleted(
                 user, flush=True, refresh=False

@@ -25,6 +25,7 @@ from schemas.users import (
 )
 from services.exceptions import (
     NotFoundServiceError,
+    PermissionServiceError,
     ServiceError,
     ValidationServiceError,
 )
@@ -297,6 +298,64 @@ async def test_delete_user_soft_deletes(audit_service):
     service = _make_service(uow, audit_service)
 
     result = await service.delete_user(USER_ID)
+    assert isinstance(result, UserRead)
+    users_repo.mark_deleted.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_delete_user_rejects_self(audit_service):
+    """delete_user запрещает администратору удалять самого себя."""
+    users_repo = AsyncMock()
+    users_repo.mark_deleted = AsyncMock()
+
+    uow = make_uow_mock(users=users_repo, roles=AsyncMock())
+    service = _make_service(uow, audit_service)
+
+    with pytest.raises(PermissionServiceError) as exc_info:
+        await service.delete_user(USER_ID, actor_id=USER_ID)
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.details.get("reason") == "cannot_delete_self"
+    users_repo.mark_deleted.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_user_rejects_first_admin(audit_service):
+    """delete_user запрещает удаление учётной записи первичного администратора."""
+    users_repo = AsyncMock()
+    users_repo.mark_deleted = AsyncMock()
+
+    roles_repo = AsyncMock()
+    roles_repo.get_first_admin_user_id = AsyncMock(return_value=USER_ID)
+
+    uow = make_uow_mock(users=users_repo, roles=roles_repo)
+    service = _make_service(uow, audit_service)
+
+    with pytest.raises(PermissionServiceError) as exc_info:
+        await service.delete_user(USER_ID, actor_id=uuid.uuid4())
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.details.get("reason") == "cannot_delete_first_admin"
+    users_repo.mark_deleted.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_user_allows_other_non_primary(audit_service):
+    """delete_user удаляет обычного пользователя другим администратором."""
+    user = make_user_mock(user_id=USER_ID, status=UserStatus.DELETED)
+
+    users_repo = AsyncMock()
+    users_repo.get_required_user_by_id = AsyncMock(return_value=user)
+    users_repo.mark_deleted = AsyncMock(return_value=user)
+
+    roles_repo = AsyncMock()
+    roles_repo.get_first_admin_user_id = AsyncMock(return_value=uuid.uuid4())
+
+    uow = make_uow_mock(users=users_repo, roles=roles_repo)
+    uow.flush_and_refresh = AsyncMock(return_value=user)
+    service = _make_service(uow, audit_service)
+
+    result = await service.delete_user(USER_ID, actor_id=uuid.uuid4())
     assert isinstance(result, UserRead)
     users_repo.mark_deleted.assert_awaited_once()
 

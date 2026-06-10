@@ -14,7 +14,7 @@ from database.exceptions import (
     EntityNotFoundError,
     InvalidQueryError,
 )
-from database.models.enums import SystemRole
+from database.models.enums import SystemRole, UserStatus
 from database.models.roles import Role, UserRole
 from database.models.users import User
 from database.repositories.base import BaseRepository
@@ -223,6 +223,33 @@ class RolesRepository(BaseRepository[Role]):
         """
 
         return await self.get_role_by_code(SystemRole.ADMIN)
+
+    async def get_first_admin_user_id(self) -> uuid.UUID | None:
+        """Возвращает идентификатор «первого» администратора.
+
+        Первым считается не удалённый пользователь с системной ролью
+        администратора, созданный раньше остальных администраторов. Используется
+        для защиты учётной записи первичного администратора от удаления.
+
+        Returns:
+            Идентификатор первого администратора или ``None``, если активных
+            администраторов нет.
+        """
+
+        statement = (
+            select(User.id)
+            .join(UserRole, UserRole.user_id == User.id)
+            .join(Role, Role.id == UserRole.role_id)
+            .where(func.lower(Role.code) == SystemRole.ADMIN.value)
+            .where(User.status != UserStatus.DELETED)
+            .order_by(User.created_at.asc(), User.id.asc())
+            .limit(1)
+        )
+
+        return await self.scalar_one_or_none(
+            statement,
+            operation="get_first_admin_user_id",
+        )
 
     async def get_user_role_model(self) -> Role | None:
         """Возвращает системную роль обычного пользователя.

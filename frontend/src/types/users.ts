@@ -49,6 +49,8 @@ export interface UserRead {
   rejection_reason: string | null;
   created_at: string;
   updated_at: string;
+  /** Признак учётной записи первичного администратора (нельзя удалить). */
+  is_primary_admin: boolean;
 }
 
 /**
@@ -62,4 +64,6 @@ export interface UserListItem {
   is_email_verified: boolean;
   last_login_at: string | null;
   created_at: string;
+  /** Признак учётной записи первичного администратора (нельзя удалить). */
+  is_primary_admin: boolean;
 }

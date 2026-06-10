@@ -1395,3 +1395,29 @@ async def test_ensure_roles_exist_db_error():
     session.execute = AsyncMock(side_effect=SQLAlchemyError("boom"))
     with pytest.raises(RepositoryError):
         await repo._ensure_roles_exist([uuid.uuid4()])
+
+
+@pytest.mark.asyncio
+async def test_get_first_admin_user_id_returns_id():
+    repo, session, result = make_repo()
+    admin_id = uuid.uuid4()
+    result.scalar_one_or_none = MagicMock(return_value=admin_id)
+
+    assert await repo.get_first_admin_user_id() == admin_id
+    session.execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_first_admin_user_id_returns_none_when_no_admins():
+    repo, session, result = make_repo()
+    result.scalar_one_or_none = MagicMock(return_value=None)
+
+    assert await repo.get_first_admin_user_id() is None
+
+
+@pytest.mark.asyncio
+async def test_get_first_admin_user_id_db_error():
+    repo, session, result = make_repo()
+    session.execute = AsyncMock(side_effect=SQLAlchemyError("boom"))
+    with pytest.raises(RepositoryError):
+        await repo.get_first_admin_user_id()

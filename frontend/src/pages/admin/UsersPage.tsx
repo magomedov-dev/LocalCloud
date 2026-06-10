@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Search, ShieldCheck, ShieldOff, Check, Trash2, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { usersApi } from "@/api/users";
+import { useAuth } from "@/contexts/auth-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -30,6 +31,10 @@ const STATUS_COLORS: Record<UserStatus, string> = {
 
 function UserRow({ user, onOpen }: { user: UserListItem; onOpen: () => void }) {
   const qc = useQueryClient();
+  const { user: me } = useAuth();
+
+  // Удаление недоступно для самого себя и для первичного администратора.
+  const canDelete = user.status !== "deleted" && !user.is_primary_admin && me?.id !== user.id;
 
   const approve = useMutation({
     mutationFn: () => usersApi.approve(user.id),
@@ -123,7 +128,7 @@ function UserRow({ user, onOpen }: { user: UserListItem; onOpen: () => void }) {
               )}
             </Button>
           )}
-          {user.status !== "deleted" && (
+          {canDelete && (
             <Button
               variant="ghost"
               size="icon"

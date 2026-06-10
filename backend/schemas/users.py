@@ -286,6 +286,13 @@ class UserRead(UserBase):
         ...,
         description="Дата и время последнего обновления пользователя.",
     )
+    is_primary_admin: bool = Field(
+        default=False,
+        description=(
+            "Признак учётной записи первичного администратора. Такую запись "
+            "нельзя удалить."
+        ),
+    )
 
 
 class UserListItem(BaseSchema):
@@ -334,6 +341,13 @@ class UserListItem(BaseSchema):
     created_at: datetime = Field(
         ...,
         description="Дата и время создания пользователя.",
+    )
+    is_primary_admin: bool = Field(
+        default=False,
+        description=(
+            "Признак учётной записи первичного администратора. Такую запись "
+            "нельзя удалить."
+        ),
     )
 
 

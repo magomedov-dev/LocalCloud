@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, KeyRound, Pencil, ShieldCheck, ShieldOff, Trash2, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
 import { usersApi } from "@/api/users";
+import { useAuth } from "@/contexts/auth-context";
 import { quotasApi } from "@/api/quotas";
 import { auditApi } from "@/api/audit";
 import { Button } from "@/components/ui/button";
@@ -107,6 +108,11 @@ interface Props {
 
 export function UserDetailSheet({ user, onClose }: Props) {
   const qc = useQueryClient();
+  const { user: me } = useAuth();
+
+  // Удаление недоступно для самого себя и для первичного администратора.
+  const canDelete =
+    user?.status !== "deleted" && !user?.is_primary_admin && me?.id !== user?.id;
   const [showBlockInput, setShowBlockInput] = useState(false);
   const [blockReason, setBlockReason] = useState("");
   const [showPasswordInput, setShowPasswordInput] = useState(false);
@@ -531,7 +537,7 @@ export function UserDetailSheet({ user, onClose }: Props) {
                   Разблокировать
                 </Button>
               )}
-              {user?.status !== "deleted" && (
+              {canDelete && (
                 <Button
                   size="sm"
                   variant="outline"
