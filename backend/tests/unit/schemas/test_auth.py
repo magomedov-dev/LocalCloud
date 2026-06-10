@@ -12,8 +12,6 @@ from schemas.auth import (
     AuthSessionRead,
     LoginRequest,
     PasswordChangeRequest,
-    PasswordResetConfirmRequest,
-    PasswordResetRequest,
     TokenPair,
 )
 
@@ -66,61 +64,6 @@ class TestLoginRequest:
     def test_password_empty_raises(self):
         with pytest.raises(ValidationError):
             LoginRequest(email_or_username="user", password="")
-
-
-class TestPasswordResetRequest:
-    """Тесты запроса сброса пароля."""
-
-    def test_valid_email(self):
-        r = PasswordResetRequest(email="user@example.com")
-        assert r.email == "user@example.com"
-
-    def test_invalid_email_raises(self):
-        with pytest.raises(ValidationError):
-            PasswordResetRequest(email="not-an-email")
-
-    def test_missing_email_raises(self):
-        with pytest.raises(ValidationError):
-            PasswordResetRequest()
-
-
-class TestPasswordResetConfirmRequest:
-    """Тесты запроса подтверждения сброса пароля."""
-
-    def test_valid(self):
-        r = PasswordResetConfirmRequest(token="mytoken", new_password="newpassword")
-        assert r.token == "mytoken"
-        assert r.new_password == "newpassword"
-
-    def test_token_strips_whitespace(self):
-        r = PasswordResetConfirmRequest(token="  mytoken  ", new_password="newpass12")
-        assert r.token == "mytoken"
-
-    def test_whitespace_only_token_raises(self):
-        with pytest.raises(ValidationError):
-            PasswordResetConfirmRequest(token="   ", new_password="newpass12")
-
-    def test_token_missing_raises(self):
-        with pytest.raises(ValidationError):
-            PasswordResetConfirmRequest(new_password="newpass12")
-
-    def test_new_password_min_length_8(self):
-        PasswordResetConfirmRequest(token="tok", new_password="12345678")
-
-    def test_new_password_too_short_raises(self):
-        with pytest.raises(ValidationError):
-            PasswordResetConfirmRequest(token="tok", new_password="1234567")
-
-    def test_new_password_max_length_128(self):
-        PasswordResetConfirmRequest(token="tok", new_password="a" * 128)
-
-    def test_new_password_too_long_raises(self):
-        with pytest.raises(ValidationError):
-            PasswordResetConfirmRequest(token="tok", new_password="a" * 129)
-
-    def test_missing_new_password_raises(self):
-        with pytest.raises(ValidationError):
-            PasswordResetConfirmRequest(token="tok")
 
 
 class TestPasswordChangeRequest:

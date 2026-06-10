@@ -508,7 +508,6 @@ class UsersRepository(BaseRepository[User]):
         username: str,
         password_hash: str,
         status: UserStatus = UserStatus.PENDING,
-        is_email_verified: bool = False,
         approved_at: datetime | None = None,
         blocked_at: datetime | None = None,
         rejected_at: datetime | None = None,
@@ -535,7 +534,6 @@ class UsersRepository(BaseRepository[User]):
             username: Username пользователя.
             password_hash: Хэш пароля пользователя.
             status: Начальный статус пользователя.
-            is_email_verified: Признак подтверждения email.
             approved_at: Дата и время подтверждения пользователя.
             blocked_at: Дата и время блокировки пользователя.
             rejected_at: Дата и время отклонения пользователя.
@@ -589,7 +587,6 @@ class UsersRepository(BaseRepository[User]):
             username=normalized_username,
             password_hash=password_hash,
             status=status,
-            is_email_verified=is_email_verified,
             approved_at=approved_at,
             blocked_at=blocked_at,
             rejected_at=rejected_at,
@@ -623,14 +620,12 @@ class UsersRepository(BaseRepository[User]):
         limit: int = 100,
         statuses: Sequence[UserStatus] | None = None,
         include_deleted: bool = False,
-        only_email_verified: bool | None = None,
         order_by_created_desc: bool = True,
     ) -> list[User]:
         """Возвращает список пользователей с пагинацией и фильтрацией.
 
-        Позволяет фильтровать пользователей по статусам, признаку подтверждения
-        email и признаку логического удаления. Результат сортируется по дате
-        создания.
+        Позволяет фильтровать пользователей по статусам и признаку логического
+        удаления. Результат сортируется по дате создания.
 
         Args:
             offset: Количество записей, которые нужно пропустить.
@@ -639,8 +634,6 @@ class UsersRepository(BaseRepository[User]):
                 передана, фильтр по статусу не применяется.
             include_deleted: Включать ли пользователей со статусом
                 ``UserStatus.DELETED``.
-            only_email_verified: Фильтр по признаку подтверждения email. Если
-                ``None``, фильтр не применяется.
             order_by_created_desc: Сортировать ли пользователей по дате создания
                 по убыванию. Если ``False``, используется сортировка по
                 возрастанию.
@@ -662,9 +655,6 @@ class UsersRepository(BaseRepository[User]):
 
         if not include_deleted:
             conditions.append(User.status != UserStatus.DELETED)
-
-        if only_email_verified is not None:
-            conditions.append(User.is_email_verified == only_email_verified)
 
         if conditions:
             statement = statement.where(*conditions)
@@ -784,14 +774,12 @@ class UsersRepository(BaseRepository[User]):
         limit: int = 100,
         statuses: Sequence[UserStatus] | None = None,
         include_deleted: bool = False,
-        only_email_verified: bool | None = None,
     ) -> list[User]:
         """Выполняет поиск пользователей по email или username.
 
         Поиск выполняется по частичному совпадению без учёта регистра.
-        Дополнительно можно ограничить результат статусами, исключить логически
-        удалённых пользователей и отфильтровать записи по признаку подтверждения
-        email.
+        Дополнительно можно ограничить результат статусами и исключить
+        логически удалённых пользователей.
 
         Если поисковая строка после удаления пробелов по краям оказывается
         пустой, метод возвращает пользователей только по дополнительным
@@ -804,8 +792,6 @@ class UsersRepository(BaseRepository[User]):
             statuses: Последовательность статусов для фильтрации.
             include_deleted: Включать ли пользователей со статусом
                 ``UserStatus.DELETED``.
-            only_email_verified: Фильтр по признаку подтверждения email. Если
-                ``None``, фильтр не применяется.
 
         Returns:
             Список найденных пользователей.
@@ -835,9 +821,6 @@ class UsersRepository(BaseRepository[User]):
 
         if not include_deleted:
             conditions.append(User.status != UserStatus.DELETED)
-
-        if only_email_verified is not None:
-            conditions.append(User.is_email_verified == only_email_verified)
 
         if conditions:
             statement = statement.where(*conditions)
@@ -1435,77 +1418,6 @@ class UsersRepository(BaseRepository[User]):
         return await self.update_last_login(
             user,
             last_login_at=last_login_at,
-            flush=flush,
-            refresh=refresh,
-        )
-
-    async def set_email_verified(
-        self,
-        user: User,
-        *,
-        is_verified: bool = True,
-        flush: bool = True,
-        refresh: bool = False,
-    ) -> User:
-        """Устанавливает признак подтверждения email пользователя.
-
-        Если ``is_verified`` равен ``True``, вызывается доменный метод
-        ``verify_email``. Если ``False``, признак подтверждения сбрасывается
-        напрямую.
-
-        Args:
-            user: Пользователь, для которого нужно изменить признак
-                подтверждения email.
-            is_verified: Новое значение признака подтверждения email.
-            flush: Выполнить ли ``flush`` после изменения.
-            refresh: Выполнить ли ``refresh`` после изменения.
-
-        Returns:
-            Обновлённый экземпляр ``User``.
-        """
-
-        if is_verified:
-            user.verify_email()
-        else:
-            user.is_email_verified = False
-
-        if flush:
-            await self.flush()
-
-        if refresh:
-            await self.refresh(user)
-
-        return user
-
-    async def set_email_verified_by_id(
-        self,
-        user_id: uuid.UUID,
-        *,
-        is_verified: bool = True,
-        flush: bool = True,
-        refresh: bool = False,
-    ) -> User:
-        """Устанавливает признак подтверждения email пользователя по id.
-
-        Args:
-            user_id: Уникальный идентификатор пользователя.
-            is_verified: Новое значение признака подтверждения email.
-            flush: Выполнить ли ``flush`` после изменения.
-            refresh: Выполнить ли ``refresh`` после изменения.
-
-        Returns:
-            Обновлённый экземпляр ``User``.
-
-        Raises:
-            EntityNotFoundError: Если пользователь с указанным идентификатором
-                не найден.
-        """
-
-        user = await self.get_required_by_id(user_id)
-
-        return await self.set_email_verified(
-            user,
-            is_verified=is_verified,
             flush=flush,
             refresh=refresh,
         )

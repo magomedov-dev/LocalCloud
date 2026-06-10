@@ -1,27 +1,22 @@
-"""Интеграционные тесты эндпоинтов аутентификации (логин, сессии, сброс пароля)."""
+"""Интеграционные тесты эндпоинтов аутентификации (логин, сессии)."""
 
 from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
-import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
 from api.dependencies import (
     get_auth_service_dependency,
-    get_users_service_dependency,
 )
 from database.models.enums import UserStatus
 from schemas.auth import (
-    AuthSessionRead,
     LoginResponse,
     LogoutResponse,
-    PasswordResetConfirmResponse,
-    PasswordResetRequestResponse,
     RefreshTokenResponse,
 )
 from schemas.users import CurrentUserRead
@@ -42,7 +37,6 @@ def _current_user_read_dict(user_id: uuid.UUID | None = None) -> dict[str, Any]:
         "email": "test@example.com",
         "username": "testuser",
         "status": "active",
-        "is_email_verified": True,
         "last_login_at": None,
         "roles": [],
     }
@@ -81,7 +75,6 @@ class TestLogin:
             email=mock_user.email,
             username=mock_user.username,
             status=UserStatus.ACTIVE,
-            is_email_verified=True,
             roles=[],
         )
         login_resp = LoginResponse(authenticated=True, user=user_read)
@@ -138,7 +131,6 @@ class TestRefresh:
             email=mock_user.email,
             username=mock_user.username,
             status=UserStatus.ACTIVE,
-            is_email_verified=True,
             roles=[],
         )
         refresh_resp = RefreshTokenResponse(authenticated=True, user=user_read)
@@ -285,79 +277,3 @@ class TestRevokeSession:
         with TestClient(app, raise_server_exceptions=False) as c:
             response = c.delete(f"{API_V1}/auth/sessions/{session_id}")
         assert response.status_code == 401
-
-
-class TestPasswordResetRequest:
-    def test_request_password_reset_returns_200(self) -> None:
-        now = datetime.now(tz=timezone.utc)
-        reset_resp = PasswordResetRequestResponse(
-            reset_token="some-jwt-token",
-            expires_at=now,
-            message="Reset token generated.",
-        )
-        mock_auth_svc = AsyncMock()
-        mock_auth_svc.request_password_reset = AsyncMock(return_value=reset_resp)
-
-        app.dependency_overrides[get_auth_service_dependency] = (
-            lambda: mock_auth_svc
-        )
-        try:
-            with TestClient(app, raise_server_exceptions=False) as c:
-                response = c.post(
-                    f"{API_V1}/auth/password/reset/request",
-                    json={"email": "user@example.com"},
-                )
-            assert response.status_code == 200
-            data = response.json()
-            assert "reset_token" in data
-        finally:
-            app.dependency_overrides.pop(get_auth_service_dependency, None)
-
-    def test_request_password_reset_empty_body_returns_422(self) -> None:
-        with TestClient(app, raise_server_exceptions=False) as c:
-            response = c.post(
-                f"{API_V1}/auth/password/reset/request",
-                json={},
-            )
-        assert response.status_code == 422
-
-
-class TestPasswordResetConfirm:
-    def test_confirm_password_reset_returns_200(self) -> None:
-        confirm_resp = PasswordResetConfirmResponse(
-            message="Password changed successfully."
-        )
-        mock_auth_svc = AsyncMock()
-        mock_auth_svc.confirm_password_reset = AsyncMock(return_value=confirm_resp)
-
-        mock_users_svc = AsyncMock()
-
-        app.dependency_overrides[get_auth_service_dependency] = (
-            lambda: mock_auth_svc
-        )
-        app.dependency_overrides[get_users_service_dependency] = (
-            lambda: mock_users_svc
-        )
-        try:
-            with TestClient(app, raise_server_exceptions=False) as c:
-                response = c.post(
-                    f"{API_V1}/auth/password/reset/confirm",
-                    json={
-                        "token": "valid-reset-token",
-                        "new_password": "NewPassword123!",
-                    },
-                )
-            assert response.status_code == 200
-            data = response.json()
-            assert "message" in data
-        finally:
-            app.dependency_overrides.pop(get_auth_service_dependency, None)
-            app.dependency_overrides.pop(get_users_service_dependency, None)
-
-    def test_confirm_password_reset_missing_fields_returns_422(self) -> None:
-        with TestClient(app, raise_server_exceptions=False) as c:
-            response = c.post(
-                f"{API_V1}/auth/password/reset/confirm",
-                json={"token": "some-token"},
-            )
-        assert response.status_code == 422

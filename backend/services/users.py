@@ -124,7 +124,6 @@ class UsersService:
                     username=data.username,
                     password_hash=password_hash,
                     status=data.status,
-                    is_email_verified=data.is_email_verified,
                     flush=True,
                     refresh=True,
                     check_duplicates=True,
@@ -617,14 +616,6 @@ class UsersService:
                         refresh=True,
                     )
 
-                if "is_email_verified" in values:
-                    user = await uow.users.set_email_verified(
-                        user,
-                        is_verified=bool(values["is_email_verified"]),
-                        flush=True,
-                        refresh=True,
-                    )
-
                 snapshot = _user_snapshot(user)
                 await uow.commit()
 
@@ -686,9 +677,7 @@ class UsersService:
         """
 
         if data.status == UserStatus.ACTIVE:
-            return await self.approve_user(
-                user_id, actor_id=actor_id, is_email_verified=True
-            )
+            return await self.approve_user(user_id, actor_id=actor_id)
         if data.status == UserStatus.BLOCKED:
             if not data.reason:
                 raise ValidationServiceError(
@@ -724,14 +713,12 @@ class UsersService:
         user_id: UUID,
         *,
         actor_id: UUID | None = None,
-        is_email_verified: bool = True,
     ) -> UserRead:
         """Одобряет пользователя и переводит его в активный статус.
 
         Args:
             user_id: Идентификатор пользователя.
             actor_id: Идентификатор пользователя, выполняющего операцию.
-            is_email_verified: Нужно ли установить email как подтвержденный.
 
         Returns:
             Данные одобренного пользователя.
@@ -750,7 +737,6 @@ class UsersService:
             mutator=lambda uow, user: uow.users.mark_active(
                 user, flush=True, refresh=False
             ),
-            after=lambda user: setattr(user, "is_email_verified", is_email_verified),
         )
         return _user_read(snapshot)
 
@@ -932,70 +918,6 @@ class UsersService:
             ),
         )
         return _user_read(snapshot)
-
-    async def set_email_verified(
-        self,
-        user_id: UUID,
-        *,
-        is_verified: bool = True,
-        actor_id: UUID | None = None,
-    ) -> UserRead:
-        """Обновляет признак подтверждения email пользователя.
-
-        Args:
-            user_id: Идентификатор пользователя.
-            is_verified: Новое значение признака подтверждения email.
-            actor_id: Идентификатор пользователя, выполняющего операцию. Если None,
-                в аудит записывается событие от имени самого пользователя.
-
-        Returns:
-            Данные пользователя после обновления признака подтверждения email.
-
-        Raises:
-            ServiceError: Если пользователь не найден, произошла ошибка базы данных
-                или непредвиденная ошибка сервиса.
-        """
-
-        operation = "set_email_verified"
-        snapshot: dict[str, Any] = {}
-        try:
-            async with self.uow_factory() as uow:
-                user = await uow.users.set_email_verified_by_id(
-                    user_id,
-                    is_verified=is_verified,
-                    flush=True,
-                    refresh=True,
-                )
-                snapshot = _user_snapshot(user)
-                await uow.commit()
-
-            await self._safe_log_user_or_system_event(
-                actor_id=actor_id or user_id,
-                action=AuditAction.USER_UPDATED,
-                entity_id=user_id,
-                message="Признак подтверждения email пользователя был обновлен.",
-                metadata={
-                    "operation": operation,
-                    "user": _audit_user(snapshot),
-                    "is_email_verified": is_verified,
-                },
-            )
-            return _user_read(snapshot)
-
-        except DatabaseError as exc:
-            raise self._database_error(
-                exc,
-                operation=operation,
-                message="Не удалось обновить признак подтверждения email.",
-            ) from exc
-        except ServiceError:
-            raise
-        except Exception as exc:
-            raise self._unexpected_error(
-                exc,
-                operation=operation,
-                message="Непредвиденная ошибка при обновлении признака email.",
-            ) from exc
 
     async def change_password(
         self,
@@ -1231,7 +1153,6 @@ class UsersService:
                     limit=REPOSITORY_PAGE_LIMIT,
                     statuses=statuses,
                     include_deleted=False,
-                    only_email_verified=params.is_email_verified,
                 )
             else:
                 users = await uow.users.list_users(
@@ -1239,7 +1160,6 @@ class UsersService:
                     limit=REPOSITORY_PAGE_LIMIT,
                     statuses=statuses,
                     include_deleted=False,
-                    only_email_verified=params.is_email_verified,
                     order_by_created_desc=True,
                 )
 
@@ -1537,7 +1457,6 @@ def _user_snapshot(user: User) -> dict[str, Any]:
         "email": user.email,
         "username": user.username,
         "status": user.status,
-        "is_email_verified": user.is_email_verified,
         "last_login_at": user.last_login_at,
         "approved_at": user.approved_at,
         "blocked_at": user.blocked_at,

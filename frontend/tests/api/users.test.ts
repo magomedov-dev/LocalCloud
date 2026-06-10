@@ -59,18 +59,12 @@ describe("usersApi", () => {
     expect(result).toEqual(expected);
   });
 
-  it("approve posts is_email_verified default true", async () => {
+  it("approve posts to /users/:id/approve", async () => {
     const expected = { id: "u1" };
     mockApi.post.mockResolvedValueOnce({ data: expected });
     const result = await usersApi.approve("u1");
-    expect(mockApi.post).toHaveBeenCalledWith("/users/u1/approve", { is_email_verified: true });
+    expect(mockApi.post).toHaveBeenCalledWith("/users/u1/approve");
     expect(result).toEqual(expected);
-  });
-
-  it("approve honors explicit is_email_verified false", async () => {
-    mockApi.post.mockResolvedValueOnce({ data: {} });
-    await usersApi.approve("u1", false);
-    expect(mockApi.post).toHaveBeenCalledWith("/users/u1/approve", { is_email_verified: false });
   });
 
   it("reject posts rejection_reason to /users/:id/reject", async () => {

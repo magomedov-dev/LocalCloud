@@ -61,7 +61,6 @@ def make_user_mock(
     username: str = "testuser",
     status: UserStatus = UserStatus.ACTIVE,
     password_hash: str = "",
-    is_email_verified: bool = True,
     last_login_at: datetime | None = None,
 ) -> MagicMock:
     """Вернуть мок, имитирующий ORM-модель User."""
@@ -71,7 +70,6 @@ def make_user_mock(
     user.username = username
     user.status = status
     user.password_hash = password_hash
-    user.is_email_verified = is_email_verified
     user.last_login_at = last_login_at
     user.approved_at = None
     user.blocked_at = None

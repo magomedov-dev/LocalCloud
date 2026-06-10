@@ -15,7 +15,6 @@ from schemas.users import (
     UserAdminUpdate,
     UserBlockRequest,
     UserCreate,
-    UserListItem,
     UserQueryParams,
     UserRead,
     UserRejectRequest,
@@ -62,7 +61,6 @@ def _make_user_snapshot(**kwargs) -> dict[str, Any]:
         "email": "user@example.com",
         "username": "testuser",
         "status": UserStatus.ACTIVE,
-        "is_email_verified": True,
         "last_login_at": None,
         "approved_at": None,
         "blocked_at": None,
@@ -363,7 +361,6 @@ async def test_delete_user_allows_other_non_primary(audit_service):
 @pytest.mark.asyncio
 async def test_block_user_updates_status(audit_service):
     """block_user вызывает mark_blocked у пользователя."""
-    from schemas.users import UserBlockRequest
 
     user = make_user_mock(user_id=USER_ID, status=UserStatus.BLOCKED)
     users_repo = AsyncMock()
@@ -965,13 +962,12 @@ async def test_admin_update_user_no_changes_returns_current(audit_service):
 
 @pytest.mark.asyncio
 async def test_admin_update_user_all_fields(audit_service):
-    """admin_update_user обновляет идентичность, статус и подтверждение email."""
+    """admin_update_user обновляет идентичность и статус."""
     user = make_user_mock(user_id=USER_ID, status=UserStatus.BLOCKED)
     users_repo = AsyncMock()
     users_repo.get_required_user_by_id = AsyncMock(return_value=user)
     users_repo.update_identity = AsyncMock(return_value=user)
     users_repo.update_status = AsyncMock(return_value=user)
-    users_repo.set_email_verified = AsyncMock(return_value=user)
     uow = make_uow_mock(users=users_repo)
     service = _make_service(uow, audit_service)
 
@@ -980,13 +976,11 @@ async def test_admin_update_user_all_fields(audit_service):
         username="adminuser",
         status=UserStatus.BLOCKED,
         block_reason="abuse",
-        is_email_verified=False,
     )
     result = await service.admin_update_user(USER_ID, data, actor_id=uuid.uuid4())
     assert isinstance(result, UserRead)
     users_repo.update_identity.assert_awaited_once()
     users_repo.update_status.assert_awaited_once()
-    users_repo.set_email_verified.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1128,8 +1122,8 @@ async def test_update_status_other_falls_back_to_admin_update(audit_service):
 
 
 @pytest.mark.asyncio
-async def test_approve_user_sets_email_verified(audit_service):
-    """approve_user помечает пользователя активным и устанавливает флаг подтверждённого email."""
+async def test_approve_user_marks_active(audit_service):
+    """approve_user помечает пользователя активным."""
     user = make_user_mock(user_id=USER_ID, status=UserStatus.ACTIVE)
     users_repo = AsyncMock()
     users_repo.get_required_user_by_id = AsyncMock(return_value=user)
@@ -1138,10 +1132,9 @@ async def test_approve_user_sets_email_verified(audit_service):
     uow.flush_and_refresh = AsyncMock(return_value=user)
     service = _make_service(uow, audit_service)
 
-    result = await service.approve_user(USER_ID, is_email_verified=True)
+    result = await service.approve_user(USER_ID)
     assert isinstance(result, UserRead)
     users_repo.mark_active.assert_awaited_once()
-    assert user.is_email_verified is True
 
 
 @pytest.mark.asyncio
@@ -1204,51 +1197,6 @@ async def test_mutate_status_unexpected_error(audit_service):
 
     with pytest.raises(ServiceError):
         await service.delete_user(USER_ID)
-
-
-# ---------------------------------------------------------------------------
-# set_email_verified
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_set_email_verified_success(audit_service):
-    """set_email_verified обновляет флаг и логирует событие аудита."""
-    user = make_user_mock(user_id=USER_ID, is_email_verified=True)
-    users_repo = AsyncMock()
-    users_repo.set_email_verified_by_id = AsyncMock(return_value=user)
-    uow = make_uow_mock(users=users_repo)
-    service = _make_service(uow, audit_service)
-
-    result = await service.set_email_verified(USER_ID, is_verified=True)
-    assert isinstance(result, UserRead)
-    users_repo.set_email_verified_by_id.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_set_email_verified_database_error(audit_service):
-    """set_email_verified оборачивает DatabaseError в ServiceError."""
-    from database.exceptions import DatabaseError as DBError
-
-    users_repo = AsyncMock()
-    users_repo.set_email_verified_by_id = AsyncMock(side_effect=DBError("x"))
-    uow = make_uow_mock(users=users_repo)
-    service = _make_service(uow, audit_service)
-
-    with pytest.raises(ServiceError):
-        await service.set_email_verified(USER_ID)
-
-
-@pytest.mark.asyncio
-async def test_set_email_verified_unexpected_error(audit_service):
-    """set_email_verified оборачивает непредвиденную ошибку в ServiceError."""
-    users_repo = AsyncMock()
-    users_repo.set_email_verified_by_id = AsyncMock(side_effect=RuntimeError("x"))
-    uow = make_uow_mock(users=users_repo)
-    service = _make_service(uow, audit_service)
-
-    with pytest.raises(ServiceError):
-        await service.set_email_verified(USER_ID)
 
 
 # ---------------------------------------------------------------------------
@@ -1556,20 +1504,6 @@ async def test_change_password_service_error_reraised(audit_service):
 
     with pytest.raises(ServiceError) as exc_info:
         await service.change_password(USER_ID, "NewSecurePass99!")
-    assert exc_info.value is sentinel
-
-
-@pytest.mark.asyncio
-async def test_set_email_verified_service_error_reraised(audit_service):
-    """set_email_verified пробрасывает ServiceError, возникший внутри UoW."""
-    sentinel = ServiceError("inner", service="users", operation="set_email_verified")
-    users_repo = AsyncMock()
-    users_repo.set_email_verified_by_id = AsyncMock(side_effect=sentinel)
-    uow = make_uow_mock(users=users_repo)
-    service = _make_service(uow, audit_service)
-
-    with pytest.raises(ServiceError) as exc_info:
-        await service.set_email_verified(USER_ID)
     assert exc_info.value is sentinel
 
 

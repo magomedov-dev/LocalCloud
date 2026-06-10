@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock
 
-import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -30,7 +29,6 @@ def _user_read_dict(user_id: uuid.UUID | None = None) -> dict[str, Any]:
         "email": "user@example.com",
         "username": "testuser",
         "status": "active",
-        "is_email_verified": True,
         "last_login_at": None,
         "approved_at": None,
         "blocked_at": None,
@@ -77,7 +75,6 @@ class TestGetMe:
             email=mock_user.email,
             username=mock_user.username,
             status=UserStatus.ACTIVE,
-            is_email_verified=True,
             roles=[],
         )
 
@@ -242,7 +239,6 @@ class TestDeleteUser:
 class TestUpdateMe:
     def test_update_me_returns_200(self) -> None:
         mock_user = _make_mock_user()
-        now = datetime.now(tz=timezone.utc).isoformat()
         user_read = _user_read_dict(mock_user.id)
 
         mock_svc = AsyncMock()

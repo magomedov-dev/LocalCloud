@@ -58,34 +58,3 @@ export interface PasswordChangeRequest {
   current_password: string;
   new_password: string;
 }
-
-/**
- * Данные для запроса сброса пароля.
- */
-export interface PasswordResetRequest {
-  email: string;
-}
-
-/**
- * Ответ API на запрос сброса пароля.
- */
-export interface PasswordResetRequestResponse {
-  reset_token: string;
-  expires_at: string;
-  message: string;
-}
-
-/**
- * Данные для подтверждения сброса пароля.
- */
-export interface PasswordResetConfirmRequest {
-  token: string;
-  new_password: string;
-}
-
-/**
- * Ответ API после подтверждения сброса пароля.
- */
-export interface PasswordResetConfirmResponse {
-  message: string;
-}

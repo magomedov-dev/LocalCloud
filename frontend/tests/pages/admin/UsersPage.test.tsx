@@ -37,7 +37,6 @@ function makeUser(over: Partial<UserListItem> = {}): UserListItem {
     email: "alice@example.com",
     username: "alice",
     status: "active",
-    is_email_verified: true,
     last_login_at: null,
     created_at: "2026-01-01T00:00:00Z",
     is_primary_admin: false,

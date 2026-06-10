@@ -60,8 +60,8 @@ async def main() -> None:
             now = datetime.now(UTC)
             await conn.execute(
                 """INSERT INTO users (id, email, username, password_hash, status,
-                   is_email_verified, approved_at, created_at, updated_at)
-                   VALUES ($1, $2, $3, $4, 'active', true, $5, $5, $5)""",
+                   approved_at, created_at, updated_at)
+                   VALUES ($1, $2, $3, $4, 'active', $5, $5, $5)""",
                 admin_id,
                 ADMIN_EMAIL,
                 ADMIN_USERNAME,

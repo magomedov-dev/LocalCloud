@@ -7,9 +7,8 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
-import pytest
 
 from database.models.enums import SystemRole, UserStatus
 from database.models.roles import Role
@@ -38,7 +37,6 @@ def make_user(**kwargs: object) -> User:
         username="testuser",
         password_hash="hashed_pw",
         status=UserStatus.ACTIVE,
-        is_email_verified=False,
         last_login_at=None,
         approved_at=None,
         blocked_at=None,
@@ -291,17 +289,6 @@ class TestMarkDeleted:
         user = make_user(status=UserStatus.ACTIVE)
         user.mark_deleted(deleted_at=moment)
         assert user.deleted_at == moment
-
-
-# ---------------------------------------------------------------------------
-# verify_email()
-# ---------------------------------------------------------------------------
-
-class TestVerifyEmail:
-    def test_sets_is_email_verified_true(self) -> None:
-        user = make_user(is_email_verified=False)
-        user.verify_email()
-        assert user.is_email_verified is True
 
 
 # ---------------------------------------------------------------------------

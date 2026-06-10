@@ -354,7 +354,6 @@ class RegistrationService:
                     username=request.username,
                     password_hash=request.password_hash,
                     status=UserStatus.ACTIVE,
-                    is_email_verified=data.is_email_verified,
                     approved_at=now,
                     flush=True,
                     refresh=True,

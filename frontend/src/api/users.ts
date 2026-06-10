@@ -60,13 +60,11 @@ export const usersApi = {
    *
    * Args:
    *   id: Идентификатор пользователя.
-   *   is_email_verified: Нужно ли пометить email пользователя как подтверждённый.
    *
    * Returns:
    *   Promise с обновлённым пользователем.
    */
-  approve: (id: string, is_email_verified = true) =>
-    api.post<UserRead>(`/users/${id}/approve`, { is_email_verified }).then((r) => r.data),
+  approve: (id: string) => api.post<UserRead>(`/users/${id}/approve`).then((r) => r.data),
 
   /**
    * Отклоняет пользователя.

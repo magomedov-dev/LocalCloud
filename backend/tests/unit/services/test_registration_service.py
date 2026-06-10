@@ -273,7 +273,7 @@ async def test_approve_request_success():
     )
     service = make_service(uow)
 
-    data = RegistrationApproveRequest(comment="Approved", is_email_verified=True)
+    data = RegistrationApproveRequest(comment="Approved")
     result = await service.approve_request(request.id, data, reviewed_by=reviewer_id)
 
     assert isinstance(result, RegistrationDecisionResponse)
@@ -573,7 +573,7 @@ async def test_approve_request_database_error_wrapped():
     uow = make_uow_mock(users=users_repo, registration_requests=reg_repo)
     service = make_service(uow)
 
-    data = RegistrationApproveRequest(comment="ok", is_email_verified=True)
+    data = RegistrationApproveRequest(comment="ok")
     with pytest.raises(ServiceError):
         await service.approve_request(uuid.uuid4(), data, reviewed_by=reviewer_id)
 
@@ -596,7 +596,7 @@ async def test_approve_request_conflict_propagates():
     uow = make_uow_mock(users=users_repo, registration_requests=reg_repo)
     service = make_service(uow)
 
-    data = RegistrationApproveRequest(comment="ok", is_email_verified=True)
+    data = RegistrationApproveRequest(comment="ok")
     with pytest.raises(ConflictServiceError):
         await service.approve_request(request.id, data, reviewed_by=reviewer_id)
 
@@ -612,7 +612,7 @@ async def test_approve_request_unexpected_error_wrapped():
     uow = make_uow_mock(users=users_repo, registration_requests=reg_repo)
     service = make_service(uow)
 
-    data = RegistrationApproveRequest(comment="ok", is_email_verified=True)
+    data = RegistrationApproveRequest(comment="ok")
     with pytest.raises(ServiceError):
         await service.approve_request(uuid.uuid4(), data, reviewed_by=reviewer_id)
 
@@ -1100,7 +1100,7 @@ async def test_approve_request_audit_failure_is_swallowed():
     audit.log_user_event = AsyncMock(side_effect=RuntimeError("audit down"))
     service = make_service(uow, audit)
 
-    data = RegistrationApproveRequest(comment="ok", is_email_verified=True)
+    data = RegistrationApproveRequest(comment="ok")
     result = await service.approve_request(request.id, data, reviewed_by=reviewer_id)
     assert isinstance(result, RegistrationDecisionResponse)
 

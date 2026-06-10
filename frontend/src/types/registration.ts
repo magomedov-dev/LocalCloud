@@ -30,7 +30,6 @@ export interface RegistrationRead {
  * Данные для одобрения заявки на регистрацию.
  */
 export interface RegistrationApproveRequest {
-  is_email_verified?: boolean;
   comment?: string | null;
 }
 

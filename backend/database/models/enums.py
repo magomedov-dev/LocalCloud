@@ -61,20 +61,18 @@ class TokenType(StrEnum):
     """Тип токена безопасности.
 
     Определяет назначение токена, используемого в механизмах аутентификации,
-    регистрации, сброса пароля и публичного доступа.
+    регистрации и публичного доступа.
 
     Attributes:
         ACCESS: Access-токен для доступа к защищённым ресурсам.
         REFRESH: Refresh-токен для обновления access-токена.
         REGISTRATION_APPROVAL: Токен подтверждения или одобрения регистрации.
-        PASSWORD_RESET: Токен сброса пароля.
         PUBLIC_LINK: Токен публичной ссылки.
     """
 
     ACCESS = "access"
     REFRESH = "refresh"
     REGISTRATION_APPROVAL = "registration_approval"
-    PASSWORD_RESET = "password_reset"
     PUBLIC_LINK = "public_link"
 
 

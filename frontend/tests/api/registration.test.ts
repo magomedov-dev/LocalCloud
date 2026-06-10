@@ -41,7 +41,7 @@ describe("registrationApi", () => {
   it("approve posts to approve endpoint with data", async () => {
     const expected = { id: "req1", user_id: "u1" };
     mockApi.post.mockResolvedValueOnce({ data: expected });
-    const data = { is_email_verified: true } as never;
+    const data = { comment: "ok" } as never;
     const result = await registrationApi.approve("req1", data);
     expect(mockApi.post).toHaveBeenCalledWith("/registration/requests/req1/approve", data);
     expect(result).toEqual(expected);

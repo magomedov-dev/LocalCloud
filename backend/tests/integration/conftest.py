@@ -43,7 +43,6 @@ def _make_mock_user(
     email: str = "test@example.com",
     username: str = "testuser",
     status: UserStatus = UserStatus.ACTIVE,
-    is_email_verified: bool = True,
     roles: list[Any] | None = None,
 ) -> MagicMock:
     """Создаёт mock ORM-объект User для подмены зависимости аутентификации."""
@@ -52,7 +51,6 @@ def _make_mock_user(
     user.email = email
     user.username = username
     user.status = status
-    user.is_email_verified = is_email_verified
     user.last_login_at = None
     user.approved_at = None
     user.blocked_at = None

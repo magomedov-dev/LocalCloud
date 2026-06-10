@@ -8,7 +8,6 @@ from schemas.users import (
     AdminChangePasswordRequest,
     CurrentUserRead,
     UserAdminUpdate,
-    UserApproveRequest,
     UserBlockRequest,
     UserListItem,
     UserQueryParams,
@@ -267,18 +266,15 @@ async def unblock_user(
     status_code=status.HTTP_200_OK,
 )
 async def approve_user(
-    data: UserApproveRequest,
     admin_user: CurrentAdminUserDependency,
     user_id: UUID = Path(...),
     users_service: UsersService = Depends(get_users_service_dependency),
 ) -> UserRead:
     """Одобряет пользователя.
 
-    Выполняет административное одобрение пользователя и при необходимости
-    обновляет признак подтверждения email-адреса.
+    Выполняет административное одобрение пользователя.
 
     Args:
-        data: Параметры одобрения пользователя.
         admin_user: Текущий администратор, выполняющий одобрение.
         user_id: Уникальный идентификатор одобряемого пользователя.
         users_service: Сервис пользователей, выполняющий одобрение.
@@ -294,7 +290,6 @@ async def approve_user(
     return await users_service.approve_user(
         user_id,
         actor_id=admin_user.id,
-        is_email_verified=data.is_email_verified,
     )
 
 

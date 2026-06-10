@@ -24,7 +24,6 @@ export interface CurrentUser {
   email: string;
   username: string;
   status: UserStatus;
-  is_email_verified: boolean;
   last_login_at: string | null;
   created_at: string;
   updated_at: string;
@@ -39,7 +38,6 @@ export interface UserRead {
   email: string;
   username: string;
   status: UserStatus;
-  is_email_verified: boolean;
   last_login_at: string | null;
   approved_at: string | null;
   blocked_at: string | null;
@@ -61,7 +59,6 @@ export interface UserListItem {
   email: string;
   username: string;
   status: UserStatus;
-  is_email_verified: boolean;
   last_login_at: string | null;
   created_at: string;
   /** Признак учётной записи первичного администратора (нельзя удалить). */

@@ -63,9 +63,6 @@ class TestNormalizeTokenType:
     def test_refresh_is_valid(self) -> None:
         assert normalize_token_type("refresh") == "refresh"
 
-    def test_password_reset_is_valid(self) -> None:
-        assert normalize_token_type("password_reset") == "password_reset"
-
     def test_uppercase_access_is_normalized(self) -> None:
         assert normalize_token_type("ACCESS") == "access"
 

@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, Enum, Index, String, UniqueConstraint, text
+from sqlalchemy import DateTime, Enum, Index, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -43,7 +43,6 @@ class User(Base, TimestampMixin):
         username: Уникальное имя пользователя, отображаемое в системе.
         password_hash: Хэшированный пароль пользователя.
         status: Текущий статус учётной записи.
-        is_email_verified: Признак подтверждения адреса электронной почты.
         last_login_at: Дата и время последнего успешного входа в систему.
         approved_at: Дата и время одобрения регистрации пользователя.
         blocked_at: Дата и время блокировки пользователя.
@@ -120,14 +119,6 @@ class User(Base, TimestampMixin):
         default=UserStatus.PENDING,
         server_default=UserStatus.PENDING.value,
         comment="Текущий статус учётной записи.",
-    )
-
-    is_email_verified: Mapped[bool] = mapped_column(
-        Boolean,
-        nullable=False,
-        default=False,
-        server_default=text("false"),
-        comment="Признак подтверждения адреса электронной почты.",
     )
 
     last_login_at: Mapped[datetime | None] = mapped_column(
@@ -388,11 +379,6 @@ class User(Base, TimestampMixin):
         """
 
         self.last_login_at = logged_in_at or datetime.now(UTC)
-
-    def verify_email(self) -> None:
-        """Помечает адрес электронной почты как подтверждённый."""
-
-        self.is_email_verified = True
 
     def approve(self, approved_at: datetime | None = None) -> None:
         """Одобряет пользователя и переводит его в активное состояние.

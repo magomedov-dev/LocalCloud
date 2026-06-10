@@ -10,10 +10,6 @@ from schemas.auth import (
     LoginResponse,
     LogoutResponse,
     PasswordChangeRequest,
-    PasswordResetConfirmRequest,
-    PasswordResetConfirmResponse,
-    PasswordResetRequest,
-    PasswordResetRequestResponse,
     RefreshTokenResponse,
 )
 from schemas.users import CurrentUserRead
@@ -348,59 +344,3 @@ async def change_password(
         actor_id=user.id,
     )
     return CurrentUserRead.model_validate(user)
-
-
-@router.post(
-    "/password/reset/request",
-    response_model=PasswordResetRequestResponse,
-    status_code=status.HTTP_200_OK,
-)
-async def request_password_reset(
-    data: PasswordResetRequest,
-    auth_service: AuthService = Depends(get_auth_service_dependency),
-) -> PasswordResetRequestResponse:
-    """Инициирует сброс пароля пользователя.
-
-    Принимает email и возвращает токен сброса пароля. Ответ намеренно
-    одинаков вне зависимости от того, зарегистрирован ли переданный email.
-
-    Args:
-        data: Email пользователя, для которого нужно сбросить пароль.
-        auth_service: Сервис аутентификации, генерирующий токен сброса.
-
-    Returns:
-        Токен сброса пароля и срок его действия.
-    """
-
-    return await auth_service.request_password_reset(data)
-
-
-@router.post(
-    "/password/reset/confirm",
-    response_model=PasswordResetConfirmResponse,
-    status_code=status.HTTP_200_OK,
-)
-async def confirm_password_reset(
-    data: PasswordResetConfirmRequest,
-    auth_service: AuthService = Depends(get_auth_service_dependency),
-    users_service: UsersService = Depends(get_users_service_dependency),
-) -> PasswordResetConfirmResponse:
-    """Подтверждает сброс пароля и устанавливает новый пароль.
-
-    Принимает токен сброса пароля и новый пароль, валидирует токен и
-    изменяет пароль пользователя.
-
-    Args:
-        data: Токен сброса пароля и новый пароль.
-        auth_service: Сервис аутентификации, валидирующий токен.
-        users_service: Сервис пользователей, применяющий новый пароль.
-
-    Returns:
-        Сообщение об успешном изменении пароля.
-
-    Raises:
-        HTTPException: Если токен недействителен, истёк или пароль не прошёл
-            проверку требований к сложности.
-    """
-
-    return await auth_service.confirm_password_reset(data, users_service=users_service)
