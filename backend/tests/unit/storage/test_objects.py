@@ -1,9 +1,9 @@
 """Unit-тесты для StorageObjectManager."""
 from __future__ import annotations
 
-import uuid
+import hashlib
 from io import BytesIO
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -551,6 +551,97 @@ class TestGetObjectStream:
 
         with pytest.raises(StorageDownloadError):
             await manager.get_object_stream(bucket="test-bucket", object_key="file.txt")
+
+
+# ---------------------------------------------------------------------------
+# calculate_object_checksum
+# ---------------------------------------------------------------------------
+
+class _FakeObjectStream:
+    """Имитация потока MinIO: отдаёт данные блоками, затем ``b''``."""
+
+    def __init__(self, data: bytes) -> None:
+        self._buffer = BytesIO(data)
+        self.read_calls = 0
+        self.closed = False
+        self.released = False
+
+    def read(self, size: int = -1) -> bytes:
+        self.read_calls += 1
+        return self._buffer.read(size)
+
+    def close(self) -> None:
+        self.closed = True
+
+    def release_conn(self) -> None:
+        self.released = True
+
+
+class TestCalculateObjectChecksum:
+    @pytest.mark.asyncio
+    async def test_streams_in_chunks_and_matches_hashlib(self) -> None:
+        manager, client, raw = make_manager()
+        data = b"file content for streaming checksum " * 100
+        stream = _FakeObjectStream(data)
+        raw.get_object = MagicMock(return_value=stream)
+
+        checksum = await manager.calculate_object_checksum(
+            bucket="test-bucket",
+            object_key="folder/file.bin",
+            algorithm="sha256",
+            chunk_size=1024,
+        )
+
+        assert checksum == hashlib.sha256(data).hexdigest()
+        # Данные читались блоками (а не одним read целиком в память).
+        assert stream.read_calls >= 2
+        # Поток закрыт и соединение освобождено.
+        assert stream.closed is True
+        assert stream.released is True
+
+    @pytest.mark.asyncio
+    async def test_default_chunk_size_used(self) -> None:
+        manager, client, raw = make_manager()
+        data = b"short payload"
+        raw.get_object = MagicMock(return_value=_FakeObjectStream(data))
+
+        checksum = await manager.calculate_object_checksum(
+            bucket="test-bucket",
+            object_key="f.bin",
+            algorithm="md5",
+        )
+
+        assert checksum == hashlib.md5(data).hexdigest()
+
+    @pytest.mark.asyncio
+    async def test_not_found_raises(self) -> None:
+        manager, client, raw = make_manager()
+
+        async def execute_raises(fn, *args, operation_name=None, **kwargs):
+            raise StorageObjectNotFoundError(
+                bucket="test-bucket", object_key="f.bin"
+            )
+
+        client.execute = AsyncMock(side_effect=execute_raises)
+
+        with pytest.raises((StorageObjectNotFoundError, StorageDownloadError)):
+            await manager.calculate_object_checksum(
+                bucket="test-bucket", object_key="f.bin", algorithm="sha256"
+            )
+
+    @pytest.mark.asyncio
+    async def test_storage_error_wrapped_as_download_error(self) -> None:
+        manager, client, raw = make_manager()
+
+        async def execute_raises(fn, *args, operation_name=None, **kwargs):
+            raise StorageError("read failed", details={"reason": "io"})
+
+        client.execute = AsyncMock(side_effect=execute_raises)
+
+        with pytest.raises(StorageDownloadError):
+            await manager.calculate_object_checksum(
+                bucket="test-bucket", object_key="f.bin", algorithm="sha256"
+            )
 
 
 # ---------------------------------------------------------------------------

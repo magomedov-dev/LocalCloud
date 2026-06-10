@@ -383,7 +383,8 @@ class StorageIntegrityChecker:
         """Проверяет checksum объекта.
 
         Фактический checksum считается по содержимому объекта, а не берётся из
-        metadata, потому что metadata не является источником истины.
+        metadata, потому что metadata не является источником истины. Содержимое
+        читается потоком, без полной загрузки объекта в память.
 
         Args:
             bucket: Имя bucket.
@@ -407,9 +408,10 @@ class StorageIntegrityChecker:
         )
 
         try:
-            download_result = await self.object_manager.get_object_bytes(
+            actual_checksum = await self.object_manager.calculate_object_checksum(
                 bucket=bucket,
                 object_key=object_key,
+                algorithm=normalized_algorithm,
             )
         except StorageObjectNotFoundError:
             return StorageIntegrityStatus(
@@ -435,11 +437,6 @@ class StorageIntegrityChecker:
                 operation="verify_object_checksum",
                 expected=normalized_expected_checksum,
             ) from exc
-
-        actual_checksum = calculate_bytes_checksum(
-            download_result.data,
-            algorithm=normalized_algorithm,
-        )
 
         if actual_checksum == normalized_expected_checksum:
             return StorageIntegrityStatus(

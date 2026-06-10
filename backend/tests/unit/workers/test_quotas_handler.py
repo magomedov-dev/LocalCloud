@@ -149,7 +149,7 @@ class TestRecalculateUserQuotaHandlerBatch:
         result = await recalculate_user_quota_handler(ctx)
 
         assert result.success is True
-        uow.users.list_active_users.assert_called_once_with(offset=0, limit=10)
+        uow.users.list_active_users.assert_called_once_with(limit=10)
 
 
 # ---------------------------------------------------------------------------

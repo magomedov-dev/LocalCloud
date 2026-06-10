@@ -37,6 +37,7 @@ def make_file_row(
     preview_storage_key=None,
     bucket="files",
     key="objects/key",
+    size_bytes=1024,
 ):
     row = MagicMock()
     row.id = file_id or uuid.uuid4()
@@ -45,6 +46,7 @@ def make_file_row(
     row.preview_storage_key = preview_storage_key
     row.storage_bucket = bucket
     row.storage_key = key
+    row.size_bytes = size_bytes
     node = MagicMock()
     node.owner_id = owner_id or uuid.uuid4()
     row.node = node
@@ -180,6 +182,12 @@ class TestCompressToWebp:
     def test_invalid_image_raises(self) -> None:
         with pytest.raises(Exception):
             _compress_to_webp(b"not-an-image")
+
+    def test_too_many_pixels_raises_bomb_error(self, monkeypatch) -> None:
+        # Число пикселей сверх лимита отклоняется ДО декодирования растра.
+        monkeypatch.setattr(previews, "_IMAGE_PREVIEW_MAX_PIXELS", 100)
+        with pytest.raises(Image.DecompressionBombError):
+            _compress_to_webp(_png_bytes("RGB", (100, 100)))
 
 
 # ---------------------------------------------------------------------------
@@ -344,6 +352,31 @@ class TestImagePreviewSuccess:
         assert upd_kwargs["preview_storage_key"] == "previews/user/file.webp"
         uow.commit.assert_awaited()
 
+    @pytest.mark.asyncio
+    async def test_oversized_image_skipped_without_download(self) -> None:
+        # Изображение сверх лимита размера помечается NOT_REQUIRED, и тяжёлый
+        # файл вообще не скачивается в память.
+        file_id = uuid.uuid4()
+        ctx, uow = make_ctx(payload={"file_id": str(file_id)})
+        row = make_file_row(
+            file_id=file_id,
+            mime_type="image/png",
+            size_bytes=previews._IMAGE_PREVIEW_MAX_SOURCE_BYTES + 1,
+        )
+        uow.files.get_by_id = AsyncMock(return_value=row)
+
+        result = await generate_file_preview_handler(ctx)
+
+        assert result.success is True
+        assert (
+            result.result_data["preview_status"]
+            == FilePreviewStatus.NOT_REQUIRED.value
+        )
+        ctx.storage_service.objects.get_object_bytes.assert_not_awaited()
+        ctx.storage_service.objects.put_object.assert_not_awaited()
+        uow.files.mark_preview_not_required.assert_awaited()
+        uow.commit.assert_awaited()
+
 
 # ---------------------------------------------------------------------------
 # Успешное превью текста / JSON
@@ -451,6 +484,28 @@ class TestErrorBranches:
 
         assert result.success is False
         assert result.error_code == "image_too_large"
+
+    @pytest.mark.asyncio
+    async def test_decompression_bomb_marks_not_required_and_fails(
+        self, monkeypatch
+    ) -> None:
+        # «Бомба» обрабатывается тем же путём, что и MemoryError.
+        file_id = uuid.uuid4()
+        ctx, uow = make_ctx(payload={"file_id": str(file_id)})
+        row = make_file_row(file_id=file_id, mime_type="image/png")
+        uow.files.get_by_id = AsyncMock(return_value=row)
+
+        def bomb(_data):
+            raise Image.DecompressionBombError("too many pixels")
+
+        monkeypatch.setattr(previews, "_compress_to_webp", bomb)
+
+        result = await generate_file_preview_handler(ctx)
+
+        assert result.success is False
+        assert result.error_code == "image_too_large"
+        assert result.retry is False
+        uow.files.mark_preview_not_required.assert_awaited()
 
     @pytest.mark.asyncio
     async def test_storage_connection_error_retries(self) -> None:

@@ -201,7 +201,6 @@ async def _load_files_for_check(
             storage_status=DbStorageObjectStatus.AVAILABLE,
             owner_id=None,
             include_deleted_nodes=False,
-            offset=0,
             limit=limit,
         )
     return files
