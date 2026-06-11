@@ -60,20 +60,20 @@ describe("thumbnailCache", () => {
       expect(getThumbnailCache("edge")).toBe("https://cdn/edge.png");
     });
 
-    it("истекает null-маркер по короткому отрицательному TTL", () => {
+    it("истекает null-маркер по отрицательному TTL", () => {
       vi.useFakeTimers();
       vi.setSystemTime(0);
-      setThumbnailCache("pending", null);
-      // В пределах отрицательного TTL — ещё известно «нет превью».
+      setThumbnailCache("absent", null);
+      // В пределах отрицательного TTL — ещё известно «миниатюры не будет».
       vi.setSystemTime(THUMBNAIL_NEGATIVE_TTL_MS);
-      expect(getThumbnailCache("pending")).toBeNull();
-      // За пределами — запись истекает, чтобы перепросить готовое превью.
+      expect(getThumbnailCache("absent")).toBeNull();
+      // За пределами — запись истекает (статус мог измениться на сервере).
       vi.setSystemTime(THUMBNAIL_NEGATIVE_TTL_MS + 1);
-      expect(getThumbnailCache("pending")).toBeUndefined();
-      expect(sessionStorage.getItem(PREFIX + "pending")).toBeNull();
+      expect(getThumbnailCache("absent")).toBeUndefined();
+      expect(sessionStorage.getItem(PREFIX + "absent")).toBeNull();
     });
 
-    it("null-маркер не доживает до длинного положительного TTL", () => {
+    it("null-маркер истекает после двойного отрицательного TTL", () => {
       vi.useFakeTimers();
       vi.setSystemTime(0);
       setThumbnailCache("neg", null);

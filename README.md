@@ -221,7 +221,7 @@ RAM, диск, число пользователей), двумя ключевы
 - **БД** — `POSTGRES_POOL_SIZE`, `POSTGRES_MAX_OVERFLOW`, `POSTGRES_MAX_CONNECTIONS`
   и тюнинг сервера Postgres.
 - **Превью / архивы** — `PREVIEW_*` (включая мастер-флаг `PREVIEW_GENERATION_ENABLED`),
-  `ARCHIVE_*`, `THUMBNAIL_BATCH_CONCURRENCY`.
+  `ARCHIVE_*`.
 - **Флаги UI** — `FEATURE_PREVIEWS_ENABLED`, `FEATURE_FILE_VIEWER_ENABLED`,
   `FEATURE_MEDIA_PLAYBACK_ENABLED`, `FEATURE_FILE_EDITING_ENABLED` (отдаются
   фронтенду через `GET /api/v1/config`).

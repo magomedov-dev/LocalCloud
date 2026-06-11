@@ -1406,3 +1406,185 @@ async def test_effective_permissions_allowed_without_permission_level(monkeypatc
     assert effective.can_write is False
     assert effective.can_delete is False
     assert effective.can_share is False
+
+
+# ---------------------------------------------------------------------------
+# filter_readable_node_ids (пакетная проверка READ-доступа)
+# ---------------------------------------------------------------------------
+
+
+def make_batch_permissions_repo(direct=None, inherited=None):
+    """Репозиторий разрешений с батч-методами для пакетной проверки доступа."""
+    repo = AsyncMock()
+    repo.get_permissions_for_nodes = AsyncMock(return_value=direct or [])
+    repo.get_active_ancestor_permissions_for_nodes = AsyncMock(
+        return_value=inherited or []
+    )
+    return repo
+
+
+@pytest.mark.asyncio
+async def test_filter_readable_empty_nodes_returns_empty_set():
+    """Пустой набор узлов не выполняет запросов и возвращает пустое множество."""
+    uow = make_uow(
+        users=make_users_repo(make_user_mock()),
+        permissions=make_batch_permissions_repo(),
+    )
+    service = make_service(uow)
+
+    result = await service.filter_readable_node_ids(
+        uow=uow, nodes=[], user_id=uuid.uuid4()
+    )
+
+    assert result == set()
+    uow.users.get_required_user_by_id.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_filter_readable_owner_fast_path_skips_permission_queries():
+    """Узлы владельца разрешаются без запросов разрешений."""
+    owner_id = uuid.uuid4()
+    nodes = [make_node_mock(owner_id=owner_id) for _ in range(3)]
+    user = make_user_mock(user_id=owner_id)
+    permissions_repo = make_batch_permissions_repo()
+    uow = make_uow(users=make_users_repo(user), permissions=permissions_repo)
+    service = make_service(uow)
+
+    result = await service.filter_readable_node_ids(
+        uow=uow, nodes=nodes, user_id=owner_id
+    )
+
+    assert result == {node.id for node in nodes}
+    permissions_repo.get_permissions_for_nodes.assert_not_awaited()
+    permissions_repo.get_active_ancestor_permissions_for_nodes.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_filter_readable_admin_allowed_for_foreign_nodes():
+    """Администратор получает доступ ко всем узлам без запросов разрешений."""
+    nodes = [make_node_mock() for _ in range(2)]
+    admin = make_user_mock(role=SystemRole.ADMIN)
+    permissions_repo = make_batch_permissions_repo()
+    uow = make_uow(users=make_users_repo(admin), permissions=permissions_repo)
+    service = make_service(uow)
+
+    result = await service.filter_readable_node_ids(
+        uow=uow, nodes=nodes, user_id=admin.id
+    )
+
+    assert result == {node.id for node in nodes}
+    permissions_repo.get_permissions_for_nodes.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_filter_readable_direct_permission_allows_foreign_node():
+    """Чужой узел с прямым READ-разрешением попадает в результат."""
+    user = make_user_mock()
+    shared_node = make_node_mock()
+    private_node = make_node_mock()
+    permission = make_permission_mock(user.id)
+    permission.node_id = shared_node.id
+    permissions_repo = make_batch_permissions_repo(direct=[permission])
+    uow = make_uow(users=make_users_repo(user), permissions=permissions_repo)
+    service = make_service(uow)
+
+    result = await service.filter_readable_node_ids(
+        uow=uow, nodes=[shared_node, private_node], user_id=user.id
+    )
+
+    assert result == {shared_node.id}
+    # Оба «не своих» узла проверены одним батч-запросом прямых разрешений.
+    permissions_repo.get_permissions_for_nodes.assert_awaited_once()
+    # Для узла без прямых прав запрошены права предков (тоже один батч).
+    permissions_repo.get_active_ancestor_permissions_for_nodes.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_filter_readable_inherited_permission_allows_descendant():
+    """Грант на папку-предка открывает READ-доступ к её содержимому."""
+    user = make_user_mock()
+    child_node = make_node_mock()
+    permission = make_permission_mock(user.id)
+    permissions_repo = make_batch_permissions_repo(
+        inherited=[(child_node.id, permission)]
+    )
+    uow = make_uow(users=make_users_repo(user), permissions=permissions_repo)
+    service = make_service(uow)
+
+    result = await service.filter_readable_node_ids(
+        uow=uow, nodes=[child_node], user_id=user.id
+    )
+
+    assert result == {child_node.id}
+
+
+@pytest.mark.asyncio
+async def test_filter_readable_denies_foreign_node_without_grants():
+    """Чужой узел без прямых и наследуемых прав не попадает в результат."""
+    user = make_user_mock()
+    foreign_node = make_node_mock()
+    permissions_repo = make_batch_permissions_repo()
+    uow = make_uow(users=make_users_repo(user), permissions=permissions_repo)
+    service = make_service(uow)
+
+    result = await service.filter_readable_node_ids(
+        uow=uow, nodes=[foreign_node], user_id=user.id
+    )
+
+    assert result == set()
+
+
+@pytest.mark.asyncio
+async def test_filter_readable_anonymous_gets_only_public_nodes():
+    """Аноним видит только публичные узлы; запросы разрешений не выполняются."""
+    public_node = make_node_mock(visibility=NodeVisibility.PUBLIC)
+    private_node = make_node_mock(visibility=NodeVisibility.PRIVATE)
+    permissions_repo = make_batch_permissions_repo()
+    uow = make_uow(
+        users=make_users_repo(make_user_mock()), permissions=permissions_repo
+    )
+    service = make_service(uow)
+
+    result = await service.filter_readable_node_ids(
+        uow=uow, nodes=[public_node, private_node], user_id=None
+    )
+
+    assert result == {public_node.id}
+    uow.users.get_required_user_by_id.assert_not_awaited()
+    permissions_repo.get_permissions_for_nodes.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_filter_readable_deleted_nodes_excluded():
+    """Удалённые узлы не проходят пакетную проверку даже у владельца."""
+    owner_id = uuid.uuid4()
+    deleted_node = make_node_mock(owner_id=owner_id, is_deleted=True)
+    user = make_user_mock(user_id=owner_id)
+    uow = make_uow(
+        users=make_users_repo(user), permissions=make_batch_permissions_repo()
+    )
+    service = make_service(uow)
+
+    result = await service.filter_readable_node_ids(
+        uow=uow, nodes=[deleted_node], user_id=owner_id
+    )
+
+    assert result == set()
+
+
+@pytest.mark.asyncio
+async def test_filter_readable_database_error_wrapped():
+    """Ошибка БД при пакетной проверке оборачивается в ServiceError."""
+    user = make_user_mock()
+    foreign_node = make_node_mock()
+    permissions_repo = make_batch_permissions_repo()
+    permissions_repo.get_permissions_for_nodes = AsyncMock(
+        side_effect=DatabaseError("boom")
+    )
+    uow = make_uow(users=make_users_repo(user), permissions=permissions_repo)
+    service = make_service(uow)
+
+    with pytest.raises(ServiceError):
+        await service.filter_readable_node_ids(
+            uow=uow, nodes=[foreign_node], user_id=user.id
+        )

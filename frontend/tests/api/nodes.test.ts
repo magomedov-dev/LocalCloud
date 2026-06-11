@@ -78,7 +78,10 @@ describe("nodesApi", () => {
   });
 
   it("thumbnailsBatch posts node_ids and returns thumbnails map", async () => {
-    const thumbnails = { n1: "u1", n2: null };
+    const thumbnails = {
+      n1: { status: "ready", url: "u1" },
+      n2: { status: "none", url: null },
+    };
     mockApi.post.mockResolvedValueOnce({ data: { thumbnails } });
     const controller = new AbortController();
     const result = await nodesApi.thumbnailsBatch(["n1", "n2"], controller.signal);

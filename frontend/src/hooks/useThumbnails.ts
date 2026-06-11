@@ -3,20 +3,21 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { nodesApi } from "@/api/nodes";
 import { getThumbnailCache, setThumbnailCache } from "@/lib/thumbnailCache";
 import { thumbnailSupported } from "@/lib/preview";
-import type { NodeListItem } from "@/types/nodes";
+import type { NodeListItem, ThumbnailBatchItem } from "@/types/nodes";
 
 const GC_MS = 10 * 60 * 1000;
-// Опрос ожидающих превью идёт с экспоненциальной задержкой: быстро в начале
-// (поймать только что готовое превью), затем всё реже — чтобы 3 пользователя в
-// папке не создавали постоянный поток батч-запросов. На фоне (вкладка не в
-// фокусе) опрос не идёт вовсе (refetchIntervalInBackground: false).
+// Опрос генерирующихся превью идёт с экспоненциальной задержкой: быстро в
+// начале (поймать только что готовое превью), затем всё реже — чтобы 3
+// пользователя в папке не создавали постоянный поток батч-запросов. На фоне
+// (вкладка не в фокусе) опрос не идёт вовсе (refetchIntervalInBackground:
+// false).
 const POLL_BASE_MS = 4000;
 const POLL_MAX_MS = 30000;
 const MAX_POLLS = 8;
 // Серверный лимит node_ids на один батч-запрос; большее число режем на части.
 const BATCH_LIMIT = 100;
 
-type BatchResult = Record<string, string | null>;
+type BatchResult = Record<string, ThumbnailBatchItem>;
 
 /** Делит массив на части не больше `size`. */
 function chunk<T>(items: T[], size: number): T[][] {
@@ -26,12 +27,15 @@ function chunk<T>(items: T[], size: number): T[][] {
 }
 
 /**
- * Загружает presigned thumbnail URL для preview-элементов одним batch-запросом.
+ * Загружает состояние миниатюр для preview-элементов одним batch-запросом.
  *
- * Кэшируются только положительные результаты (готовый URL) — в React Query и
- * `sessionStorage`. Для ещё не готовых превью (`null`) запрос периодически
- * повторяется: превью книг и видео генерируется на сервере с задержкой, и опрос
- * позволяет показать миниатюру, как только она появится, без перезагрузки.
+ * Сервер различает три исхода, и оба терминальных кэшируются (в React Query и
+ * `sessionStorage`):
+ * - `ready` — есть presigned URL миниатюры;
+ * - `none` — миниатюры нет и не будет (нет доступа, тип не поддерживается,
+ *   генерация не требуется или не удалась) — такой узел больше не опрашивается;
+ * - `pending` — превью генерируется: только эти узлы опрашиваются повторно,
+ *   чтобы показать миниатюру, как только она появится, без перезагрузки.
  *
  * Возвращает `Map`, где:
  * - ключ отсутствует — thumbnail ещё загружается, UI может показать skeleton.
@@ -57,17 +61,16 @@ export function useThumbnails(
     (i) => i.node_type === "file" && thumbnailSupported(i.file_mime_type),
   );
 
-  // Запрашиваем все элементы без готового (положительного) URL: и неизвестные,
-  // и те, для которых превью пока не готово — чтобы опросить их повторно.
-  const positiveUrl = (id: string): string | undefined => {
+  // Терминальное значение из кэша: string — готовый URL, null — миниатюры не
+  // будет (оба не перезапрашиваются), undefined — неизвестно/генерируется.
+  const cachedValue = (id: string): string | null | undefined => {
     const rq = qc.getQueryData<string | null>(["thumbnail", id]);
-    if (typeof rq === "string") return rq;
-    const stored = getThumbnailCache(id);
-    return typeof stored === "string" ? stored : undefined;
+    if (rq !== undefined) return rq;
+    return getThumbnailCache(id);
   };
 
   const pendingIds = enabled
-    ? previewItems.map((i) => i.id).filter((id) => positiveUrl(id) === undefined)
+    ? previewItems.map((i) => i.id).filter((id) => cachedValue(id) === undefined)
     : [];
 
   const { data: batch } = useQuery({
@@ -78,11 +81,17 @@ export function useThumbnails(
         chunk(pendingIds, BATCH_LIMIT).map((ids) => nodesApi.thumbnailsBatch(ids, signal)),
       );
       const result: BatchResult = Object.assign({}, ...parts);
-      for (const [id, url] of Object.entries(result)) {
-        if (url) {
-          qc.setQueryData(["thumbnail", id], url);
-          setThumbnailCache(id, url);
+      for (const [id, item] of Object.entries(result)) {
+        if (item.status === "ready" && item.url) {
+          qc.setQueryData(["thumbnail", id], item.url);
+          setThumbnailCache(id, item.url);
+        } else if (item.status === "none") {
+          // Окончательное отсутствие миниатюры: кэшируем null, чтобы больше
+          // не включать узел в батчи и не опрашивать его впустую.
+          qc.setQueryData(["thumbnail", id], null);
+          setThumbnailCache(id, null);
         }
+        // pending не кэшируем — узел останется в pendingIds и будет опрошен.
       }
       return result;
     },
@@ -91,12 +100,13 @@ export function useThumbnails(
     gcTime: GC_MS,
     // На фоне (вкладка не в фокусе) не опрашиваем — снимает основную нагрузку.
     refetchIntervalInBackground: false,
-    // Опрашиваем, пока есть не готовые превью, с экспоненциальной задержкой и не
-    // дольше MAX_POLLS попыток (иначе файлы без превью опрашивались бы вечно).
+    // Опрашиваем, пока сервер сообщает о генерирующихся превью (pending), с
+    // экспоненциальной задержкой и не дольше MAX_POLLS попыток — защита от
+    // зависших в генерации файлов.
     refetchInterval: (query: Query<BatchResult>) => {
       const data = query.state.data;
       if (!data) return false;
-      const hasPending = Object.values(data).some((v) => v == null);
+      const hasPending = Object.values(data).some((v) => v.status === "pending");
       if (!hasPending) return false;
       if (query.state.dataUpdateCount >= MAX_POLLS) return false;
       const exp = Math.max(0, query.state.dataUpdateCount - 1);
@@ -104,8 +114,8 @@ export function useThumbnails(
     },
   });
 
-  // Result map: положительный URL из кэша, иначе текущее значение из batch
-  // (null = иконка, отсутствие = ещё грузится).
+  // Result map: терминальное значение из кэша, иначе текущее значение из
+  // batch (ready → URL, pending/none → иконка, отсутствие → ещё грузится).
   const map = new Map<string, string | null>();
   if (!enabled) {
     // Превью отключены: показываем иконку (null) для всех поддерживаемых.
@@ -113,11 +123,12 @@ export function useThumbnails(
     return map;
   }
   for (const item of previewItems) {
-    const url = positiveUrl(item.id);
-    if (url !== undefined) {
-      map.set(item.id, url);
+    const value = cachedValue(item.id);
+    if (value !== undefined) {
+      map.set(item.id, value);
     } else if (batch && item.id in batch) {
-      map.set(item.id, batch[item.id]);
+      const entry = batch[item.id];
+      map.set(item.id, entry.status === "ready" ? (entry.url ?? null) : null);
     }
   }
   return map;

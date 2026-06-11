@@ -1,6 +1,11 @@
 import api from "@/lib/api";
 import type { PageResponse } from "@/types/common";
-import type { NodeListItem, NodeMoveRequest, NodeCopyRequest } from "@/types/nodes";
+import type {
+  NodeListItem,
+  NodeMoveRequest,
+  NodeCopyRequest,
+  ThumbnailBatchItem,
+} from "@/types/nodes";
 import type { FolderContent } from "@/types/folders";
 import type { FileDownloadResponse } from "@/types/files";
 
@@ -78,19 +83,19 @@ export const nodesApi = {
     api.get<FileDownloadResponse>(`/nodes/${id}/thumbnail`).then((r) => r.data),
 
   /**
-   * Возвращает thumbnail URL для набора nodes.
+   * Возвращает состояние миниатюры для набора nodes.
    *
    * Args:
    *   nodeIds: Идентификаторы nodes, для которых нужно получить thumbnails.
    *   signal: Abort signal для отмены запроса.
    *
    * Returns:
-   *   Promise со словарём `nodeId -> thumbnail URL | null`.
+   *   Promise со словарём `nodeId -> { status: ready|pending|none, url }`.
    */
   thumbnailsBatch: (nodeIds: string[], signal?: AbortSignal) =>
     api
       .post<{
-        thumbnails: Record<string, string | null>;
+        thumbnails: Record<string, ThumbnailBatchItem>;
       }>("/nodes/thumbnails/batch", { node_ids: nodeIds }, { signal })
       .then((r) => r.data.thumbnails),
 

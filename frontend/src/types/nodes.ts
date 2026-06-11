@@ -49,6 +49,19 @@ export interface NodeListItem {
 }
 
 /**
+ * Состояние миниатюры узла в пакетном ответе `/nodes/thumbnails/batch`.
+ *
+ * - `ready` — миниатюра есть, `url` заполнен.
+ * - `pending` — превью генерируется на сервере; имеет смысл опросить позже.
+ * - `none` — миниатюры нет и не будет (нет доступа, тип не поддерживается,
+ *   генерация не требуется или завершилась отказом); опрашивать бессмысленно.
+ */
+export interface ThumbnailBatchItem {
+  status: "ready" | "pending" | "none";
+  url: string | null;
+}
+
+/**
  * Данные для перемещения node.
  */
 export interface NodeMoveRequest {

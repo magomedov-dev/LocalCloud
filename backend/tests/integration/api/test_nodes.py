@@ -856,7 +856,9 @@ class TestThumbnailsBatch:
 
         mock_downloads_svc = AsyncMock()
         mock_downloads_svc.create_thumbnail_urls_batch = AsyncMock(
-            return_value={str(node_id): "https://example.com/thumb"}
+            return_value={
+                str(node_id): {"status": "ready", "url": "https://example.com/thumb"}
+            }
         )
 
         app.dependency_overrides[get_current_active_user] = lambda: mock_user
@@ -871,7 +873,10 @@ class TestThumbnailsBatch:
                 )
             assert response.status_code == 200
             data = response.json()
-            assert data["thumbnails"][str(node_id)] == "https://example.com/thumb"
+            assert data["thumbnails"][str(node_id)] == {
+                "status": "ready",
+                "url": "https://example.com/thumb",
+            }
         finally:
             app.dependency_overrides.pop(get_current_active_user, None)
             app.dependency_overrides.pop(get_downloads_service_dependency, None)

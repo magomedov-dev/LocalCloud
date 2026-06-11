@@ -9,7 +9,6 @@ from core.config import (
     ApplicationSettings,
     ArchiveSettings,
     DatabaseSettings,
-    DownloadSettings,
     FeatureSettings,
     LoggingSettings,
     PreviewSettings,
@@ -22,7 +21,6 @@ from core.config import (
 )
 from core.constants import ApplicationConstants as APC
 from core.constants import ArchiveConstants as ARC
-from core.constants import DownloadConstants as DLC
 from core.constants import FeatureConstants as FTC
 from core.constants import PreviewConstants as PVC
 from core.constants import SecurityConstants as SCC
@@ -370,20 +368,6 @@ class TestArchiveSettings:
             ArchiveSettings(ARCHIVE_DISK_SAFETY_FACTOR=0.9)
 
 
-class TestDownloadSettings:
-    def test_default_matches_constant(self) -> None:
-        settings = DownloadSettings()
-        assert settings.thumbnail_batch_concurrency == DLC.THUMBNAIL_BATCH_CONCURRENCY
-
-    def test_env_override(self) -> None:
-        settings = DownloadSettings(THUMBNAIL_BATCH_CONCURRENCY=16)
-        assert settings.thumbnail_batch_concurrency == 16
-
-    def test_non_positive_rejected(self) -> None:
-        with pytest.raises(ValidationError):
-            DownloadSettings(THUMBNAIL_BATCH_CONCURRENCY=0)
-
-
 class TestFeatureSettings:
     def test_defaults_all_enabled(self) -> None:
         settings = FeatureSettings()
@@ -435,7 +419,6 @@ class TestSettingsAggregate:
         assert settings.server is not None
         assert settings.previews is not None
         assert settings.archives is not None
-        assert settings.downloads is not None
         assert settings.features is not None
 
     def test_sub_settings_are_correct_types(self) -> None:
@@ -459,7 +442,6 @@ class TestSettingsAggregate:
         assert isinstance(settings.server, ServerSettings)
         assert isinstance(settings.previews, PreviewSettings)
         assert isinstance(settings.archives, ArchiveSettings)
-        assert isinstance(settings.downloads, DownloadSettings)
         assert isinstance(settings.features, FeatureSettings)
 
 

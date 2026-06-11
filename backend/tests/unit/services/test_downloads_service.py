@@ -626,67 +626,221 @@ async def test_create_thumbnail_url_permission_denied_reraised():
 
 
 @pytest.mark.asyncio
-async def test_create_thumbnail_urls_batch_mixes_success_and_failure():
-    """create_thumbnail_urls_batch сопоставляет URL и None для узлов с ошибкой."""
+async def test_create_thumbnail_urls_batch_mixes_allowed_and_denied():
+    """Батч отдаёт ready+URL для доступных узлов и none для недоступных."""
     user_id = uuid.uuid4()
-    ok_node = uuid.uuid4()
-    bad_node = uuid.uuid4()
+    ok_file = make_file_mock(owner_id=user_id)
+    ok_file.preview_available = True
+    ok_file.preview_status = FilePreviewStatus.READY
+    ok_file.preview_storage_key = "key/preview.webp"
+    denied_file = make_file_mock()
+    denied_file.preview_available = True
+    denied_file.preview_status = FilePreviewStatus.READY
+    denied_file.preview_storage_key = "key/denied-preview.webp"
+    missing_node = uuid.uuid4()
 
-    service = make_downloads_service(make_uow())
+    files_repo = AsyncMock()
+    files_repo.list_by_node_ids = AsyncMock(return_value=[ok_file, denied_file])
 
-    async def fake(node_id, user_id):
-        if node_id == bad_node:
-            raise DownloadServiceError("nope")
-        resp = MagicMock()
-        resp.presigned_url = "https://example.com/thumb"
-        return resp
-
-    service.create_thumbnail_url = AsyncMock(side_effect=fake)
+    access = make_access()
+    access.filter_readable_node_ids = AsyncMock(return_value={ok_file.node.id})
+    uow = make_uow(files=files_repo)
+    service = make_downloads_service(uow, access_svc=access)
 
     result = await service.create_thumbnail_urls_batch(
-        node_ids=[ok_node, bad_node], user_id=user_id
+        node_ids=[ok_file.node_id, denied_file.node_id, missing_node],
+        user_id=user_id,
     )
-    assert result[str(ok_node)] == "https://example.com/thumb"
-    assert result[str(bad_node)] is None
+
+    assert result[str(ok_file.node_id)].status == "ready"
+    assert result[str(ok_file.node_id)].url == "https://example.com/file"
+    assert result[str(denied_file.node_id)].status == "none"
+    assert result[str(denied_file.node_id)].url is None
+    assert result[str(missing_node)].status == "none"
 
 
 @pytest.mark.asyncio
-async def test_create_thumbnail_urls_batch_bounds_concurrency(monkeypatch):
-    """Батч не запускает все per-node операции разом — конкурентность ограничена."""
-    import asyncio as _asyncio
+async def test_create_thumbnail_urls_batch_pending_while_generating():
+    """Видео/PDF с превью в очереди или генерации получают статус pending."""
+    user_id = uuid.uuid4()
+    pending_file = make_file_mock(owner_id=user_id)
+    pending_file.mime_type = "video/mp4"
+    pending_file.preview_available = False
+    pending_file.preview_status = FilePreviewStatus.PENDING
+    pending_file.preview_storage_key = None
+    generating_file = make_file_mock(owner_id=user_id)
+    generating_file.mime_type = "application/pdf"
+    generating_file.preview_available = False
+    generating_file.preview_status = FilePreviewStatus.GENERATING
+    generating_file.preview_storage_key = None
 
-    from services import downloads as downloads_module
-
-    # Уменьшаем семафор до 3, чтобы проверка была наглядной и быстрой.
-    monkeypatch.setattr(
-        downloads_module, "_thumbnail_batch_semaphore", _asyncio.Semaphore(3)
+    files_repo = AsyncMock()
+    files_repo.list_by_node_ids = AsyncMock(
+        return_value=[pending_file, generating_file]
     )
 
-    service = make_downloads_service(make_uow())
-    node_ids = [uuid.uuid4() for _ in range(30)]
-
-    in_flight = 0
-    peak = 0
-
-    async def fake(node_id, user_id):
-        nonlocal in_flight, peak
-        in_flight += 1
-        peak = max(peak, in_flight)
-        await _asyncio.sleep(0.005)  # удерживаем слот, чтобы росла конкурентность
-        in_flight -= 1
-        resp = MagicMock()
-        resp.presigned_url = "https://example.com/thumb"
-        return resp
-
-    service.create_thumbnail_url = AsyncMock(side_effect=fake)
+    access = make_access()
+    access.filter_readable_node_ids = AsyncMock(
+        return_value={pending_file.node.id, generating_file.node.id}
+    )
+    uow = make_uow(files=files_repo)
+    service = make_downloads_service(uow, access_svc=access)
 
     result = await service.create_thumbnail_urls_batch(
-        node_ids=node_ids, user_id=uuid.uuid4()
+        node_ids=[pending_file.node_id, generating_file.node_id],
+        user_id=user_id,
+    )
+
+    assert result[str(pending_file.node_id)].status == "pending"
+    assert result[str(generating_file.node_id)].status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_create_thumbnail_urls_batch_none_for_failed_and_unsupported():
+    """FAILED/NOT_REQUIRED и типы без растровой миниатюры дают финальный none."""
+    user_id = uuid.uuid4()
+    failed_file = make_file_mock(owner_id=user_id)
+    failed_file.mime_type = "video/mp4"
+    failed_file.preview_available = False
+    failed_file.preview_status = FilePreviewStatus.FAILED
+    failed_file.preview_storage_key = None
+    text_file = make_file_mock(owner_id=user_id)
+    text_file.mime_type = "text/plain"
+    text_file.preview_available = False
+    text_file.preview_status = FilePreviewStatus.PENDING  # не растровая миниатюра
+    text_file.preview_storage_key = None
+
+    files_repo = AsyncMock()
+    files_repo.list_by_node_ids = AsyncMock(return_value=[failed_file, text_file])
+
+    access = make_access()
+    access.filter_readable_node_ids = AsyncMock(
+        return_value={failed_file.node.id, text_file.node.id}
+    )
+    uow = make_uow(files=files_repo)
+    service = make_downloads_service(uow, access_svc=access)
+
+    result = await service.create_thumbnail_urls_batch(
+        node_ids=[failed_file.node_id, text_file.node_id],
+        user_id=user_id,
+    )
+
+    assert result[str(failed_file.node_id)].status == "none"
+    assert result[str(text_file.node_id)].status == "none"
+
+
+@pytest.mark.asyncio
+async def test_create_thumbnail_urls_batch_image_without_preview_is_ready():
+    """Изображение без готового превью отдаётся как ready со ссылкой на оригинал."""
+    user_id = uuid.uuid4()
+    image_file = make_file_mock(owner_id=user_id)
+    image_file.mime_type = "image/png"
+    image_file.preview_available = False
+    image_file.preview_status = FilePreviewStatus.PENDING
+    image_file.preview_storage_key = None
+
+    files_repo = AsyncMock()
+    files_repo.list_by_node_ids = AsyncMock(return_value=[image_file])
+
+    access = make_access()
+    access.filter_readable_node_ids = AsyncMock(return_value={image_file.node.id})
+    uow = make_uow(files=files_repo)
+    service = make_downloads_service(uow, access_svc=access)
+
+    result = await service.create_thumbnail_urls_batch(
+        node_ids=[image_file.node_id], user_id=user_id
+    )
+
+    assert result[str(image_file.node_id)].status == "ready"
+    assert result[str(image_file.node_id)].url == "https://example.com/file"
+
+
+@pytest.mark.asyncio
+async def test_create_thumbnail_urls_batch_uses_single_batched_queries():
+    """Батч выполняет по одному батч-вызову файлов и проверки доступа на запрос."""
+    user_id = uuid.uuid4()
+    files = []
+    for _ in range(30):
+        file = make_file_mock(owner_id=user_id)
+        file.preview_available = True
+        file.preview_status = FilePreviewStatus.READY
+        file.preview_storage_key = "key/preview.webp"
+        files.append(file)
+    node_ids = [file.node_id for file in files]
+
+    files_repo = AsyncMock()
+    files_repo.list_by_node_ids = AsyncMock(return_value=files)
+
+    access = make_access()
+    access.filter_readable_node_ids = AsyncMock(
+        return_value={file.node.id for file in files}
+    )
+    uow = make_uow(files=files_repo)
+    service = make_downloads_service(uow, access_svc=access)
+
+    result = await service.create_thumbnail_urls_batch(
+        node_ids=node_ids, user_id=user_id
     )
 
     assert len(result) == 30
-    # Одновременно работало не больше, чем разрешает семафор.
-    assert peak <= 3
+    assert all(item.url == "https://example.com/file" for item in result.values())
+    # Никакого N+1: файлы и доступ загружены по одному батч-вызову.
+    files_repo.list_by_node_ids.assert_awaited_once()
+    access.filter_readable_node_ids.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_create_thumbnail_urls_batch_empty_input_returns_empty():
+    """Пустой список узлов не открывает UoW и возвращает пустой словарь."""
+    uow = make_uow()
+    service = make_downloads_service(uow)
+
+    result = await service.create_thumbnail_urls_batch(node_ids=[], user_id=uuid.uuid4())
+
+    assert result == {}
+    uow.__aenter__.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_thumbnail_urls_batch_database_error_wrapped():
+    """Инфраструктурная ошибка БД не маскируется под None, а оборачивается."""
+    files_repo = AsyncMock()
+    files_repo.list_by_node_ids = AsyncMock(side_effect=DatabaseError("db down"))
+
+    uow = make_uow(files=files_repo)
+    service = make_downloads_service(uow)
+
+    with pytest.raises(ServiceError):
+        await service.create_thumbnail_urls_batch(
+            node_ids=[uuid.uuid4()], user_id=uuid.uuid4()
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_thumbnail_urls_batch_storage_error_marks_pending():
+    """Сбой подписания одной ссылки не роняет батч — узел остаётся pending."""
+    user_id = uuid.uuid4()
+    file = make_file_mock(owner_id=user_id)
+    file.preview_available = True
+    file.preview_status = FilePreviewStatus.READY
+    file.preview_storage_key = "key/preview.webp"
+
+    files_repo = AsyncMock()
+    files_repo.list_by_node_ids = AsyncMock(return_value=[file])
+
+    storage = make_storage()
+    storage.create_download_url = AsyncMock(side_effect=StorageError("boom"))
+    access = make_access()
+    access.filter_readable_node_ids = AsyncMock(return_value={file.node.id})
+    uow = make_uow(files=files_repo)
+    service = make_downloads_service(uow, access_svc=access, storage_svc=storage)
+
+    result = await service.create_thumbnail_urls_batch(
+        node_ids=[file.node_id], user_id=user_id
+    )
+
+    assert result[str(file.node_id)].status == "pending"
+    assert result[str(file.node_id)].url is None
 
 
 # ---------------------------------------------------------------------------

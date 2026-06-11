@@ -976,3 +976,74 @@ def test_normalize_moment_aware_unchanged():
     aware = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
     res = repo._normalize_moment(aware)
     assert res is aware
+
+
+# ---------------------------------------------------------------------------
+# Тесты: get_permissions_for_nodes / get_active_ancestor_permissions_for_nodes
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_get_permissions_for_nodes_empty_ids_no_query():
+    repo, session, result = make_repo()
+    res = await repo.get_permissions_for_nodes(node_ids=[])
+    assert res == []
+    session.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_permissions_for_nodes_returns_list():
+    repo, session, result = make_repo()
+    perms = [make_orm_permission(), make_orm_permission()]
+    result.scalars.return_value.all.return_value = perms
+    res = await repo.get_permissions_for_nodes(
+        node_ids=[uuid.uuid4(), uuid.uuid4()]
+    )
+    assert res == perms
+    session.execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_permissions_for_nodes_active_only():
+    repo, session, result = make_repo()
+    result.scalars.return_value.all.return_value = []
+    res = await repo.get_permissions_for_nodes(
+        node_ids=[uuid.uuid4()], active_only=True, moment=datetime(2025, 1, 1)
+    )
+    assert res == []
+
+
+@pytest.mark.asyncio
+async def test_get_active_ancestor_permissions_for_nodes_empty_ids_no_query():
+    repo, session, result = make_repo()
+    res = await repo.get_active_ancestor_permissions_for_nodes(
+        node_ids=[], user_id=uuid.uuid4()
+    )
+    assert res == []
+    session.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_active_ancestor_permissions_for_nodes_returns_pairs():
+    repo, session, result = make_repo()
+    descendant_id = uuid.uuid4()
+    perm = make_orm_permission()
+    result.all.return_value = [(descendant_id, perm)]
+    res = await repo.get_active_ancestor_permissions_for_nodes(
+        node_ids=[descendant_id], user_id=uuid.uuid4()
+    )
+    assert res == [(descendant_id, perm)]
+    session.execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_active_ancestor_permissions_for_nodes_wraps_sqlalchemy_error():
+    repo, session, result = make_repo()
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from database.exceptions import RepositoryError
+
+    session.execute = AsyncMock(side_effect=SQLAlchemyError("boom"))
+    with pytest.raises(RepositoryError):
+        await repo.get_active_ancestor_permissions_for_nodes(
+            node_ids=[uuid.uuid4()], user_id=uuid.uuid4()
+        )

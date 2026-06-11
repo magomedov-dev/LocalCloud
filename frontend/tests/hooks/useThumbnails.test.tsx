@@ -72,7 +72,10 @@ describe("useThumbnails", () => {
   });
 
   it("batch-fetches uncached image ids and populates the map", async () => {
-    batch.mockResolvedValue({ a: "https://x/a.png", b: null } as never);
+    batch.mockResolvedValue({
+      a: { status: "ready", url: "https://x/a.png" },
+      b: { status: "none", url: null },
+    } as never);
 
     const { result } = renderHook(() => useThumbnails([imageNode("a"), imageNode("b")]), {
       wrapper: wrapper(),
@@ -82,10 +85,25 @@ describe("useThumbnails", () => {
     expect(batch).toHaveBeenCalledWith(["a", "b"], expect.anything());
     expect(result.current.get("a")).toBe("https://x/a.png");
     expect(result.current.get("b")).toBeNull();
-    // Кэшируем только положительный результат; null не кэшируем, чтобы можно
-    // было опросить превью повторно, когда оно сгенерируется.
+    // Кэшируются оба терминальных исхода: ready (URL) и none (null) — узлы
+    // со статусом none больше не попадают в батчи.
     expect(setCache).toHaveBeenCalledWith("a", "https://x/a.png");
-    expect(setCache).not.toHaveBeenCalledWith("b", null);
+    expect(setCache).toHaveBeenCalledWith("b", null);
+  });
+
+  it("does not cache pending results so they are re-polled", async () => {
+    batch.mockResolvedValue({
+      vid: { status: "pending", url: null },
+    } as never);
+
+    const { result } = renderHook(() => useThumbnails([imageNode("vid")]), {
+      wrapper: wrapper(),
+    });
+
+    // pending отображается как иконка (null), но не кэшируется — узел
+    // останется в наборе для повторного опроса.
+    await waitFor(() => expect(result.current.get("vid")).toBeNull());
+    expect(setCache).not.toHaveBeenCalled();
   });
 
   it("serves values from sessionStorage cache without fetching", async () => {
@@ -101,27 +119,33 @@ describe("useThumbnails", () => {
     expect(batch).not.toHaveBeenCalled();
   });
 
-  it("skips ids with a cached URL but re-requests pending (null) ids", async () => {
-    // "have" уже имеет готовый URL в кэше → не запрашивается повторно.
-    // "pending" известен как null → перезапрашивается (превью могло появиться).
-    getCache.mockImplementation((id: string) =>
-      id === "have" ? "https://x/have.png" : undefined,
-    );
-    batch.mockResolvedValue({ pending: "https://x/pending.png" } as never);
+  it("skips ids with cached terminal values (URL or none) from the fetch set", async () => {
+    // "have" уже имеет готовый URL в кэше, "absent" известен как none (null) —
+    // оба терминальны и не запрашиваются. Запрашивается только "fresh".
+    getCache.mockImplementation((id: string) => {
+      if (id === "have") return "https://x/have.png";
+      if (id === "absent") return null;
+      return undefined;
+    });
+    batch.mockResolvedValue({
+      fresh: { status: "ready", url: "https://x/fresh.png" },
+    } as never);
 
     const { result } = renderHook(
-      () => useThumbnails([imageNode("have"), imageNode("pending")]),
+      () => useThumbnails([imageNode("have"), imageNode("absent"), imageNode("fresh")]),
       { wrapper: wrapper() },
     );
 
-    await waitFor(() => expect(result.current.get("pending")).toBe("https://x/pending.png"));
-    // Запрашивается только "pending"; "have" обслужен из кэша.
-    expect(batch).toHaveBeenCalledWith(["pending"], expect.anything());
+    await waitFor(() => expect(result.current.get("fresh")).toBe("https://x/fresh.png"));
+    expect(batch).toHaveBeenCalledWith(["fresh"], expect.anything());
     expect(result.current.get("have")).toBe("https://x/have.png");
+    expect(result.current.get("absent")).toBeNull();
   });
 
   it("filters out unsupported files and folders from the fetch set", async () => {
-    batch.mockResolvedValue({ img: "https://x/img.png" } as never);
+    batch.mockResolvedValue({
+      img: { status: "ready", url: "https://x/img.png" },
+    } as never);
     const { result } = renderHook(
       () => useThumbnails([imageNode("img"), fileNode("doc"), folderNode("dir")]),
       { wrapper: wrapper() },
@@ -133,7 +157,9 @@ describe("useThumbnails", () => {
   });
 
   it("fetches thumbnails for preview-supported non-image files (PDF)", async () => {
-    batch.mockResolvedValue({ book: "https://x/book.webp" } as never);
+    batch.mockResolvedValue({
+      book: { status: "ready", url: "https://x/book.webp" },
+    } as never);
     const { result } = renderHook(() => useThumbnails([pdfNode("book")]), {
       wrapper: wrapper(),
     });
@@ -143,7 +169,11 @@ describe("useThumbnails", () => {
 
   it("chunks more than 100 ids into separate batch requests of <=100", async () => {
     batch.mockImplementation((ids: string[]) =>
-      Promise.resolve(Object.fromEntries(ids.map((id) => [id, `https://x/${id}.png`]))),
+      Promise.resolve(
+        Object.fromEntries(
+          ids.map((id) => [id, { status: "ready", url: `https://x/${id}.png` }]),
+        ),
+      ),
     );
     const items = Array.from({ length: 150 }, (_, i) => imageNode(`n${i}`));
 

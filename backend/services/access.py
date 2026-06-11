@@ -280,6 +280,141 @@ class AccessService:
             return response
         raise self._denied_response_error(response, operation=operation)
 
+    async def filter_readable_node_ids(
+        self,
+        *,
+        uow: Any,
+        nodes: Iterable[FileSystemNode],
+        user_id: UUID | None,
+    ) -> set[UUID]:
+        """Возвращает id узлов из набора, доступных пользователю на чтение.
+
+        Пакетный аналог одиночной проверки READ-доступа: пользователь
+        загружается один раз, прямые разрешения и разрешения предков — двумя
+        батч-запросами на весь набор, а сама проверка выполняется in-memory
+        тем же ``check_node_permission``, что и в одиночном пути. Семантика
+        совпадает с ``require_access(action=READ)`` (без удалённых узлов,
+        с учётом публичной видимости): владелец/админ/публичный узел проходят
+        без загрузки разрешений, наследование прав от предков учитывается
+        только там, где прямых прав не хватило.
+
+        Args:
+            uow: Активный UnitOfWork с репозиториями пользователей и разрешений.
+            nodes: Уже загруженные ORM-модели узлов файловой системы.
+            user_id: Идентификатор пользователя. `None` — анонимный.
+
+        Returns:
+            Множество идентификаторов узлов, для которых чтение разрешено.
+
+        Raises:
+            ServiceError: Если проверку доступа не удалось выполнить.
+        """
+
+        operation = "filter_readable_node_ids"
+        inheritable_reasons = (
+            PermissionDeniedReason.PERMISSION_NOT_FOUND,
+            PermissionDeniedReason.INSUFFICIENT_PERMISSION,
+        )
+
+        try:
+            snapshots = [_node_snapshot(node) for node in nodes]
+            if not snapshots:
+                return set()
+
+            access_user = await self._load_access_user(uow, user_id)
+
+            def _check(
+                snapshot: AccessNode,
+                permissions: tuple[AccessPermission, ...],
+            ) -> PermissionCheckResult:
+                return check_node_permission(
+                    user=cast(SupportsUser | None, access_user),
+                    node=cast(SupportsNode, snapshot),
+                    action=PermissionAction.READ,
+                    permissions=cast(
+                        Iterable[SupportsNodePermission], permissions
+                    ),
+                    allow_deleted=False,
+                    allow_public=True,
+                )
+
+            allowed: set[UUID] = set()
+            # Узлы, которым не хватило fast-path (владелец/админ/публичность)
+            # и которые имеет смысл проверять по выданным разрешениям.
+            pending: list[AccessNode] = []
+            for snapshot in snapshots:
+                result = _check(snapshot, ())
+                if result.allowed:
+                    allowed.add(snapshot.id)
+                elif user_id is not None and result.reason in inheritable_reasons:
+                    pending.append(snapshot)
+
+            if not pending:
+                return allowed
+
+            direct_rows = await uow.permissions.get_permissions_for_nodes(
+                node_ids=[snapshot.id for snapshot in pending],
+            )
+            direct_by_node: dict[UUID, list[AccessPermission]] = {}
+            for row in direct_rows:
+                direct_by_node.setdefault(row.node_id, []).append(
+                    _permission_snapshot(row)
+                )
+
+            # Узлы, которым не хватило и прямых разрешений: для них (и только
+            # для них) загружаем наследуемые права предков — как в одиночном
+            # пути, где предки запрашиваются лишь после отказа по прямым правам.
+            still_denied: list[tuple[AccessNode, tuple[AccessPermission, ...]]] = []
+            for snapshot in pending:
+                direct = tuple(direct_by_node.get(snapshot.id, ()))
+                result = _check(snapshot, direct)
+                if result.allowed:
+                    allowed.add(snapshot.id)
+                elif result.reason in inheritable_reasons:
+                    still_denied.append((snapshot, direct))
+
+            if not still_denied or user_id is None:
+                return allowed
+
+            inherited_rows = (
+                await uow.permissions.get_active_ancestor_permissions_for_nodes(
+                    node_ids=[snapshot.id for snapshot, _ in still_denied],
+                    user_id=user_id,
+                )
+            )
+            inherited_by_node: dict[UUID, list[AccessPermission]] = {}
+            for descendant_id, row in inherited_rows:
+                inherited_by_node.setdefault(descendant_id, []).append(
+                    _permission_snapshot(row)
+                )
+
+            for snapshot, direct in still_denied:
+                inherited = tuple(inherited_by_node.get(snapshot.id, ()))
+                if not inherited:
+                    continue
+                result = _check(snapshot, direct + inherited)
+                if result.allowed:
+                    allowed.add(snapshot.id)
+
+            return allowed
+
+        except PermissionCheckError as exc:
+            raise self._permission_error(exc, operation=operation) from exc
+        except DatabaseError as exc:
+            raise self._database_error(
+                exc,
+                operation=operation,
+                message="Не удалось выполнить пакетную проверку доступа к узлам.",
+            ) from exc
+        except ServiceError:
+            raise
+        except Exception as exc:
+            raise self._unexpected_error(
+                exc,
+                operation=operation,
+                message="Непредвиденная ошибка пакетной проверки доступа.",
+            ) from exc
+
     async def get_accessible_node(
         self,
         *,

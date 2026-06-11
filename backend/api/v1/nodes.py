@@ -153,11 +153,14 @@ async def get_thumbnails_batch(
     current_user: CurrentActiveUserDependency,
     downloads_service: DownloadsService = Depends(get_downloads_service_dependency),
 ) -> ThumbnailBatchResponse:
-    """Возвращает presigned URL для thumbnail каждого из запрошенных узлов.
+    """Возвращает состояние миниатюры каждого из запрошенных узлов.
 
-    Принимает список идентификаторов узлов и параллельно генерирует presigned URL
-    для каждого из них. Для недоступных или неизображений узлов возвращает null.
-    Позволяет загружать все thumbnail папки одним запросом вместо N запросов.
+    Принимает список идентификаторов узлов и пакетно формирует presigned URL.
+    Каждому узлу соответствует статус: ``ready`` (есть URL), ``pending``
+    (превью генерируется — имеет смысл опросить позже) или ``none`` (миниатюры
+    нет и не будет: нет доступа, тип не поддерживается, генерация не нужна или
+    не удалась). Позволяет загружать все thumbnail папки одним запросом и
+    опрашивать повторно только генерирующиеся превью.
 
     Args:
         data: Запрос со списком идентификаторов узлов (не более 100).
@@ -165,7 +168,7 @@ async def get_thumbnails_batch(
         downloads_service: Сервис скачивания, выполняющий генерацию URL.
 
     Returns:
-        Словарь node_id → presigned URL (null если узел недоступен).
+        Словарь node_id → состояние миниатюры (status + url).
     """
 
     thumbnails = await downloads_service.create_thumbnail_urls_batch(

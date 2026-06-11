@@ -389,7 +389,6 @@ def compute_config(budget: HostBudget, features: FeatureToggles,
 
     # ── Backpressure / параллелизм ───────────────────────────────────────────
     max_concurrent = 32 * cpu
-    thumbnail_concurrency = max(4, (pool_size + max_overflow) - 5)
     storage_executor = max(4, 2 * cpu)
 
     # ── Архивы / ёмкость хранилища ───────────────────────────────────────────
@@ -455,7 +454,6 @@ def compute_config(budget: HostBudget, features: FeatureToggles,
         # Backpressure
         "MAX_CONCURRENT_REQUESTS": str(max_concurrent),
         "REQUEST_TIMEOUT_SECONDS": "90",
-        "THUMBNAIL_BATCH_CONCURRENCY": str(thumbnail_concurrency),
         # Preview
         "PREVIEW_GENERATION_ENABLED": _b(features.preview_generation),
         "PREVIEW_IMAGE_MAX_SOURCE_MB": str(pv["image_mb"]),
@@ -628,7 +626,6 @@ def render_env(config: GeneratedConfig) -> str:
     block("Uvicorn (API-сервер)", ["UVICORN_WORKERS"])
     block("Backpressure (защита API от перегрузки)", [
         "MAX_CONCURRENT_REQUESTS", "REQUEST_TIMEOUT_SECONDS",
-        "THUMBNAIL_BATCH_CONCURRENCY",
     ])
     block("Preview generation (фоновый рендер миниатюр)", [
         "PREVIEW_GENERATION_ENABLED", "PREVIEW_IMAGE_MAX_SOURCE_MB",

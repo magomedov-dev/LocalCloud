@@ -13,7 +13,6 @@ from core.constants import ApplicationConstants as APC
 from core.constants import ArchiveConstants as ARC
 from core.constants import CookieConstants as CKC
 from core.constants import DatabaseConstants as DTC
-from core.constants import DownloadConstants as DLC
 from core.constants import FeatureConstants as FTC
 from core.constants import LoggingConstants as LGC
 from core.constants import PreviewConstants as PVC
@@ -887,34 +886,6 @@ class ArchiveSettings(BaseSettings):
         return self.max_total_mb * 1024 * 1024
 
 
-class DownloadSettings(BaseSettings):
-    """Настройки скачивания и thumbnail-батчей.
-
-    Описывает потолок параллелизма thumbnail-батча. Влияет на число
-    одновременных проверок доступа и подключений к БД при опросе превью
-    с фронта. Переопределяется через переменные окружения или `.env`.
-
-    Attributes:
-        thumbnail_batch_concurrency: Потолок одновременных per-node операций
-            в thumbnail-батче (глобальный семафор на процесс).
-    """
-
-    model_config = SettingsConfigDict(
-        env_file=ENV_FILE,
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-        extra="ignore",
-        populate_by_name=True,
-    )
-
-    thumbnail_batch_concurrency: int = Field(
-        default=DLC.THUMBNAIL_BATCH_CONCURRENCY,
-        ge=1,
-        le=64,
-        alias="THUMBNAIL_BATCH_CONCURRENCY",
-    )
-
-
 class FeatureSettings(BaseSettings):
     """Флаги функциональности приложения.
 
@@ -963,7 +934,7 @@ class Settings(BaseModel):
     Агрегирует настройки всех основных подсистем backend-приложения:
     приложения, логирования, безопасности, cookie, базы данных, объектного
     хранилища, worker-процессов, обработки запросов, генерации превью,
-    архивов, скачивания и флагов функциональности.
+    архивов и флагов функциональности.
 
     Attributes:
         app: Настройки приложения.
@@ -976,7 +947,6 @@ class Settings(BaseModel):
         server: Настройки обработки HTTP-запросов (backpressure и таймауты).
         previews: Настройки генерации preview-миниатюр.
         archives: Настройки фоновой сборки ZIP-архивов.
-        downloads: Настройки скачивания и thumbnail-батчей.
         features: Флаги функциональности приложения.
     """
 
@@ -990,7 +960,6 @@ class Settings(BaseModel):
     server: ServerSettings = Field(default_factory=ServerSettings)
     previews: PreviewSettings = Field(default_factory=PreviewSettings)
     archives: ArchiveSettings = Field(default_factory=ArchiveSettings)
-    downloads: DownloadSettings = Field(default_factory=DownloadSettings)
     features: FeatureSettings = Field(default_factory=FeatureSettings)
 
 

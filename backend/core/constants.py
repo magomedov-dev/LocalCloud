@@ -466,22 +466,6 @@ class ArchiveConstants:
     DISK_SAFETY_FACTOR: Final[float] = 1.1
 
 
-class DownloadConstants:
-    """Константы скачивания и thumbnail-батчей.
-
-    Хранит значения по умолчанию для ограничения параллелизма thumbnail-батча.
-    Влияет на число одновременных проверок доступа и подключений к БД при
-    опросе превью с фронта, поэтому переопределяется через
-    `core.config.DownloadSettings`.
-
-    Attributes:
-        THUMBNAIL_BATCH_CONCURRENCY: Потолок одновременных per-node операций
-            в thumbnail-батче (глобальный семафор на процесс).
-    """
-
-    THUMBNAIL_BATCH_CONCURRENCY: Final[int] = 6
-
-
 class FeatureConstants:
     """Флаги функциональности приложения.
 

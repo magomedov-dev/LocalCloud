@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import ConfigDict, Field, field_validator
@@ -772,14 +773,40 @@ class ThumbnailBatchRequest(BaseSchema):
     )
 
 
-class ThumbnailBatchResponse(BaseSchema):
-    """Ответ с presigned URL для thumbnail каждого запрошенного узла.
+class ThumbnailBatchItem(BaseSchema):
+    """Состояние миниатюры одного узла в пакетном ответе.
+
+    Различает три исхода, чтобы клиент опрашивал повторно только те узлы,
+    у которых превью реально генерируется, и не запрашивал бесконечно те,
+    у которых миниатюры не будет никогда.
 
     Attributes:
-        thumbnails: Словарь node_id → presigned URL (null если недоступен).
+        status: ``ready`` — миниатюра есть (см. ``url``); ``pending`` —
+            превью генерируется или подписание временно не удалось, имеет
+            смысл опросить позже; ``none`` — миниатюры нет и не будет
+            (нет доступа, тип не поддерживается, генерация не требуется
+            или завершилась отказом).
+        url: Presigned URL миниатюры. Заполнен только при ``status=ready``.
     """
 
-    thumbnails: dict[str, str | None] = Field(
+    status: Literal["ready", "pending", "none"] = Field(
         ...,
-        description="Словарь node_id (строка) → presigned URL или null.",
+        description="Состояние миниатюры: ready | pending | none.",
+    )
+    url: str | None = Field(
+        default=None,
+        description="Presigned URL миниатюры (только для status=ready).",
+    )
+
+
+class ThumbnailBatchResponse(BaseSchema):
+    """Ответ с состоянием миниатюры каждого запрошенного узла.
+
+    Attributes:
+        thumbnails: Словарь node_id → состояние миниатюры.
+    """
+
+    thumbnails: dict[str, ThumbnailBatchItem] = Field(
+        ...,
+        description="Словарь node_id (строка) → состояние миниатюры.",
     )

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import mimetypes
 from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime, timedelta
@@ -10,19 +9,21 @@ from uuid import UUID
 
 from core.config import Settings, get_settings
 from core.logging import get_logger
-from core.preview_mime import is_image, preview_content_type
+from core.preview_mime import is_image, preview_content_type, produces_image_thumbnail
 from database import DatabaseError, UnitOfWorkFactory, create_unit_of_work_factory
 from database.models.enums import (
     AuditAction,
     AuditResourceType,
     BackgroundTaskStatus,
     BackgroundTaskType,
+    FilePreviewStatus,
     NodeType,
     StorageObjectStatus,
 )
 from database.models.filesystem import File, FileSystemNode, Folder
 from database.models.tasks import BackgroundTask
 from schemas.files import FileDownloadRequest, FileDownloadResponse
+from schemas.nodes import ThumbnailBatchItem
 from schemas.folders import (
     BulkArchiveRequest,
     FolderArchiveRequest,
@@ -47,15 +48,6 @@ logger = get_logger("services.downloads")
 SERVICE_NAME = "downloads"
 ZIP_MIME_TYPE = "application/zip"
 
-
-# Потолок одновременных per-node операций в thumbnail-батче. Без него
-# asyncio.gather по 100 узлам открывал бы до 100 UoW/проверок доступа разом и
-# вычерпывал пул БД (а при опросе с фронта — постоянно). Семафор глобальный на
-# процесс: ограничивает суммарную нагрузку батчей по всем одновременным запросам.
-# Значение читается из единой конфигурации (core.config) с дефолтом-литералом из
-# core.constants.DownloadConstants; переопределяется через .env.
-_THUMBNAIL_BATCH_CONCURRENCY = get_settings().downloads.thumbnail_batch_concurrency
-_thumbnail_batch_semaphore = asyncio.Semaphore(_THUMBNAIL_BATCH_CONCURRENCY)
 
 # mimetypes.guess_type полагается на реестр ОС и не распознаёт некоторые форматы
 # в Windows, в частности .mkv, .m4v, .flac, .opus, .m4a. При наличии
@@ -210,34 +202,93 @@ class DownloadsService:
         *,
         node_ids: list[UUID],
         user_id: UUID,
-    ) -> dict[str, str | None]:
-        """Возвращает presigned URL thumbnail для каждого из запрошенных узлов.
+    ) -> dict[str, ThumbnailBatchItem]:
+        """Возвращает состояние миниатюры для каждого из запрошенных узлов.
 
-        Запускает получение URL параллельно. Для узлов, к которым нет доступа
-        или у которых нет готового preview, возвращает None.
+        Все данные загружаются в одном UoW фиксированным числом запросов
+        независимо от размера батча: файлы — одним ``IN``-запросом, проверка
+        доступа — пакетно (см. ``AccessService.filter_readable_node_ids``).
+        Presigned-ссылки генерируются после выхода из UoW — это локальное
+        подписание без обращений к БД.
+
+        Статусы позволяют клиенту опрашивать повторно только узлы со статусом
+        ``pending`` (превью генерируется), а ``none`` кэшировать как
+        окончательное отсутствие миниатюры. Инфраструктурные ошибки
+        (БД/непредвиденные) не маскируются под «нет миниатюры», а
+        пробрасываются как ``ServiceError``.
 
         Args:
             node_ids: Список идентификаторов узлов.
             user_id: Идентификатор текущего пользователя.
 
         Returns:
-            Словарь node_id (строка) → presigned URL или None.
+            Словарь node_id (строка) → состояние миниатюры.
+
+        Raises:
+            ServiceError: Если произошла ошибка базы данных или непредвиденная
+                ошибка сервиса.
         """
 
-        async def _bounded_thumbnail(nid: UUID) -> Any:
-            # Семафор ограничивает число одновременных per-node операций
-            # (UoW + проверка доступа), чтобы батч не вычерпал пул БД.
-            async with _thumbnail_batch_semaphore:
-                return await self.create_thumbnail_url(node_id=nid, user_id=user_id)
-
-        results = await asyncio.gather(
-            *(_bounded_thumbnail(nid) for nid in node_ids),
-            return_exceptions=True,
-        )
-        return {
-            str(nid): (r.presigned_url if not isinstance(r, BaseException) else None)
-            for nid, r in zip(node_ids, results)
+        operation = "create_thumbnail_urls_batch"
+        # По умолчанию none: нет файла, узел удалён или нет доступа.
+        result: dict[str, ThumbnailBatchItem] = {
+            str(nid): ThumbnailBatchItem(status="none") for nid in node_ids
         }
+        if not node_ids:
+            return result
+
+        try:
+            async with self.uow_factory() as uow:
+                files = await uow.files.list_by_node_ids(
+                    node_ids,
+                    include_deleted_nodes=False,
+                )
+                nodes = [file.node for file in files if file.node is not None]
+                readable_ids = await self.access_service.filter_readable_node_ids(
+                    uow=uow,
+                    nodes=nodes,
+                    user_id=user_id,
+                )
+                snapshots = [
+                    _thumbnail_snapshot(file)
+                    for file in files
+                    if file.node is not None and file.node.id in readable_ids
+                ]
+        except DatabaseError as exc:
+            raise self._database_error(exc, operation=operation) from exc
+        except ServiceError:
+            raise
+        except Exception as exc:
+            raise self._unexpected_error(
+                exc,
+                operation=operation,
+                message="Не удалось получить данные для миниатюр.",
+            ) from exc
+
+        for snapshot in snapshots:
+            node_key = str(snapshot["node_id"])
+            try:
+                response = await self._build_thumbnail_response(snapshot)
+            except StorageError as exc:
+                # Ошибка подписания одной ссылки не должна ронять весь батч.
+                # pending: сбой скорее всего временный, клиент переспросит.
+                logger.warning(
+                    "Не удалось создать thumbnail URL для узла в батче.",
+                    extra={
+                        "node_id": node_key,
+                        "error_type": exc.__class__.__name__,
+                    },
+                )
+                result[node_key] = ThumbnailBatchItem(status="pending")
+                continue
+            if response is not None:
+                result[node_key] = ThumbnailBatchItem(
+                    status="ready",
+                    url=response.presigned_url,
+                )
+            else:
+                result[node_key] = _pending_or_none_thumbnail(snapshot)
+        return result
 
     async def stream_file(
         self,
@@ -1263,6 +1314,31 @@ def _file_snapshot(file: File) -> dict[str, Any]:
     }
 
 
+def _pending_or_none_thumbnail(snapshot: dict[str, Any]) -> ThumbnailBatchItem:
+    """Определяет статус миниатюры для файла, у которого нет готового URL.
+
+    ``pending`` возвращается только когда превью реально появится позже:
+    тип файла рендерится в растровую миниатюру, и генерация ещё в очереди
+    или выполняется. Во всех остальных случаях (NOT_REQUIRED, FAILED,
+    неподдерживаемый тип) — ``none``: опрашивать такой узел бессмысленно.
+
+    Args:
+        snapshot: Снимок метаданных файла из ``_thumbnail_snapshot``.
+
+    Returns:
+        ``ThumbnailBatchItem`` со статусом ``pending`` или ``none``.
+    """
+
+    mime_type = cast(str | None, snapshot.get("mime_type"))
+    preview_status = snapshot.get("preview_status")
+    if produces_image_thumbnail(mime_type) and preview_status in (
+        FilePreviewStatus.PENDING,
+        FilePreviewStatus.GENERATING,
+    ):
+        return ThumbnailBatchItem(status="pending")
+    return ThumbnailBatchItem(status="none")
+
+
 def _thumbnail_snapshot(file: File) -> dict[str, Any]:
     """Создает снимок метаданных файла для thumbnail.
 
@@ -1286,6 +1362,7 @@ def _thumbnail_snapshot(file: File) -> dict[str, Any]:
         "size_bytes": file.size_bytes,
         "mime_type": file.mime_type,
         "preview_ready": file.preview_available,
+        "preview_status": file.preview_status,
         "preview_storage_key": file.preview_storage_key,
     }
 

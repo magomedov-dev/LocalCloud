@@ -86,11 +86,6 @@ class TestComputeInvariants:
         cfg = _config(1, 1024, 20)
         assert any("mem_limit" in w for w in cfg.warnings)
 
-    def test_thumbnail_below_pool(self) -> None:
-        cfg = _config(4, 8192, 200)
-        per = int(cfg.values["POSTGRES_POOL_SIZE"]) + int(cfg.values["POSTGRES_MAX_OVERFLOW"])
-        assert int(cfg.values["THUMBNAIL_BATCH_CONCURRENCY"]) < per
-
     def test_preview_limits_grow_with_ram(self) -> None:
         small = int(_config(1, 1024, 20).values["PREVIEW_IMAGE_MAX_SOURCE_MB"])
         big = int(_config(4, 8192, 200).values["PREVIEW_IMAGE_MAX_SOURCE_MB"])

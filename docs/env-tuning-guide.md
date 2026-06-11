@@ -150,19 +150,15 @@ POSTGRES_MAX_PARALLEL_WORKERS_PER_GATHER = 0 (1 ГБ) … 1–2 (4 ГБ+)
 ```
 MAX_CONCURRENT_REQUESTS   = 32 * C        (потолок одновременных запросов → 503)
 REQUEST_TIMEOUT_SECONDS   = 90            (увеличьте, если рендеры/архивы крупные)
-THUMBNAIL_BATCH_CONCURRENCY = (POOL_SIZE + MAX_OVERFLOW) - 5   (минимум 4)
 STORAGE_EXECUTOR_MAX_WORKERS = max(4, 2 * C)
 ```
 
 - `MAX_CONCURRENT_REQUESTS` — сколько запросов API обрабатывает разом; сверх —
   отдаёт `503 Retry-After`, не давая очереди выедать память/коннекты.
-- `THUMBNAIL_BATCH_CONCURRENCY` держите **ниже пула БД на процесс**, оставляя
-  коннекты другим запросам (батч миниатюр иначе вычерпает пул при опросе папок).
 - `STORAGE_EXECUTOR_MAX_WORKERS` — пул потоков под блокирующий MinIO SDK.
 
 **Сквозной пример (`C=4`):** `MAX_CONCURRENT_REQUESTS=128`,
-`REQUEST_TIMEOUT_SECONDS=90`, `THUMBNAIL_BATCH_CONCURRENCY=10`,
-`STORAGE_EXECUTOR_MAX_WORKERS=8`.
+`REQUEST_TIMEOUT_SECONDS=90`, `STORAGE_EXECUTOR_MAX_WORKERS=8`.
 
 ---
 
@@ -392,7 +388,6 @@ docker compose logs worker --tail=20              # нет OOM/ошибок ре
 | `POSTGRES_POOL_SIZE` / `MAX_OVERFLOW` | 5 / 5 | 10 / 5 | 10 / 5 |
 | `POSTGRES_MAX_CONNECTIONS` | 50 | 80 | 80 |
 | `MAX_CONCURRENT_REQUESTS` | 64 | 128 | 128 |
-| `THUMBNAIL_BATCH_CONCURRENCY` | 6 | 10 | 10 |
 | `STORAGE_EXECUTOR_MAX_WORKERS` | 4 | 8 | 8 |
 | `PREVIEW_RENDER_CONCURRENCY` | 1 | 2 | 2 |
 | `PREVIEW_*_MAX_SOURCE_MB` (img/pdf/vid) | 25/30/80 | 60/80/256 | 100/150/512 |

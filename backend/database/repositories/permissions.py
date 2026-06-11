@@ -959,6 +959,120 @@ class NodePermissionsRepository(BaseRepository[NodePermission]):
             operation="get_active_ancestor_permissions",
         )
 
+    async def get_permissions_for_nodes(
+        self,
+        *,
+        node_ids: list[uuid.UUID],
+        active_only: bool = False,
+        moment: datetime | None = None,
+    ) -> list[NodePermission]:
+        """Возвращает разрешения для набора узлов одним запросом.
+
+        Пакетный аналог :meth:`get_node_permissions` для проверок доступа к
+        спискам узлов (например, батч миниатюр): один ``IN``-запрос вместо
+        запроса на каждый узел. Связи ``user``/``grantor`` не подгружаются —
+        проверке прав нужны только скалярные поля разрешения.
+
+        Args:
+            node_ids: Идентификаторы узлов файловой системы.
+            active_only: Возвращать только активные разрешения.
+            moment: Момент времени для проверки активности разрешений.
+
+        Returns:
+            Список разрешений всех указанных узлов. Если список ID пустой,
+            возвращается пустой список.
+        """
+
+        if not node_ids:
+            return []
+
+        statement = select(NodePermission).where(
+            NodePermission.node_id.in_(node_ids)
+        )
+
+        if active_only:
+            effective_moment = self._normalize_moment(moment)
+            statement = statement.where(*self._active_conditions(effective_moment))
+
+        return await self.scalars_all(
+            statement,
+            operation="get_permissions_for_nodes",
+        )
+
+    async def get_active_ancestor_permissions_for_nodes(
+        self,
+        *,
+        node_ids: list[uuid.UUID],
+        user_id: uuid.UUID,
+        moment: datetime | None = None,
+    ) -> list[tuple[uuid.UUID, NodePermission]]:
+        """Возвращает активные разрешения пользователя на предков набора узлов.
+
+        Пакетный аналог :meth:`get_active_ancestor_permissions`: один
+        рекурсивный CTE поднимается по цепочкам ``parent_id`` сразу для всех
+        узлов (пропуская удалённых предков) и джойнится к ``node_permissions``.
+        Каждая строка результата привязана к исходному узлу-потомку, чтобы
+        вызывающий код мог сгруппировать наследуемые права по узлам.
+
+        Args:
+            node_ids: Идентификаторы узлов, для которых ищутся права предков.
+            user_id: Идентификатор пользователя.
+            moment: Момент времени для проверки активности (по умолчанию — now).
+
+        Returns:
+            Список пар ``(node_id исходного узла, разрешение на его предке)``.
+            Если список ID пустой, возвращается пустой список.
+
+        Raises:
+            RepositoryError: Если запрос завершился ошибкой.
+        """
+
+        if not node_ids:
+            return []
+
+        effective_moment = self._normalize_moment(moment)
+
+        ancestors_cte = (
+            select(
+                FileSystemNode.id.label("descendant_id"),
+                FileSystemNode.id.label("id"),
+                FileSystemNode.parent_id.label("parent_id"),
+            )
+            .where(FileSystemNode.id.in_(node_ids))
+            .cte(name="permission_ancestors_batch", recursive=True)
+        )
+        parent_alias = aliased(FileSystemNode)
+        ancestors_cte = ancestors_cte.union_all(
+            select(
+                ancestors_cte.c.descendant_id,
+                parent_alias.id,
+                parent_alias.parent_id,
+            ).where(
+                parent_alias.id == ancestors_cte.c.parent_id,
+                parent_alias.is_deleted.is_(False),
+            )
+        )
+
+        statement = (
+            select(ancestors_cte.c.descendant_id, NodePermission)
+            .join(ancestors_cte, NodePermission.node_id == ancestors_cte.c.id)
+            .where(
+                ancestors_cte.c.id != ancestors_cte.c.descendant_id,
+                NodePermission.user_id == user_id,
+                *self._active_conditions(effective_moment),
+            )
+        )
+
+        try:
+            result = await self.session.execute(statement)
+            return [(row[0], row[1]) for row in result.all()]
+        except SQLAlchemyError as exc:
+            raise self._repository_error(
+                operation="get_active_ancestor_permissions_for_nodes",
+                reason=str(exc),
+                cause=exc,
+            ) from exc
+
     async def get_user_permissions(
         self,
         *,
