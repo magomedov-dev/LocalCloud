@@ -10,7 +10,7 @@ from uuid import UUID
 
 from core.config import Settings, get_settings
 from core.logging import get_logger
-from core.preview_mime import preview_content_type
+from core.preview_mime import is_image, preview_content_type
 from database import DatabaseError, UnitOfWorkFactory, create_unit_of_work_factory
 from database.models.enums import (
     AuditAction,
@@ -181,7 +181,11 @@ class DownloadsService:
             if file_snapshot is None:
                 raise _empty_result_error(operation)
 
-            return await self._build_thumbnail_response(file_snapshot)
+            response = await self._build_thumbnail_response(file_snapshot)
+            if response is None:
+                # Нет отображаемой миниатюры (нет preview, тип не картинка).
+                raise _empty_result_error(operation)
+            return response
 
         except StorageError as exc:
             raise service_error_from_storage(
@@ -766,18 +770,22 @@ class DownloadsService:
     async def _build_thumbnail_response(
         self,
         file_snapshot: dict[str, Any],
-    ) -> FileDownloadResponse:
+    ) -> FileDownloadResponse | None:
         """Формирует ответ со ссылкой на thumbnail файла.
 
-        Если у файла есть preview-объект, использует его. Иначе — основной
-        объект файла. Content-Disposition не задаётся, чтобы браузер показывал
-        изображение inline.
+        Если у файла есть готовый preview-объект — использует его. Если готового
+        preview нет, ссылка на оригинал отдаётся **только для изображений**
+        (браузер покажет картинку в `<img>`). Для остальных типов (PDF, видео и
+        т.п.) без preview возвращается ``None``: подставлять оригинал в `<img>`
+        бессмысленно — браузер не отрисует, например, PDF как картинку, а ещё и
+        зря скачает весь файл.
 
         Args:
             file_snapshot: Снимок метаданных файла с preview-полями.
 
         Returns:
-            Ответ со ссылкой на thumbnail или полный файл.
+            Ответ со ссылкой на thumbnail/оригинал-изображение, либо ``None``,
+            если отображаемой миниатюры нет.
 
         Raises:
             StorageError: Если сервис хранилища не смог создать URL.
@@ -787,13 +795,18 @@ class DownloadsService:
             file_snapshot.get("preview_storage_key") is not None
             and file_snapshot.get("preview_ready") is True
         )
+        mime_type = cast(str | None, file_snapshot.get("mime_type"))
+
+        # Без готового preview оригинал годится как миниатюра только для картинок.
+        if not use_preview and not is_image(mime_type):
+            return None
+
         bucket = cast(str, file_snapshot["storage_bucket"])
         object_key = (
             cast(str, file_snapshot["preview_storage_key"])
             if use_preview
             else cast(str, file_snapshot["storage_key"])
         )
-        mime_type = cast(str | None, file_snapshot.get("mime_type"))
 
         # При отдаче preview-объекта content-type должен соответствовать самому
         # превью (webp/текст), а не исходному типу файла, иначе браузер получит,

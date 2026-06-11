@@ -483,11 +483,12 @@ async def test_create_file_download_url_unexpected_error_wrapped():
 
 
 @pytest.mark.asyncio
-async def test_create_thumbnail_url_uses_main_file_when_no_preview():
-    """create_thumbnail_url возвращает presigned-URL для основного объекта файла."""
+async def test_create_thumbnail_url_image_falls_back_to_source_when_no_preview():
+    """Для изображения без готового preview отдаётся ссылка на оригинал."""
     user_id = uuid.uuid4()
     node_id = uuid.uuid4()
     file = make_file_mock()
+    file.mime_type = "image/png"  # картинку браузер покажет в <img>
     file.preview_available = False
     file.preview_storage_key = None
 
@@ -501,6 +502,31 @@ async def test_create_thumbnail_url_uses_main_file_when_no_preview():
     result = await service.create_thumbnail_url(node_id=node_id, user_id=user_id)
     assert result.filename is None
     assert result.presigned_url == "https://example.com/file"
+
+
+@pytest.mark.asyncio
+async def test_create_thumbnail_url_no_preview_non_image_raises():
+    """Для не-картинки без preview миниатюры нет — НЕ отдаём оригинал в <img>.
+
+    Регрессия: раньше для PDF/видео без preview возвращалась ссылка на сам
+    файл, и браузер не мог отрисовать его как изображение (а ещё зря качал).
+    """
+    user_id = uuid.uuid4()
+    node_id = uuid.uuid4()
+    file = make_file_mock()
+    file.mime_type = "application/pdf"
+    file.preview_available = False
+    file.preview_storage_key = None
+
+    files_repo = AsyncMock()
+    files_repo.get_required_by_node_id = AsyncMock(return_value=file)
+
+    access = make_access(node=file.node)
+    uow = make_uow(files=files_repo)
+    service = make_downloads_service(uow, access_svc=access)
+
+    with pytest.raises(ServiceError):
+        await service.create_thumbnail_url(node_id=node_id, user_id=user_id)
 
 
 @pytest.mark.asyncio
