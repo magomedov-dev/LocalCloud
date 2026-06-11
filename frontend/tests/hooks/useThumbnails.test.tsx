@@ -140,4 +140,22 @@ describe("useThumbnails", () => {
     await waitFor(() => expect(result.current.get("book")).toBe("https://x/book.webp"));
     expect(batch).toHaveBeenCalledWith(["book"], expect.anything());
   });
+
+  it("chunks more than 100 ids into separate batch requests of <=100", async () => {
+    batch.mockImplementation((ids: string[]) =>
+      Promise.resolve(Object.fromEntries(ids.map((id) => [id, `https://x/${id}.png`]))),
+    );
+    const items = Array.from({ length: 150 }, (_, i) => imageNode(`n${i}`));
+
+    const { result } = renderHook(() => useThumbnails(items), { wrapper: wrapper() });
+
+    await waitFor(() => expect(result.current.size).toBe(150));
+    // Серверный лимит 100 → 150 элементов = 2 запроса (100 + 50).
+    expect(batch).toHaveBeenCalledTimes(2);
+    for (const call of batch.mock.calls) {
+      expect((call[0] as string[]).length).toBeLessThanOrEqual(100);
+    }
+    expect(result.current.get("n0")).toBe("https://x/n0.png");
+    expect(result.current.get("n149")).toBe("https://x/n149.png");
+  });
 });

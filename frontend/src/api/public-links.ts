@@ -41,6 +41,18 @@ export const publicLinksApi = {
     api.get<PageResponse<PublicLinkListItem>>("/public-links/", { params }).then((r) => r.data),
 
   /**
+   * Возвращает id узлов с активными публичными ссылками текущего пользователя.
+   *
+   * Лёгкий источник для бейджа «публичная ссылка» (один DISTINCT-запрос вместо
+   * выгрузки всех объектов ссылок).
+   *
+   * Returns:
+   *   Promise со списком node id.
+   */
+  activeNodeIds: () =>
+    api.get<string[]>("/public-links/node-ids").then((r) => r.data),
+
+  /**
    * Возвращает активные публичные ссылки для node.
    *
    * Args:

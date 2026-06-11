@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from uuid import uuid4
 
@@ -7,7 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 
 from app.dependencies import (
     CORRELATION_ID_HEADER,
@@ -15,9 +16,15 @@ from app.dependencies import (
     RequestContext,
     build_request_context,
 )
+from core.config import get_settings
 from core.logging import get_logger
 
 logger = get_logger("app.middleware")
+
+
+# Пути, которые не должны отбрасываться backpressure (иначе healthcheck начнёт
+# падать и контейнер уйдёт в рестарт-петлю).
+_HEALTH_PATHS: frozenset[str] = frozenset({"/", "/health", "/healthz"})
 
 DEFAULT_CORS_ORIGINS: tuple[str, ...] = (
     "http://localhost:3000",
@@ -187,6 +194,104 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
+class ConcurrencyLimitMiddleware(BaseHTTPMiddleware):
+    """Ограничивает число одновременно обрабатываемых запросов (backpressure).
+
+    На маленьком хосте неограниченная очередь входящих запросов (например, шторм
+    thumbnail-батчей) выедает память и коннекты к БД, что приводит к OOM или
+    таймаутам пула. Этот middleware держит счётчик «в обработке» и при превышении
+    потолка немедленно отвечает 503 с Retry-After, не запуская обработчик.
+
+    Счётчик безопасен без блокировок: событийный цикл однопоточный, между
+    проверкой и инкрементом нет await.
+
+    Attributes:
+        dispatch: Основной метод обработки HTTP-запроса middleware.
+    """
+
+    def __init__(self, app: FastAPI, *, max_concurrency: int) -> None:
+        """Инициализирует middleware с потолком одновременных запросов."""
+
+        super().__init__(app)
+        self._max = max_concurrency
+        self._inflight = 0
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        """Пропускает запрос, если не превышен потолок, иначе отдаёт 503."""
+
+        # Health-проверки не отбрасываем — иначе оркестратор уведёт в рестарт.
+        if request.url.path in _HEALTH_PATHS:
+            return await call_next(request)
+
+        if self._inflight >= self._max:
+            logger.warning(
+                "Запрос отклонён backpressure (превышен потолок одновременных).",
+                extra={
+                    "path": request.url.path,
+                    "method": request.method,
+                    "inflight": self._inflight,
+                    "max_concurrency": self._max,
+                },
+            )
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "success": False,
+                    "error": "ServiceUnavailable",
+                    "message": "Сервер перегружен, повторите запрос позже.",
+                },
+                headers={"Retry-After": "2"},
+            )
+
+        self._inflight += 1
+        try:
+            return await call_next(request)
+        finally:
+            self._inflight -= 1
+
+
+class RequestTimeoutMiddleware(BaseHTTPMiddleware):
+    """Ограничивает время работы обработчика запроса.
+
+    Защищает от зависших обработчиков, удерживающих коннект к БД/потоки. Таймаут
+    охватывает фазу формирования ответа (до возврата обработчика); потоковая
+    отдача тела (скачивание/стрим) происходит позже и под таймаут не попадает,
+    поэтому большие загрузки/скачивания не обрываются.
+
+    Attributes:
+        dispatch: Основной метод обработки HTTP-запроса middleware.
+    """
+
+    def __init__(self, app: FastAPI, *, timeout_seconds: float) -> None:
+        """Инициализирует middleware с таймаутом обработчика в секундах."""
+
+        super().__init__(app)
+        self._timeout = timeout_seconds
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        """Выполняет обработчик с таймаутом; при превышении отдаёт 504."""
+
+        try:
+            return await asyncio.wait_for(call_next(request), timeout=self._timeout)
+        except (asyncio.TimeoutError, TimeoutError):
+            logger.warning(
+                "Обработчик запроса превысил таймаут.",
+                extra={
+                    "path": request.url.path,
+                    "method": request.method,
+                    "timeout_seconds": self._timeout,
+                },
+            )
+            return JSONResponse(
+                status_code=504,
+                content={
+                    "success": False,
+                    "error": "GatewayTimeout",
+                    "message": "Превышено время обработки запроса.",
+                },
+            )
+
+
 def install_middleware(app: FastAPI) -> None:
     """Подключает middleware backend-приложения.
 
@@ -201,6 +306,9 @@ def install_middleware(app: FastAPI) -> None:
         None.
     """
 
+    # Порядок выполнения = обратный порядку регистрации. Целевая цепочка
+    # снаружи внутрь: RequestContext (логирование) → ConcurrencyLimit (сброс
+    # перегрузки) → RequestTimeout → Security → CORS → GZip → обработчик.
     app.add_middleware(GZipMiddleware, minimum_size=1024)
     app.add_middleware(
         CORSMiddleware,
@@ -215,5 +323,14 @@ def install_middleware(app: FastAPI) -> None:
         ],
         expose_headers=[REQUEST_ID_HEADER, CORRELATION_ID_HEADER],
     )
+    server_settings = get_settings().server
     app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(
+        RequestTimeoutMiddleware,
+        timeout_seconds=server_settings.request_timeout_seconds,
+    )
+    app.add_middleware(
+        ConcurrencyLimitMiddleware,
+        max_concurrency=server_settings.max_concurrent_requests,
+    )
     app.add_middleware(RequestContextMiddleware)

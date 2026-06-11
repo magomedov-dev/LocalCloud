@@ -643,25 +643,13 @@ class PermissionsService:
         """
 
         operation = "list_nodes_shared_by_me"
-        node_ids: list[UUID] = []
-        seen: set[UUID] = set()
         try:
             async with self.uow_factory() as uow:
-                offset = 0
-                while True:
-                    chunk = await uow.permissions.get_granted_by_user(
-                        granted_by=user_id,
-                        active_only=True,
-                        offset=offset,
-                        limit=MAX_PAGE_LIMIT,
-                    )
-                    for permission in chunk:
-                        if permission.node_id not in seen:
-                            seen.add(permission.node_id)
-                            node_ids.append(permission.node_id)
-                    if len(chunk) < MAX_PAGE_LIMIT:
-                        break
-                    offset += MAX_PAGE_LIMIT
+                # Одним лёгким запросом (DISTINCT node_id), без постраничного
+                # обхода и гидрации ORM-объектов на каждый грант.
+                node_ids = await uow.permissions.get_distinct_active_granted_node_ids(
+                    granted_by=user_id,
+                )
             return node_ids
 
         except DatabaseError as exc:

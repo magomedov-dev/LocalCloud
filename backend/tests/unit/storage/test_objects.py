@@ -1022,3 +1022,98 @@ class TestCloseResponse:
         manager, client, raw = make_manager()
         # Напрямую проверяем ветку None.
         await manager._close_response(None)
+
+
+# ---------------------------------------------------------------------------
+# download_object_to_file (потоковое сохранение в файл)
+# ---------------------------------------------------------------------------
+
+
+class _FakeStream:
+    """Минимальный stub MinIO-response с .read()/.close()/.release_conn()."""
+
+    def __init__(self, data: bytes) -> None:
+        self._buf = BytesIO(data)
+        self.closed = False
+        self.released = False
+
+    def read(self, amt: int = -1) -> bytes:
+        return self._buf.read(amt)
+
+    def close(self) -> None:
+        self.closed = True
+
+    def release_conn(self) -> None:
+        self.released = True
+
+
+class TestDownloadObjectToFile:
+    @pytest.mark.asyncio
+    async def test_streams_object_to_file(self, tmp_path) -> None:
+        manager, client, raw = make_manager()
+        payload = b"a" * 5000
+        stream = _FakeStream(payload)
+
+        async def execute_side(fn, *args, operation_name=None, **kwargs):
+            if operation_name == "get_object":
+                return stream
+            if callable(fn):
+                return fn(*args, **kwargs)
+            return fn
+
+        client.execute = AsyncMock(side_effect=execute_side)
+        dest = tmp_path / "out.bin"
+
+        written = await manager.download_object_to_file(
+            bucket="test-bucket",
+            object_key="big.bin",
+            file_path=str(dest),
+            chunk_size=512,
+        )
+
+        assert written == len(payload)
+        assert dest.read_bytes() == payload
+        # Соединение освобождается в finally.
+        assert stream.closed is True
+
+    @pytest.mark.asyncio
+    async def test_error_wrapped(self, tmp_path) -> None:
+        manager, client, raw = make_manager()
+
+        async def execute_raises(fn, *args, operation_name=None, **kwargs):
+            raise StorageObjectNotFoundError(bucket="test-bucket", object_key="x")
+
+        client.execute = AsyncMock(side_effect=execute_raises)
+
+        with pytest.raises((StorageObjectNotFoundError, StorageDownloadError)):
+            await manager.download_object_to_file(
+                bucket="test-bucket",
+                object_key="x",
+                file_path=str(tmp_path / "out.bin"),
+            )
+
+
+class TestGetObjectRangeBytes:
+    @pytest.mark.asyncio
+    async def test_reads_only_requested_range(self) -> None:
+        manager, client, raw = make_manager()
+        stream = _FakeStream(b"first-chunk")
+
+        async def execute_side(fn, *args, operation_name=None, **kwargs):
+            if operation_name == "get_object_stream":
+                return stream
+            if callable(fn):
+                return fn(*args, **kwargs)
+            return fn
+
+        client.execute = AsyncMock(side_effect=execute_side)
+
+        data = await manager.get_object_range_bytes(
+            bucket="test-bucket",
+            object_key="file.txt",
+            offset=0,
+            length=11,
+        )
+
+        assert data == b"first-chunk"
+        assert stream.closed is True

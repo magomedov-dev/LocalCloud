@@ -308,7 +308,10 @@ class StorageConstants:
         "created_by",
     }
 
-    STORAGE_EXECUTOR_MAX_WORKERS: Final[int] = 8
+    # Пул потоков для блокирующего MinIO SDK. На 1 ядре 8 потоков лишь
+    # буксуют в переключениях контекста и держат лишние стеки (~8 МБ каждый);
+    # 4 достаточно для параллельных presigned/object-операций.
+    STORAGE_EXECUTOR_MAX_WORKERS: Final[int] = 4
 
     DEFAULT_STORAGE_LIMIT_BYTES: Final[int] = 10 * 1024 * 1024 * 1024
     STORAGE_AUTO_CAPACITY_FRACTION: Final[float] = 0.85
@@ -375,3 +378,127 @@ class WorkerConstants:
     CLEANUP_BATCH_SIZE: Final[int] = 100
     INTEGRITY_BATCH_SIZE: Final[int] = 100
     QUOTA_BATCH_SIZE: Final[int] = 100
+
+
+class ServerConstants:
+    """Константы обработки HTTP-запросов (backpressure и таймауты).
+
+    Хранит значения по умолчанию для middleware ограничения нагрузки:
+    потолок одновременно обрабатываемых запросов и таймаут обработчика.
+    Влияют на потребление памяти, число одновременных подключений к БД
+    и устойчивость хоста под пиковой нагрузкой, поэтому переопределяются
+    через переменные окружения (см. `core.config.ServerSettings`).
+
+    Attributes:
+        MAX_CONCURRENT_REQUESTS: Потолок одновременно обрабатываемых запросов,
+            сверх которого backpressure отдаёт 503.
+        REQUEST_TIMEOUT_SECONDS: Таймаут фазы формирования ответа обработчиком
+            в секундах, после которого отдаётся 504.
+    """
+
+    MAX_CONCURRENT_REQUESTS: Final[int] = 64
+    REQUEST_TIMEOUT_SECONDS: Final[float] = 90.0
+
+
+class PreviewConstants:
+    """Константы генерации preview-миниатюр.
+
+    Хранит значения по умолчанию для фоновой генерации превью: мастер-флаг
+    включения, параллелизм тяжёлых рендеров, лимиты исходного размера
+    (защита памяти и от «decompression bomb»), параметры растрирования PDF,
+    размеры/качество растров изображений и таймаут ffmpeg для видео.
+    Подобраны под маленький хост (1 ГБ ОЗУ); переопределяются через
+    `core.config.PreviewSettings`.
+
+    Attributes:
+        GENERATION_ENABLED: Мастер-флаг генерации превью. Если выключен,
+            worker помечает файлы `NOT_REQUIRED` и не тратит RAM/CPU.
+        RENDER_CONCURRENCY: Максимальное число одновременных тяжёлых рендеров.
+        IMAGE_MAX_SOURCE_MB: Лимит исходного размера изображения в мегабайтах.
+        PDF_MAX_SOURCE_MB: Лимит исходного размера PDF в мегабайтах.
+        VIDEO_MAX_SOURCE_MB: Лимит исходного размера видео в мегабайтах.
+        IMAGE_MAX_DIMENSION: Потолок длинной стороны растра превью изображения.
+        IMAGE_QUALITY: Качество WebP-превью изображения (0–100).
+        IMAGE_MAX_PIXELS: Глобальный предел Pillow на число пикселей растра.
+        PDF_RENDER_DPI: DPI растрирования первой страницы PDF.
+        PDF_RENDER_MAX_DIM: Потолок длинной стороны растра PDF в пикселях.
+        VIDEO_FRAME_TIMESTAMP: Тайм-код кадра, извлекаемого из видео.
+        VIDEO_FFMPEG_TIMEOUT_SECONDS: Таймаут вызова ffmpeg в секундах.
+        TEXT_PREVIEW_MAX_BYTES: Максимальный размер текстового сниппета.
+        DOWNLOAD_CHUNK_BYTES: Размер блока потокового чтения исходного файла.
+    """
+
+    GENERATION_ENABLED: Final[bool] = True
+    RENDER_CONCURRENCY: Final[int] = 1
+    IMAGE_MAX_SOURCE_MB: Final[int] = 25
+    PDF_MAX_SOURCE_MB: Final[int] = 30
+    VIDEO_MAX_SOURCE_MB: Final[int] = 80
+    IMAGE_MAX_DIMENSION: Final[int] = 400
+    IMAGE_QUALITY: Final[int] = 75
+    IMAGE_MAX_PIXELS: Final[int] = 40_000_000
+    PDF_RENDER_DPI: Final[int] = 120
+    PDF_RENDER_MAX_DIM: Final[int] = 1600
+    VIDEO_FRAME_TIMESTAMP: Final[str] = "00:00:01"
+    VIDEO_FFMPEG_TIMEOUT_SECONDS: Final[int] = 30
+    TEXT_PREVIEW_MAX_BYTES: Final[int] = 4096
+    DOWNLOAD_CHUNK_BYTES: Final[int] = 1024 * 1024
+
+
+class ArchiveConstants:
+    """Константы фоновой сборки ZIP-архивов.
+
+    Хранит значения по умолчанию для лимитов архива и потокового копирования
+    объектов в ZIP. Нужны, чтобы сборка архива не выела диск под временный
+    файл и не загрузила в память слишком большой список записей. Дефолты —
+    под маленький хост; переопределяются через `core.config.ArchiveSettings`.
+
+    Attributes:
+        MAX_FILES: Максимальное число файлов в одном архиве.
+        MAX_TOTAL_MB: Максимальный суммарный размер источников в мегабайтах.
+        STREAM_CHUNK_BYTES: Размер блока потоковой передачи объекта в ZIP.
+        DISK_SAFETY_FACTOR: Множитель запаса свободного места на диске
+            относительно суммарного размера источников.
+    """
+
+    MAX_FILES: Final[int] = 10_000
+    MAX_TOTAL_MB: Final[int] = 2048
+    STREAM_CHUNK_BYTES: Final[int] = 1024 * 1024
+    DISK_SAFETY_FACTOR: Final[float] = 1.1
+
+
+class DownloadConstants:
+    """Константы скачивания и thumbnail-батчей.
+
+    Хранит значения по умолчанию для ограничения параллелизма thumbnail-батча.
+    Влияет на число одновременных проверок доступа и подключений к БД при
+    опросе превью с фронта, поэтому переопределяется через
+    `core.config.DownloadSettings`.
+
+    Attributes:
+        THUMBNAIL_BATCH_CONCURRENCY: Потолок одновременных per-node операций
+            в thumbnail-батче (глобальный семафор на процесс).
+    """
+
+    THUMBNAIL_BATCH_CONCURRENCY: Final[int] = 6
+
+
+class FeatureConstants:
+    """Флаги функциональности приложения.
+
+    Хранят значения по умолчанию для возможностей, которые имеет смысл
+    отключать на слабых серверах или в ограниченных развёртываниях. Флаги
+    отдаются фронтенду через публичный endpoint конфигурации и управляют
+    отображением превью, просмотром, проигрыванием и редактированием файлов.
+    Переопределяются через `core.config.FeatureSettings`.
+
+    Attributes:
+        PREVIEWS_ENABLED: Показывать ли в UI preview-миниатюры файлов.
+        FILE_VIEWER_ENABLED: Доступен ли просмотр содержимого файлов в UI.
+        MEDIA_PLAYBACK_ENABLED: Доступно ли проигрывание аудио/видео в UI.
+        FILE_EDITING_ENABLED: Доступно ли редактирование текстовых файлов в UI.
+    """
+
+    PREVIEWS_ENABLED: Final[bool] = True
+    FILE_VIEWER_ENABLED: Final[bool] = True
+    MEDIA_PLAYBACK_ENABLED: Final[bool] = True
+    FILE_EDITING_ENABLED: Final[bool] = True

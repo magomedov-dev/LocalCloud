@@ -13,7 +13,9 @@ from services.exceptions import ServiceError
 from storage.exceptions import StorageConnectionError, StorageError
 from workers import archives
 from workers.archives import (
+    ArchiveLimitExceededError,
     _dedupe_member,
+    _enforce_archive_limits,
     _file_row_dict,
     _normalize_fs_path,
     _payload_uuid_alias,
@@ -850,3 +852,52 @@ class TestBulkArchive:
         result = await create_folder_archive_handler(ctx)
         assert result.success is True
         assert result.result_data["files_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Лимиты архива (_enforce_archive_limits)
+# ---------------------------------------------------------------------------
+
+
+def _entry(size_bytes: int) -> tuple[str, dict]:
+    return ("file.bin", {"size_bytes": size_bytes})
+
+
+class TestEnforceArchiveLimits:
+    def test_within_limits_does_not_raise(self) -> None:
+        _enforce_archive_limits([_entry(1024), _entry(2048)])
+
+    def test_too_many_files_raises(self, monkeypatch) -> None:
+        monkeypatch.setattr(archives, "_ARCHIVE_MAX_FILES", 1)
+        with pytest.raises(ArchiveLimitExceededError) as exc:
+            _enforce_archive_limits([_entry(1), _entry(1)])
+        assert exc.value.error_code == "archive_too_many_files"
+
+    def test_too_large_total_raises(self, monkeypatch) -> None:
+        monkeypatch.setattr(archives, "_ARCHIVE_MAX_TOTAL_BYTES", 50)
+        with pytest.raises(ArchiveLimitExceededError) as exc:
+            _enforce_archive_limits([_entry(40), _entry(40)])
+        assert exc.value.error_code == "archive_too_large"
+
+    def test_insufficient_disk_raises(self, monkeypatch) -> None:
+        from collections import namedtuple
+
+        usage = namedtuple("usage", ["total", "used", "free"])
+        monkeypatch.setattr(
+            archives.shutil, "disk_usage", lambda _p: usage(100, 99, 1)
+        )
+        with pytest.raises(ArchiveLimitExceededError) as exc:
+            _enforce_archive_limits([_entry(10_000_000)])
+        assert exc.value.error_code == "archive_insufficient_disk"
+
+    def test_missing_size_bytes_treated_as_zero(self) -> None:
+        # None размер не должен ронять подсчёт суммы; total=0 → лимиты пройдены.
+        _enforce_archive_limits([("f", {"size_bytes": None})])
+
+    def test_disk_usage_oserror_is_tolerated(self, monkeypatch) -> None:
+        # Если место на диске узнать нельзя, не блокируем архивацию.
+        def boom(_p):
+            raise OSError("no such dir")
+
+        monkeypatch.setattr(archives.shutil, "disk_usage", boom)
+        _enforce_archive_limits([_entry(1024)])

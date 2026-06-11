@@ -15,9 +15,9 @@ from storage.exceptions import StorageConnectionError, StorageError
 from workers import previews
 from workers.previews import (
     _compress_to_webp,
-    _extract_video_frame,
+    _extract_video_frame_from_file,
     _media_source_limit,
-    _render_pdf_first_page,
+    _pdf_to_webp_from_path,
     _resolve_owner_id,
     generate_file_preview_handler,
 )
@@ -88,6 +88,10 @@ def make_ctx(payload=None, *, uow=None):
     storage.default_files_bucket = "files"
     storage.build_preview_key = MagicMock(return_value="previews/user/file.webp")
     storage.objects = MagicMock()
+    # Медиа теперь скачивается потоково во временный файл, а не в память.
+    storage.objects.download_object_to_file = AsyncMock(return_value=1024)
+    # Текстовое превью читает только первые N байт диапазоном.
+    storage.objects.get_object_range_bytes = AsyncMock(return_value=b"text-bytes")
     storage.objects.get_object_bytes = AsyncMock(
         return_value=_Downloaded(b"raw-image-bytes")
     )
@@ -125,28 +129,44 @@ class TestMediaSourceLimit:
 
 
 class TestRenderHelpers:
-    def test_render_pdf_first_page_returns_png(self) -> None:
+    def test_pdf_to_webp_from_path_returns_webp(self, tmp_path) -> None:
         import fitz
 
         doc = fitz.open()
         doc.new_page(width=200, height=200)
-        pdf_bytes = doc.tobytes()
+        pdf_file = tmp_path / "doc.pdf"
+        doc.save(str(pdf_file))
         doc.close()
 
-        png = _render_pdf_first_page(pdf_bytes)
-        # PNG-сигнатура.
-        assert png[:8] == b"\x89PNG\r\n\x1a\n"
+        webp = _pdf_to_webp_from_path(str(pdf_file))
+        with Image.open(io.BytesIO(webp)) as img:
+            assert img.format == "WEBP"
 
-    def test_render_pdf_invalid_raises(self) -> None:
+    def test_pdf_to_webp_invalid_raises(self, tmp_path) -> None:
+        bad = tmp_path / "bad.pdf"
+        bad.write_bytes(b"not-a-pdf")
         with pytest.raises(Exception):
-            _render_pdf_first_page(b"not-a-pdf")
+            _pdf_to_webp_from_path(str(bad))
 
     def test_extract_video_frame_returns_ffmpeg_stdout(self, monkeypatch) -> None:
         def fake_run(args, **kwargs):
             return MagicMock(returncode=0, stdout=b"frame-png", stderr=b"")
 
         monkeypatch.setattr(previews.subprocess, "run", fake_run)
-        assert _extract_video_frame(b"video-bytes") == b"frame-png"
+        assert _extract_video_frame_from_file("/tmp/x.video") == b"frame-png"
+
+    def test_extract_video_frame_uses_single_thread(self, monkeypatch) -> None:
+        captured: dict[str, list] = {}
+
+        def fake_run(args, **kwargs):
+            captured["args"] = args
+            return MagicMock(returncode=0, stdout=b"frame-png", stderr=b"")
+
+        monkeypatch.setattr(previews.subprocess, "run", fake_run)
+        _extract_video_frame_from_file("/tmp/x.video")
+        # ffmpeg вызывается с ограничением потоков (память/CPU).
+        assert "-threads" in captured["args"]
+        assert captured["args"][captured["args"].index("-threads") + 1] == "1"
 
     def test_extract_video_frame_failure_raises(self, monkeypatch) -> None:
         def fake_run(args, **kwargs):
@@ -154,7 +174,7 @@ class TestRenderHelpers:
 
         monkeypatch.setattr(previews.subprocess, "run", fake_run)
         with pytest.raises(RuntimeError):
-            _extract_video_frame(b"video-bytes")
+            _extract_video_frame_from_file("/tmp/x.video")
 
 
 class TestResolveOwnerId:
@@ -314,6 +334,29 @@ class TestNotRequired:
         )
 
     @pytest.mark.asyncio
+    async def test_generation_disabled_marks_not_required(self, monkeypatch) -> None:
+        # При выключенном мастер-флаге даже поддерживаемый тип (image) не
+        # генерирует превью: файл помечается NOT_REQUIRED без скачивания.
+        monkeypatch.setattr(previews, "_PREVIEW_GENERATION_ENABLED", False)
+        file_id = uuid.uuid4()
+        ctx, uow = make_ctx(payload={"file_id": str(file_id)})
+        row = make_file_row(file_id=file_id, mime_type="image/png")
+        uow.files.get_by_id = AsyncMock(return_value=row)
+        uow.files.mark_preview_not_required = AsyncMock(
+            return_value=MagicMock(preview_storage_key=None)
+        )
+
+        result = await generate_file_preview_handler(ctx)
+
+        assert result.success is True
+        assert (
+            result.result_data["preview_status"]
+            == FilePreviewStatus.NOT_REQUIRED.value
+        )
+        uow.files.mark_preview_not_required.assert_awaited_once()
+        ctx.storage_service.objects.download_object_to_file.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_oversized_pdf_skipped(self) -> None:
         file_id = uuid.uuid4()
         ctx, uow = make_ctx(payload={"file_id": str(file_id)})
@@ -330,7 +373,7 @@ class TestNotRequired:
             result.result_data["preview_status"]
             == FilePreviewStatus.NOT_REQUIRED.value
         )
-        ctx.storage_service.objects.get_object_bytes.assert_not_awaited()
+        ctx.storage_service.objects.download_object_to_file.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -347,8 +390,7 @@ class TestPdfVideoPreview:
             file_id=file_id, owner_id=owner_id, mime_type="application/pdf"
         )
         uow.files.get_by_id = AsyncMock(return_value=row)
-        monkeypatch.setattr(previews, "_render_pdf_first_page", lambda data: b"png")
-        monkeypatch.setattr(previews, "_compress_to_webp", lambda data: b"webp")
+        monkeypatch.setattr(previews, "_pdf_to_webp_from_path", lambda path: b"webp")
 
         result = await generate_file_preview_handler(ctx)
 
@@ -357,6 +399,8 @@ class TestPdfVideoPreview:
         ctx.storage_service.build_preview_key.assert_called_once_with(
             user_id=owner_id, file_id=file_id, extension="webp"
         )
+        # Источник скачивается потоково во временный файл.
+        ctx.storage_service.objects.download_object_to_file.assert_awaited_once()
         put_kwargs = ctx.storage_service.objects.put_object.await_args.kwargs
         assert put_kwargs["content_type"] == "image/webp"
         uow.files.update_preview.assert_awaited_once()
@@ -368,14 +412,14 @@ class TestPdfVideoPreview:
         row = make_file_row(file_id=file_id, mime_type="video/mp4")
         uow.files.get_by_id = AsyncMock(return_value=row)
         monkeypatch.setattr(
-            previews, "_extract_video_frame", lambda data: b"png-frame"
+            previews, "_video_to_webp_from_path", lambda path: b"webp"
         )
-        monkeypatch.setattr(previews, "_compress_to_webp", lambda data: b"webp")
 
         result = await generate_file_preview_handler(ctx)
 
         assert result.success is True
         assert result.result_data["preview_status"] == FilePreviewStatus.READY.value
+        ctx.storage_service.objects.download_object_to_file.assert_awaited_once()
         put_kwargs = ctx.storage_service.objects.put_object.await_args.kwargs
         assert put_kwargs["content_type"] == "image/webp"
 
@@ -386,10 +430,10 @@ class TestPdfVideoPreview:
         row = make_file_row(file_id=file_id, mime_type="application/pdf")
         uow.files.get_by_id = AsyncMock(return_value=row)
 
-        def boom(_data):
+        def boom(_path):
             raise RuntimeError("corrupt pdf")
 
-        monkeypatch.setattr(previews, "_render_pdf_first_page", boom)
+        monkeypatch.setattr(previews, "_pdf_to_webp_from_path", boom)
 
         result = await generate_file_preview_handler(ctx)
 
@@ -419,7 +463,7 @@ class TestImagePreviewSuccess:
         uow.files.get_by_id = AsyncMock(return_value=row)
 
         monkeypatch.setattr(
-            previews, "_compress_to_webp", lambda data: b"webp-bytes"
+            previews, "_image_to_webp_from_path", lambda path: b"webp-bytes"
         )
 
         result = await generate_file_preview_handler(ctx)
@@ -432,7 +476,7 @@ class TestImagePreviewSuccess:
         ctx.storage_service.build_preview_key.assert_called_once_with(
             user_id=owner_id, file_id=file_id, extension="webp"
         )
-        ctx.storage_service.objects.get_object_bytes.assert_awaited_once()
+        ctx.storage_service.objects.download_object_to_file.assert_awaited_once()
         ctx.storage_service.objects.put_object.assert_awaited_once()
         put_kwargs = ctx.storage_service.objects.put_object.await_args.kwargs
         assert put_kwargs["content_type"] == "image/webp"
@@ -465,7 +509,7 @@ class TestImagePreviewSuccess:
             result.result_data["preview_status"]
             == FilePreviewStatus.NOT_REQUIRED.value
         )
-        ctx.storage_service.objects.get_object_bytes.assert_not_awaited()
+        ctx.storage_service.objects.download_object_to_file.assert_not_awaited()
         ctx.storage_service.objects.put_object.assert_not_awaited()
         uow.files.mark_preview_not_required.assert_awaited()
         uow.commit.assert_awaited()
@@ -485,9 +529,9 @@ class TestTextPreviewSuccess:
             file_id=file_id, owner_id=owner_id, mime_type="text/plain"
         )
         uow.files.get_by_id = AsyncMock(return_value=row)
-        big = b"x" * 10000
-        ctx.storage_service.objects.get_object_bytes = AsyncMock(
-            return_value=_Downloaded(big)
+        # Диапазонное чтение возвращает уже не больше N байт.
+        ctx.storage_service.objects.get_object_range_bytes = AsyncMock(
+            return_value=b"x" * 4096
         )
         ctx.storage_service.build_preview_key = MagicMock(
             return_value="previews/user/file.txt"
@@ -502,6 +546,11 @@ class TestTextPreviewSuccess:
         ctx.storage_service.build_preview_key.assert_called_once_with(
             user_id=owner_id, file_id=file_id, extension="txt"
         )
+        # Прочитан только диапазон первых байт, а не весь файл.
+        range_kwargs = (
+            ctx.storage_service.objects.get_object_range_bytes.await_args.kwargs
+        )
+        assert range_kwargs["length"] == 4096
         put_kwargs = ctx.storage_service.objects.put_object.await_args.kwargs
         # Обрезано до _TEXT_PREVIEW_MAX_BYTES (4096).
         assert put_kwargs["length"] == 4096
@@ -514,8 +563,8 @@ class TestTextPreviewSuccess:
         ctx, uow = make_ctx(payload={"file_id": str(file_id)})
         row = make_file_row(file_id=file_id, mime_type="application/json")
         uow.files.get_by_id = AsyncMock(return_value=row)
-        ctx.storage_service.objects.get_object_bytes = AsyncMock(
-            return_value=_Downloaded(b'{"a": 1}')
+        ctx.storage_service.objects.get_object_range_bytes = AsyncMock(
+            return_value=b'{"a": 1}'
         )
 
         result = await generate_file_preview_handler(ctx)
@@ -545,7 +594,7 @@ class TestErrorBranches:
         def boom(_data):
             raise MemoryError("too big")
 
-        monkeypatch.setattr(previews, "_compress_to_webp", boom)
+        monkeypatch.setattr(previews, "_image_to_webp_from_path", boom)
 
         result = await generate_file_preview_handler(ctx)
 
@@ -571,7 +620,7 @@ class TestErrorBranches:
         def boom(_data):
             raise MemoryError("too big")
 
-        monkeypatch.setattr(previews, "_compress_to_webp", boom)
+        monkeypatch.setattr(previews, "_image_to_webp_from_path", boom)
 
         result = await generate_file_preview_handler(ctx)
 
@@ -591,7 +640,7 @@ class TestErrorBranches:
         def bomb(_data):
             raise Image.DecompressionBombError("too many pixels")
 
-        monkeypatch.setattr(previews, "_compress_to_webp", bomb)
+        monkeypatch.setattr(previews, "_image_to_webp_from_path", bomb)
 
         result = await generate_file_preview_handler(ctx)
 
@@ -606,7 +655,7 @@ class TestErrorBranches:
         ctx, uow = make_ctx(payload={"file_id": str(file_id)})
         row = make_file_row(file_id=file_id, mime_type="image/png")
         uow.files.get_by_id = AsyncMock(return_value=row)
-        ctx.storage_service.objects.get_object_bytes = AsyncMock(
+        ctx.storage_service.objects.download_object_to_file = AsyncMock(
             side_effect=StorageConnectionError("down")
         )
 
@@ -652,7 +701,7 @@ class TestErrorBranches:
         ctx, uow = make_ctx(payload={"file_id": str(file_id)})
         row = make_file_row(file_id=file_id, mime_type="text/plain")
         uow.files.get_by_id = AsyncMock(return_value=row)
-        ctx.storage_service.objects.get_object_bytes = AsyncMock(
+        ctx.storage_service.objects.get_object_range_bytes = AsyncMock(
             side_effect=ServiceError("svc")
         )
 
@@ -668,7 +717,7 @@ class TestErrorBranches:
         ctx, uow = make_ctx(payload={"file_id": str(file_id)})
         row = make_file_row(file_id=file_id, mime_type="text/plain")
         uow.files.get_by_id = AsyncMock(return_value=row)
-        ctx.storage_service.objects.get_object_bytes = AsyncMock(
+        ctx.storage_service.objects.get_object_range_bytes = AsyncMock(
             side_effect=RuntimeError("boom")
         )
 

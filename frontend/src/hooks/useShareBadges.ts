@@ -2,7 +2,6 @@ import { useQuery } from "@tanstack/react-query";
 import { publicLinksApi } from "@/api/public-links";
 import { permissionsApi } from "@/api/permissions";
 import type { NodeListItem } from "@/types/nodes";
-import type { PublicLinkListItem } from "@/types/public-links";
 
 /** Общий query key узлов с выданным пользователям доступом. */
 export const SHARED_BY_ME_QUERY_KEY = ["permissions", "shared-by-me"] as const;
@@ -26,51 +25,12 @@ export interface ShareBadge {
 export const ACTIVE_LINKS_QUERY_KEY = ["public-links", "all-active"] as const;
 
 /**
- * Размер страницы при загрузке публичных ссылок.
- *
- * Значение соответствует backend-ограничению `limit <= 100`.
- */
-const LINKS_PAGE_SIZE = 100;
-
-/**
- * Максимальное количество страниц активных публичных ссылок для загрузки.
- *
- * Ограничение защищает от бесконечного цикла и патологически больших аккаунтов.
- * При текущем значении максимум будет загружено 2000 ссылок.
- */
-const MAX_LINK_PAGES = 20;
-
-/**
- * Загружает все активные публичные ссылки пользователя.
- *
- * Проходит по страницам API и собирает ссылки в один список. Останавливается,
- * если последняя страница неполная, достигнут `total` из metadata или достигнут
- * safety-limit `MAX_LINK_PAGES`.
- *
- * Returns:
- *   Promise со списком активных публичных ссылок пользователя.
- */
-async function fetchAllActiveLinks(): Promise<PublicLinkListItem[]> {
-  const all: PublicLinkListItem[] = [];
-  for (let offset = 0, page = 0; page < MAX_LINK_PAGES; page++, offset += LINKS_PAGE_SIZE) {
-    const res = await publicLinksApi.list({
-      is_active: true,
-      limit: LINKS_PAGE_SIZE,
-      offset,
-    });
-    all.push(...res.items);
-    if (res.items.length < LINKS_PAGE_SIZE || all.length >= res.meta.total) break;
-  }
-  return all;
-}
-
-/**
  * Возвращает badge'и публичного доступа для списка nodes.
  *
- * Загружает активные публичные ссылки пользователя один раз, постранично, затем
- * фильтрует их на клиенте по node id текущей папки. Такой подход убирает
- * прежнее ограничение первой страницы в 100 ссылок и избегает N×2 запросов на
- * каждый элемент, которые могли забивать browser connection pool.
+ * Грузит два лёгких списка node id (с активной публичной ссылкой и с выданным
+ * пользователям доступом) одним DISTINCT-запросом каждый, кэширует на сессию
+ * (`refetchOnMount: false`) и пересекает с id текущей папки на клиенте — без
+ * выгрузки полных объектов ссылок и без запроса на каждый элемент.
  *
  * Args:
  *   items: Nodes текущей папки, для которых нужно построить share badge'и.
@@ -81,14 +41,17 @@ async function fetchAllActiveLinks(): Promise<PublicLinkListItem[]> {
 export function useShareBadges(items: NodeListItem[]): Map<string, ShareBadge> {
   const nodeIds = new Set(items.map((i) => i.id));
 
-  const { data } = useQuery({
+  // Узлы с активной публичной ссылкой — один лёгкий DISTINCT-запрос, кэшируется
+  // на сессию (refetchOnMount: false), а не выгрузка всех объектов ссылок.
+  const { data: publicLinkNodeIds } = useQuery({
     queryKey: ACTIVE_LINKS_QUERY_KEY,
-    queryFn: fetchAllActiveLinks,
+    queryFn: () => publicLinksApi.activeNodeIds(),
     staleTime: 10 * 60 * 1000,
     gcTime: 15 * 60 * 1000,
     refetchOnWindowFocus: false,
     refetchOnMount: false,
   });
+  const publicLinkSet = new Set(publicLinkNodeIds ?? []);
 
   // Узлы, к которым текущий пользователь выдал доступ другим пользователям.
   const { data: sharedByMe } = useQuery({
@@ -110,10 +73,8 @@ export function useShareBadges(items: NodeListItem[]): Map<string, ShareBadge> {
     }
     return badge;
   };
-  for (const link of data ?? []) {
-    if (nodeIds.has(link.node_id)) ensure(link.node_id).hasPublicLink = true;
-  }
   for (const id of nodeIds) {
+    if (publicLinkSet.has(id)) ensure(id).hasPublicLink = true;
     if (sharedSet.has(id)) ensure(id).hasSharedAccess = true;
   }
   return map;

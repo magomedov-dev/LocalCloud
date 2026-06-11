@@ -836,6 +836,22 @@ async def test_validate_access_unexpected_error_wrapped():
 
 
 @pytest.mark.asyncio
+async def test_list_active_link_node_ids_single_distinct_query():
+    """list_active_link_node_ids возвращает node_id одним DISTINCT-запросом."""
+    user_id = uuid.uuid4()
+    ids = [uuid.uuid4(), uuid.uuid4()]
+    links_repo = AsyncMock()
+    links_repo.get_distinct_active_node_ids = AsyncMock(return_value=ids)
+    uow = make_uow(links=links_repo)
+    service = make_service(uow)
+
+    result = await service.list_active_link_node_ids(user_id=user_id)
+
+    assert result == ids
+    links_repo.get_distinct_active_node_ids.assert_awaited_once_with(created_by=user_id)
+
+
+@pytest.mark.asyncio
 async def test_get_public_link_success():
     node = make_node_mock()
     link = make_link_mock(node=node, node_id=node.id)

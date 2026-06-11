@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import posixpath
+import shutil
 import tempfile
 import zipfile
 from inspect import isawaitable
@@ -10,6 +11,7 @@ from pathlib import PurePosixPath
 from typing import Any
 from uuid import UUID
 
+from core.config import get_settings
 from database.exceptions import DatabaseConnectionError
 from database.models.enums import NodeType, StorageObjectStatus
 from services.exceptions import ServiceError
@@ -111,6 +113,7 @@ async def create_folder_archive_handler(
                     "storage_status": getattr(file_row, "storage_status", None),
                     "storage_bucket": getattr(file_row, "storage_bucket", None),
                     "storage_key": getattr(file_row, "storage_key", None),
+                    "size_bytes": getattr(file_row, "size_bytes", None),
                 }
                 for file_row in files
             ]
@@ -184,6 +187,14 @@ async def create_folder_archive_handler(
             error_message="Временная ошибка при создании архива папки.",
             error_code="temporary_unavailable",
             result_data={"reason": str(exc), "error_type": exc.__class__.__name__},
+        )
+    except ArchiveLimitExceededError as exc:
+        return failure_result(
+            error_message=str(exc),
+            error_code=exc.error_code,
+            result_data={"reason": str(exc), **exc.details},
+            retry=False,
+            progress_percent=0,
         )
     except (ServiceError, StorageError) as exc:
         return failure_result(
@@ -321,6 +332,14 @@ async def _run_bulk_archive(
             error_code="temporary_unavailable",
             result_data={"reason": str(exc), "error_type": exc.__class__.__name__},
         )
+    except ArchiveLimitExceededError as exc:
+        return failure_result(
+            error_message=str(exc),
+            error_code=exc.error_code,
+            result_data={"reason": str(exc), **exc.details},
+            retry=False,
+            progress_percent=0,
+        )
     except (ServiceError, StorageError) as exc:
         return failure_result(
             error_message="Ошибка создания архива.",
@@ -354,6 +373,7 @@ def _file_row_dict(file_row: Any) -> dict[str, Any]:
         "storage_status": getattr(file_row, "storage_status", None),
         "storage_bucket": getattr(file_row, "storage_bucket", None),
         "storage_key": getattr(file_row, "storage_key", None),
+        "size_bytes": getattr(file_row, "size_bytes", None),
     }
 
 
@@ -388,10 +408,32 @@ def _dedupe_member(member_path: str, seen: set[str]) -> str:
         counter += 1
 
 
-# Размер фрагмента для потоковой передачи объектов в ZIP-архив. Максимальный объем памяти на файл составляет примерно
-# один фрагмент + буфер для удаления данных, а не весь объект целиком (что ранее
-# могло привести к увеличению объема работы с большими файлами или несколькими параллельными архивами).
-_ARCHIVE_STREAM_CHUNK = 1024 * 1024  # 1 MB
+# Параметры архива читаются из единой конфигурации (core.config): дефолты-литералы
+# лежат в core.constants.ArchiveConstants и подобраны под маленький хост, а через
+# .env (см. .env.example, секция «Archives») их можно переопределить под более
+# мощный сервер. Лимиты нужны, чтобы сборка ZIP не выела диск под временный файл и
+# не загрузила в память слишком большой список записей.
+_archive_settings = get_settings().archives
+
+# Размер фрагмента потоковой передачи объекта в ZIP. Максимальный объём памяти на
+# файл — примерно один фрагмент + буфер, а не весь объект целиком.
+_ARCHIVE_STREAM_CHUNK = _archive_settings.stream_chunk_bytes
+_ARCHIVE_MAX_FILES = _archive_settings.max_files
+_ARCHIVE_MAX_TOTAL_BYTES = _archive_settings.max_total_bytes
+# Свободного места на диске должно быть с запасом: ZIP_DEFLATED обычно ≤ суммы
+# источников, но для уже сжатых данных размер примерно равен исходному.
+_ARCHIVE_DISK_SAFETY_FACTOR = _archive_settings.disk_safety_factor
+
+
+class ArchiveLimitExceededError(Exception):
+    """Архив превышает лимиты (число файлов, общий размер или место на диске)."""
+
+    def __init__(
+        self, message: str, *, error_code: str, details: dict[str, Any] | None = None
+    ) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+        self.details = details or {}
 
 
 async def _stream_object_into_zip(
@@ -464,6 +506,53 @@ def _safe_close_response(response: Any) -> None:
                 pass
 
 
+def _enforce_archive_limits(entries: list[tuple[str, dict[str, Any]]]) -> None:
+    """Проверяет лимиты архива до начала сборки.
+
+    Защищает от заполнения диска временным ZIP и от загрузки в память слишком
+    большого списка записей. Размер ZIP оценивается сверху суммой исходных
+    файлов (ZIP_DEFLATED обычно ≤ исходного).
+
+    Args:
+        entries: Отфильтрованные доступные записи `(путь_в_архиве, снимок_файла)`.
+
+    Raises:
+        ArchiveLimitExceededError: Если превышен лимит файлов/размера или не
+            хватает места на диске.
+    """
+
+    file_count = len(entries)
+    if file_count > _ARCHIVE_MAX_FILES:
+        raise ArchiveLimitExceededError(
+            f"Слишком много файлов для архивации: {file_count} > {_ARCHIVE_MAX_FILES}.",
+            error_code="archive_too_many_files",
+            details={"file_count": file_count, "max_files": _ARCHIVE_MAX_FILES},
+        )
+
+    total_source_bytes = sum(int(fr.get("size_bytes") or 0) for _, fr in entries)
+    if total_source_bytes > _ARCHIVE_MAX_TOTAL_BYTES:
+        raise ArchiveLimitExceededError(
+            "Суммарный размер файлов превышает лимит архива.",
+            error_code="archive_too_large",
+            details={
+                "total_source_bytes": total_source_bytes,
+                "max_total_bytes": _ARCHIVE_MAX_TOTAL_BYTES,
+            },
+        )
+
+    needed = int(total_source_bytes * _ARCHIVE_DISK_SAFETY_FACTOR)
+    try:
+        free = shutil.disk_usage(tempfile.gettempdir()).free
+    except OSError:
+        free = None
+    if free is not None and free < needed:
+        raise ArchiveLimitExceededError(
+            "Недостаточно места на диске для создания архива.",
+            error_code="archive_insufficient_disk",
+            details={"needed_bytes": needed, "free_bytes": free},
+        )
+
+
 async def _build_zip_and_store(
     context: WorkerTaskExecutionContext,
     entries: list[tuple[str, dict[str, Any]]],
@@ -500,6 +589,17 @@ async def _build_zip_and_store(
             extension="zip",
         )
 
+        # Отбираем только реально доступные объекты и заранее проверяем лимиты —
+        # до создания временного файла, чтобы не начинать тяжёлую работу впустую.
+        available_entries = [
+            (member_path, file_row)
+            for member_path, file_row in entries
+            if file_row.get("storage_status") == StorageObjectStatus.AVAILABLE
+            and file_row.get("storage_bucket")
+            and file_row.get("storage_key")
+        ]
+        _enforce_archive_limits(available_entries)
+
         with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp_file:
             temp_zip_path = tmp_file.name
 
@@ -508,14 +608,7 @@ async def _build_zip_and_store(
         with zipfile.ZipFile(
             temp_zip_path, mode="w", compression=zipfile.ZIP_DEFLATED
         ) as zip_handle:
-            for member_path, file_row in entries:
-                if file_row.get("storage_status") != StorageObjectStatus.AVAILABLE:
-                    continue
-                if not file_row.get("storage_bucket") or not file_row.get(
-                    "storage_key"
-                ):
-                    continue
-
+            for member_path, file_row in available_entries:
                 unique_member = _dedupe_member(member_path, seen_members)
                 await _stream_object_into_zip(
                     context,
@@ -537,6 +630,10 @@ async def _build_zip_and_store(
         if extra_metadata:
             metadata.update(extra_metadata)
 
+        # put_object получает файловый дескриптор и отдаёт его MinIO SDK как
+        # есть: загрузка идёт частями (~part_size), а не чтением всего архива в
+        # RAM. Пик памяти на этом шаге ограничен размером части, а не размером
+        # архива.
         with open(temp_zip_path, "rb") as archive_stream:
             await context.storage_service.objects.put_object(
                 bucket=archive_bucket,

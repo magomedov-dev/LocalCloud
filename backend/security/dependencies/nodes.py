@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 from core.logging import get_logger
 from database.models.filesystem import FileSystemNode
 from database.models.permissions import NodePermission
+from database.repositories.permissions import NodePermissionsRepository
 from security.dependencies.auth import DatabaseSessionDependency, forbidden_exception
 from security.dependencies.users import OptionalActiveUserDependency
 from security.permissions import (
@@ -67,33 +68,29 @@ async def get_node_by_id(
 async def get_ancestor_permissions(
     session: AsyncSession,
     node: FileSystemNode,
+    user_id: uuid.UUID,
 ) -> list[NodePermission]:
-    """Собирает права доступа со всех неудалённых узлов-предков объекта.
+    """Возвращает активные права пользователя на неудалённых предков объекта.
 
     Нужно для наследования прав: доступ, выданный на папку, распространяется на
-    её содержимое. Идёт вверх по ``parent_id``; удалённые предки пропускаются —
-    грант на узел в корзине не должен открывать доступ к его потомкам.
+    её содержимое. Одним запросом (рекурсивный CTE + join), а не обходом предков
+    по одному. Удалённые предки пропускаются — грант на узел в корзине не должен
+    открывать доступ к его потомкам.
 
     Args:
         session: Асинхронная SQLAlchemy-сессия.
         node: Узел, для которого нужно собрать права предков.
+        user_id: Идентификатор пользователя.
 
     Returns:
-        Список прав доступа всех предков узла.
+        Список активных прав пользователя на предков узла.
     """
 
-    permissions: list[NodePermission] = []
-    seen: set[uuid.UUID] = set()
-    parent_id = node.parent_id
-    while parent_id is not None and parent_id not in seen:
-        seen.add(parent_id)
-        parent = await get_node_by_id(session, parent_id, load_permissions=True)
-        if parent is None:
-            break
-        if not bool(getattr(parent, "is_deleted", False)):
-            permissions.extend(parent.permissions)
-        parent_id = parent.parent_id
-    return permissions
+    repository = NodePermissionsRepository(session)
+    return await repository.get_active_ancestor_permissions(
+        node_id=node.id,
+        user_id=user_id,
+    )
 
 
 async def _check_with_inheritance(
@@ -140,7 +137,7 @@ async def _check_with_inheritance(
             PermissionDeniedReason.INSUFFICIENT_PERMISSION,
         )
     ):
-        inherited = await get_ancestor_permissions(session, node)
+        inherited = await get_ancestor_permissions(session, node, user.id)
         if inherited:
             result = check_node_permission(
                 user=cast(Any, user),

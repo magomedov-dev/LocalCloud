@@ -856,6 +856,24 @@ def _attach_shared_node(perm, *, name="shared.pdf", mime="application/pdf",
 
 
 @pytest.mark.asyncio
+async def test_list_nodes_shared_by_me_uses_single_distinct_query():
+    """list_nodes_shared_by_me берёт node_id одним DISTINCT-запросом."""
+    user_id = uuid.uuid4()
+    ids = [uuid.uuid4(), uuid.uuid4()]
+    permissions_repo = AsyncMock()
+    permissions_repo.get_distinct_active_granted_node_ids = AsyncMock(return_value=ids)
+    uow = make_uow(permissions=permissions_repo)
+    service = make_permissions_service(uow)
+
+    result = await service.list_nodes_shared_by_me(user_id=user_id)
+
+    assert result == ids
+    permissions_repo.get_distinct_active_granted_node_ids.assert_awaited_once_with(
+        granted_by=user_id
+    )
+
+
+@pytest.mark.asyncio
 async def test_list_shared_with_me_maps_node_and_permission():
     """list_shared_with_me собирает метаданные узла и параметры права."""
     user_id = uuid.uuid4()

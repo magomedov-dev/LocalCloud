@@ -15,6 +15,7 @@ import {
   Pause,
   Pencil,
   Play,
+  PlayCircle,
   Plus,
   Volume2,
   VolumeX,
@@ -25,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { nodesApi } from "@/api/nodes";
 import { uploadsApi } from "@/api/uploads";
+import { useFeatures } from "@/hooks/useFeatures";
 import { downloadBlobFromUrl } from "@/lib/download";
 import type { NodeListItem } from "@/types/nodes";
 
@@ -760,6 +762,11 @@ interface Props {
  */
 export function FilePreviewModal({ item, mimeType, open, onClose }: Props) {
   const kind = detectPreviewKind(item.name, mimeType ?? item.file_mime_type);
+  const features = useFeatures();
+  // Проигрывание аудио/видео может быть отключено флагом развёртывания: тогда
+  // вместо плеера показываем предложение скачать файл.
+  const mediaBlocked =
+    (kind === "video" || kind === "audio") && !features.media_playback_enabled;
   const queryClient = useQueryClient();
 
   const [presignedUrl, setPresignedUrl] = useState<string | null>(null);
@@ -992,8 +999,10 @@ export function FilePreviewModal({ item, mimeType, open, onClose }: Props) {
               {item.name}
             </span>
 
-            {/* Переключение редактирования — только для загруженного text/markdown */}
-            {(kind === "text" || kind === "markdown") &&
+            {/* Переключение редактирования — только для загруженного text/markdown
+                и только если редактирование включено флагом развёртывания. */}
+            {features.file_editing_enabled &&
+              (kind === "text" || kind === "markdown") &&
               textContent !== null &&
               !loading &&
               !error &&
@@ -1081,7 +1090,17 @@ export function FilePreviewModal({ item, mimeType, open, onClose }: Props) {
               </div>
             )}
 
-            {kind === "video" && videoStreamUrl && (
+            {mediaBlocked && (
+              <div className="text-muted-foreground flex flex-col items-center gap-3">
+                <PlayCircle className="h-7 w-7" />
+                <span className="text-sm">Проигрывание медиа отключено.</span>
+                <Button variant="outline" size="sm" onClick={triggerDownload}>
+                  <Download className="mr-2 h-4 w-4" /> Скачать файл
+                </Button>
+              </div>
+            )}
+
+            {!mediaBlocked && kind === "video" && videoStreamUrl && (
               <VideoPlayer src={videoStreamUrl} name={item.name} posterUrl={posterUrl} />
             )}
 
@@ -1089,7 +1108,9 @@ export function FilePreviewModal({ item, mimeType, open, onClose }: Props) {
               <>
                 {kind === "image" && <ImageViewer src={presignedUrl} alt={item.name} />}
 
-                {kind === "audio" && <AudioPlayer src={presignedUrl} name={item.name} />}
+                {!mediaBlocked && kind === "audio" && (
+                  <AudioPlayer src={presignedUrl} name={item.name} />
+                )}
 
                 {kind === "pdf" && (
                   <div className="relative h-full w-full">

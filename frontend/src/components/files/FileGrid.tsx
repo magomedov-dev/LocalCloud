@@ -5,6 +5,7 @@ import { FileListItem } from "./FileListItem";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useThumbnails } from "@/hooks/useThumbnails";
+import { useFeatures } from "@/hooks/useFeatures";
 import { useShareBadges } from "@/hooks/useShareBadges";
 import type { NodeListItem } from "@/types/nodes";
 import type { ItemCapabilities } from "./itemCapabilities";
@@ -183,7 +184,8 @@ export function FileGrid({
   onLoadMore,
   capabilitiesFor,
 }: Props) {
-  const thumbnails = useThumbnails(items);
+  const features = useFeatures();
+  const thumbnails = useThumbnails(items, features.previews_enabled);
   const badges = useShareBadges(items);
 
   if (isLoading) return <LoadingGrid view={view} />;

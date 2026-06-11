@@ -11,3 +11,4 @@ export { permissionsApi } from "./permissions";
 export { auditApi } from "./audit";
 export { tasksApi } from "./tasks";
 export { downloadsApi } from "./downloads";
+export { configApi } from "./config";

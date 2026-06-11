@@ -34,6 +34,25 @@ from storage.types import (
 )
 
 
+def _write_stream_to_file(stream: Any, file_path: str, chunk_size: int) -> int:
+    """Потоково пишет MinIO-response в файл блоками. Возвращает число байт.
+
+    Блокирующая функция: вызывается через ``StorageClient.execute`` в пуле
+    потоков. Память не зависит от размера объекта — в RAM держится лишь один
+    блок ``chunk_size``.
+    """
+
+    written = 0
+    with open(file_path, "wb") as file_obj:
+        while True:
+            chunk = stream.read(chunk_size)
+            if not chunk:
+                break
+            file_obj.write(chunk)
+            written += len(chunk)
+    return written
+
+
 class StorageObjectManager:
     """Менеджер базовых операций с объектами MinIO/S3.
 
@@ -263,6 +282,48 @@ class StorageObjectManager:
         finally:
             await self._close_response(response)
 
+    async def get_object_range_bytes(
+        self,
+        *,
+        bucket: str,
+        object_key: str,
+        offset: int = 0,
+        length: int = 0,
+    ) -> bytes:
+        """Возвращает диапазон байт объекта, не скачивая его целиком.
+
+        Нужно, например, для текстового превью: достаточно прочитать только
+        первые N байт, а не загружать в память весь файл.
+
+        Args:
+            bucket: Имя bucket.
+            object_key: Ключ объекта.
+            offset: Смещение от начала объекта в байтах.
+            length: Сколько байт прочитать (``0`` — до конца объекта).
+
+        Returns:
+            Прочитанные байты диапазона.
+
+        Raises:
+            StorageDownloadError: Если скачивание не удалось.
+            StorageObjectNotFoundError: Если объект не найден.
+            StorageObjectError: Если операция с объектом не удалась.
+        """
+
+        response = await self.get_object_stream(
+            bucket=bucket,
+            object_key=object_key,
+            offset=offset,
+            length=length,
+        )
+        try:
+            return await self.client.execute(
+                response.read,
+                operation_name="read_object_range",
+            )
+        finally:
+            await self._close_response(response)
+
     async def get_object_stream(
         self,
         *,
@@ -312,6 +373,72 @@ class StorageObjectManager:
                 operation="get_object_stream",
                 operation_kind="download",
             ) from exc
+
+    async def download_object_to_file(
+        self,
+        *,
+        bucket: str,
+        object_key: str,
+        file_path: str,
+        chunk_size: int | None = None,
+    ) -> int:
+        """Потоково сохраняет объект в файл, не загружая его целиком в память.
+
+        В отличие от ``get_object_bytes`` пик памяти не зависит от размера
+        объекта: данные читаются блоками и сразу пишутся на диск. Нужно для
+        обработки больших медиа (PDF/видео) в worker'е без RAM-спайка.
+
+        Args:
+            bucket: Имя bucket.
+            object_key: Ключ объекта.
+            file_path: Путь к файлу назначения (будет перезаписан).
+            chunk_size: Размер блока чтения в байтах. По умолчанию —
+                ``StorageConstants.STORAGE_DEFAULT_CHECKSUM_CHUNK_SIZE``.
+
+        Returns:
+            Количество записанных байт.
+
+        Raises:
+            StorageDownloadError: Если скачивание объекта не удалось.
+            StorageObjectNotFoundError: Если объект не найден.
+            StorageObjectError: Если операция с объектом не удалась.
+        """
+
+        normalized_bucket = self._validate_bucket_name(bucket)
+        normalized_object_key = normalize_object_key(object_key)
+        resolved_chunk_size = (
+            chunk_size
+            if chunk_size is not None
+            else StorageConstants.STORAGE_DEFAULT_CHECKSUM_CHUNK_SIZE
+        )
+
+        response = None
+        try:
+            response = await self.client.execute(
+                self.client.get_raw_client().get_object,
+                normalized_bucket,
+                normalized_object_key,
+                operation_name="get_object",
+            )
+            # Блокирующее чтение из MinIO и запись на диск — целиком в пуле
+            # потоков storage-клиента, чтобы не блокировать event loop.
+            return await self.client.execute(
+                _write_stream_to_file,
+                response,
+                file_path,
+                resolved_chunk_size,
+                operation_name="download_object_to_file",
+            )
+        except StorageError as exc:
+            raise self._object_error(
+                exc,
+                bucket=normalized_bucket,
+                object_key=normalized_object_key,
+                operation="download_object_to_file",
+                operation_kind="download",
+            ) from exc
+        finally:
+            await self._close_response(response)
 
     async def calculate_object_checksum(
         self,

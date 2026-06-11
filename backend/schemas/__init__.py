@@ -52,6 +52,7 @@ from schemas.folders import (
     FolderRead,
     FolderUpdateRequest,
 )
+from schemas.config import ClientConfigResponse, ClientFeatureFlags
 from schemas.health import (
     ApplicationHealthRead,
     ComponentHealthRead,
@@ -314,4 +315,6 @@ __all__ = [
     "HealthCheckResponse",
     "ReadinessResponse",
     "LivenessResponse",
+    "ClientConfigResponse",
+    "ClientFeatureFlags",
 ]

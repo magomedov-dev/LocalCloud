@@ -1092,6 +1092,20 @@ class UploadsService:
                 },
             )
 
+        # Заранее загружаем все части сессии (постранично, ≤1000 за запрос),
+        # чтобы не делать отдельный SELECT на каждую часть (N+1) при завершении.
+        parts_by_number: dict[int, UploadPart] = {}
+        offset = 0
+        while True:
+            chunk = await uow.upload_parts.get_session_parts(
+                upload_session.id, offset=offset, limit=REPOSITORY_PAGE_LIMIT
+            )
+            for existing in chunk:
+                parts_by_number[existing.part_number] = existing
+            if len(chunk) < REPOSITORY_PAGE_LIMIT:
+                break
+            offset += REPOSITORY_PAGE_LIMIT
+
         seen: set[int] = set()
         completed_parts: list[UploadPart] = []
         for item in sorted(parts, key=lambda part: part.part_number):
@@ -1106,10 +1120,13 @@ class UploadsService:
                     details={"service": SERVICE_NAME, "operation": operation},
                 )
             seen.add(item.part_number)
-            part = await uow.upload_parts.get_required_by_session_and_part_number(
-                upload_session.id,
-                item.part_number,
-            )
+            part = parts_by_number.get(item.part_number)
+            if part is None:
+                # Защитный фолбэк: части не оказалось в предзагрузке.
+                part = await uow.upload_parts.get_required_by_session_and_part_number(
+                    upload_session.id,
+                    item.part_number,
+                )
             _ensure_part_size_matches(part, item, operation=operation)
             if part.status != UploadPartStatus.UPLOADED or part.etag != item.etag:
                 part = await uow.upload_parts.mark_part_uploaded(

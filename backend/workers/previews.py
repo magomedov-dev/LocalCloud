@@ -5,12 +5,15 @@ import io
 import os
 import subprocess
 import tempfile
-from typing import Any
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Callable
 from uuid import UUID
 
 import fitz
 from PIL import Image
 
+from core.config import get_settings
+from core.constants import PreviewConstants
 from core.logging import get_logger
 from core.preview_mime import (
     PREVIEW_IMAGE_CONTENT_TYPE,
@@ -35,27 +38,59 @@ from workers.types import WorkerTaskExecutionContext, WorkerTaskExecutionResult
 
 logger = get_logger(__name__)
 
-_TEXT_PREVIEW_MAX_BYTES = 4096
-_IMAGE_PREVIEW_QUALITY = 75
-_IMAGE_PREVIEW_MAX_DIMENSION = 400
 
-# Защита от чрезмерного потребления памяти и «decompression bomb».
-# Превью всё равно ужимается до _IMAGE_PREVIEW_MAX_DIMENSION, поэтому исходные
-# файлы, превышающие эти пороги, превью не получают (помечаются NOT_REQUIRED):
-# это снимает пик RAM и класс DoS на worker-процессе.
-_IMAGE_PREVIEW_MAX_SOURCE_BYTES = 25 * 1024 * 1024  # 25 МБ исходного файла
-_PDF_PREVIEW_MAX_SOURCE_BYTES = 50 * 1024 * 1024  # 50 МБ исходного PDF
-_VIDEO_PREVIEW_MAX_SOURCE_BYTES = 200 * 1024 * 1024  # 200 МБ исходного видео
-_IMAGE_PREVIEW_MAX_PIXELS = 40_000_000  # 40 Мпикс (ширина × высота)
+# Значения генерации превью читаются из единой конфигурации (core.config):
+# дефолты-литералы лежат в core.constants.PreviewConstants и подобраны под
+# маленький хост (1 ГБ ОЗУ), а через .env (см. .env.example, секция «Preview
+# generation») их можно переопределить под более мощный сервер.
+_preview_settings = get_settings().previews
+
+# Мастер-флаг генерации: при выключении worker помечает файлы NOT_REQUIRED и
+# не тратит RAM/CPU на рендеры (для совсем слабых серверов).
+_PREVIEW_GENERATION_ENABLED = _preview_settings.generation_enabled
+
+_TEXT_PREVIEW_MAX_BYTES = PreviewConstants.TEXT_PREVIEW_MAX_BYTES
+_IMAGE_PREVIEW_QUALITY = _preview_settings.image_quality
+_IMAGE_PREVIEW_MAX_DIMENSION = _preview_settings.image_max_dimension
+_DOWNLOAD_CHUNK_BYTES = PreviewConstants.DOWNLOAD_CHUNK_BYTES
+
+# Защита от чрезмерного потребления памяти и «decompression bomb». Источники
+# крупнее порога превью не получают (помечаются NOT_REQUIRED): это снимает пик
+# RAM/CPU и класс DoS на worker'е.
+_IMAGE_PREVIEW_MAX_SOURCE_BYTES = _preview_settings.image_max_source_bytes
+_PDF_PREVIEW_MAX_SOURCE_BYTES = _preview_settings.pdf_max_source_bytes
+_VIDEO_PREVIEW_MAX_SOURCE_BYTES = _preview_settings.video_max_source_bytes
+_IMAGE_PREVIEW_MAX_PIXELS = _preview_settings.image_max_pixels  # ширина × высота
 
 # Параметры рендера превью PDF и видео.
-_PDF_RENDER_DPI = 120
-_VIDEO_FRAME_TIMESTAMP = "00:00:01"
-_VIDEO_FFMPEG_TIMEOUT_SECONDS = 30
+_PDF_RENDER_DPI = _preview_settings.pdf_render_dpi
+_PDF_RENDER_MAX_DIM = _preview_settings.pdf_render_max_dim  # потолок длинной стороны
+_VIDEO_FRAME_TIMESTAMP = PreviewConstants.VIDEO_FRAME_TIMESTAMP
+_VIDEO_FFMPEG_TIMEOUT_SECONDS = _preview_settings.video_ffmpeg_timeout_seconds
+
+# Параллелизм тяжёлых рендеров. Декод PDF/видео/картинок память- и CPU-затратен,
+# поэтому ограничиваем число одновременных рендеров отдельно от общего числа
+# worker-задач — иначе «два тяжёлых рендера сразу» приводят к OOM. По умолчанию
+# 1: на 1 ядре параллельные рендеры всё равно бессмысленны.
+_RENDER_MAX_CONCURRENCY = _preview_settings.render_concurrency
+_render_semaphore = asyncio.Semaphore(_RENDER_MAX_CONCURRENCY)
+# Выделенный пул потоков под рендеры, чтобы они не конкурировали с дефолтным
+# пулом asyncio (storage I/O и пр.) за потоки на единственном ядре.
+_render_executor = ThreadPoolExecutor(
+    max_workers=_RENDER_MAX_CONCURRENCY,
+    thread_name_prefix="preview-render",
+)
 
 # Глобальный предел Pillow на число пикселей растра: декодер сам прерывает
 # распаковку изображений-«бомб», не выделяя память под полный растр.
 Image.MAX_IMAGE_PIXELS = _IMAGE_PREVIEW_MAX_PIXELS
+
+
+async def _run_render(func: Callable[..., bytes], *args: Any) -> bytes:
+    """Запускает блокирующий рендер в выделенном пуле потоков рендеров."""
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_render_executor, func, *args)
 
 
 async def generate_file_preview_handler(
@@ -112,6 +147,26 @@ async def generate_file_preview_handler(
                         "file_id": str(file_row.id),
                         "preview_status": file_row.preview_status.value,
                         "preview_storage_key": file_row.preview_storage_key,
+                    },
+                    progress_percent=100,
+                )
+
+            # Мастер-флаг отключён: на слабом хосте превью не генерируем вовсе —
+            # помечаем NOT_REQUIRED, не тратя RAM/CPU на скачивание и рендер.
+            if not _PREVIEW_GENERATION_ENABLED:
+                updated = await uow.files.mark_preview_not_required(
+                    file_id=file_row.id,
+                    flush=True,
+                    refresh=True,
+                )
+                await uow.commit()
+                return success_result(
+                    result_data={
+                        "file_id": str(file_row.id),
+                        "preview_status": FilePreviewStatus.NOT_REQUIRED.value,
+                        "preview_storage_key": getattr(
+                            updated, "preview_storage_key", None
+                        ),
                     },
                     progress_percent=100,
                 )
@@ -188,23 +243,44 @@ async def generate_file_preview_handler(
                 file_id=_file_id,
                 extension="webp",
             )
-            downloaded = await context.storage_service.objects.get_object_bytes(
-                bucket=file_snapshot["storage_bucket"],
-                object_key=file_snapshot["storage_key"],
-            )
+            tmp_path: str | None = None
             try:
-                if is_image(_mime):
-                    raster = downloaded.data
-                elif is_pdf(_mime):
-                    raster = await asyncio.to_thread(
-                        _render_pdf_first_page, downloaded.data
-                    )
-                else:  # video
-                    raster = await asyncio.to_thread(
-                        _extract_video_frame, downloaded.data
-                    )
-                webp_bytes = _compress_to_webp(raster)
+                # Потоково скачиваем источник во временный файл — без загрузки
+                # целиком в RAM (раньше 200 МБ видео висели в памяти).
+                fd, tmp_path = tempfile.mkstemp(suffix=".preview-src")
+                os.close(fd)
+                await context.storage_service.objects.download_object_to_file(
+                    bucket=file_snapshot["storage_bucket"],
+                    object_key=file_snapshot["storage_key"],
+                    file_path=tmp_path,
+                    chunk_size=_DOWNLOAD_CHUNK_BYTES,
+                )
+                # Рендер — под семафором (не более N одновременно) на выделенном
+                # пуле потоков: исключает «два тяжёлых рендера = OOM».
+                async with _render_semaphore:
+                    if is_image(_mime):
+                        webp_bytes = await _run_render(
+                            _image_to_webp_from_path, tmp_path
+                        )
+                    elif is_pdf(_mime):
+                        webp_bytes = await _run_render(
+                            _pdf_to_webp_from_path, tmp_path
+                        )
+                    else:  # video
+                        webp_bytes = await _run_render(
+                            _video_to_webp_from_path, tmp_path
+                        )
             except (MemoryError, Image.DecompressionBombError):
+                raise
+            except (
+                DatabaseConnectionError,
+                StorageConnectionError,
+                StorageError,
+                ServiceError,
+            ):
+                # Инфраструктурные ошибки (например, обрыв связи при скачивании
+                # источника) обрабатывает внешний handler: временные → retry,
+                # storage/service → failure. Их нельзя глушить как «нет превью».
                 raise
             except Exception as exc:  # noqa: BLE001 — рендер не удался, превью необязательно
                 logger.info(
@@ -231,6 +307,12 @@ async def generate_file_preview_handler(
                     },
                     progress_percent=100,
                 )
+            finally:
+                if tmp_path is not None:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
             await context.storage_service.objects.put_object(
                 bucket=context.storage_service.default_files_bucket,
                 object_key=preview_key,
@@ -262,11 +344,14 @@ async def generate_file_preview_handler(
             file_id=_file_id,
             extension="txt",
         )
-        downloaded = await context.storage_service.objects.get_object_bytes(
+        # Читаем только первые N байт диапазоном — не загружаем весь файл в RAM.
+        preview_bytes = await context.storage_service.objects.get_object_range_bytes(
             bucket=file_snapshot["storage_bucket"],
             object_key=file_snapshot["storage_key"],
+            offset=0,
+            length=_TEXT_PREVIEW_MAX_BYTES,
         )
-        preview_bytes = downloaded.data[:_TEXT_PREVIEW_MAX_BYTES]
+        preview_bytes = preview_bytes[:_TEXT_PREVIEW_MAX_BYTES]
         await context.storage_service.objects.put_object(
             bucket=context.storage_service.default_files_bucket,
             object_key=preview_key,
@@ -347,51 +432,74 @@ async def generate_file_preview_handler(
         )
 
 
-def _compress_to_webp(data: bytes) -> bytes:
-    """Сжимает изображение в WebP-превью.
+def _image_to_webp(img: Image.Image) -> bytes:
+    """Приводит открытое изображение к WebP-превью фиксированного размера.
 
-    Открывает изображение из байтов, приводит цветовой режим к совместимому с
-    WebP, уменьшает изображение до максимального размера preview и возвращает
-    сжатые байты.
+    Args:
+        img: Открытое (ещё не декодированное) изображение Pillow.
+
+    Returns:
+        Байты изображения в формате WebP.
+
+    Raises:
+        PIL.Image.DecompressionBombError: Если число пикселей изображения
+            превышает ``_IMAGE_PREVIEW_MAX_PIXELS``.
+        OSError: Если Pillow не смог обработать или сохранить изображение.
+    """
+
+    # Размер берётся из заголовка (декодирования ещё нет), поэтому проверка
+    # отсекает «бомбы» до выделения памяти под полный растр.
+    width, height = img.size
+    if width * height > _IMAGE_PREVIEW_MAX_PIXELS:
+        raise Image.DecompressionBombError(
+            f"Изображение {width}x{height} превышает лимит "
+            f"{_IMAGE_PREVIEW_MAX_PIXELS} пикселей для генерации preview."
+        )
+
+    if img.mode in ("RGBA", "LA", "PA"):
+        img = img.convert("RGBA")
+    elif img.mode != "RGB":
+        img = img.convert("RGB")
+
+    img.thumbnail(
+        (_IMAGE_PREVIEW_MAX_DIMENSION, _IMAGE_PREVIEW_MAX_DIMENSION),
+        Image.Resampling.LANCZOS,
+    )
+
+    out = io.BytesIO()
+    img.save(out, format="webp", quality=_IMAGE_PREVIEW_QUALITY)
+    return out.getvalue()
+
+
+def _compress_to_webp(data: bytes) -> bytes:
+    """Сжимает изображение из байтов в WebP-превью.
+
+    Используется для небольших промежуточных растров (PNG первой страницы PDF
+    или кадра видео); сам исходник медиа в память целиком не грузится.
 
     Args:
         data: Исходные байты изображения.
 
     Returns:
         Байты изображения в формате WebP.
-
-    Raises:
-        PIL.UnidentifiedImageError: Если входные данные не являются
-            поддерживаемым изображением.
-        OSError: Если Pillow не смог прочитать или сохранить изображение.
-        MemoryError: Если изображение слишком большое для обработки в памяти.
-        PIL.Image.DecompressionBombError: Если число пикселей изображения
-            превышает ``_IMAGE_PREVIEW_MAX_PIXELS``.
     """
 
     with Image.open(io.BytesIO(data)) as img:
-        # Размер берётся из заголовка (декодирования ещё нет), поэтому проверка
-        # отсекает «бомбы» до выделения памяти под полный растр.
-        width, height = img.size
-        if width * height > _IMAGE_PREVIEW_MAX_PIXELS:
-            raise Image.DecompressionBombError(
-                f"Изображение {width}x{height} превышает лимит "
-                f"{_IMAGE_PREVIEW_MAX_PIXELS} пикселей для генерации preview."
-            )
+        return _image_to_webp(img)
 
-        if img.mode in ("RGBA", "LA", "PA"):
-            img = img.convert("RGBA")
-        elif img.mode != "RGB":
-            img = img.convert("RGB")
 
-        img.thumbnail(
-            (_IMAGE_PREVIEW_MAX_DIMENSION, _IMAGE_PREVIEW_MAX_DIMENSION),
-            Image.Resampling.LANCZOS,
-        )
+def _image_to_webp_from_path(path: str) -> bytes:
+    """Создаёт WebP-превью изображения, открывая его с диска (ленивый декод).
 
-        out = io.BytesIO()
-        img.save(out, format="webp", quality=_IMAGE_PREVIEW_QUALITY)
-        return out.getvalue()
+    Args:
+        path: Путь к исходному файлу изображения.
+
+    Returns:
+        Байты изображения в формате WebP.
+    """
+
+    with Image.open(path) as img:
+        return _image_to_webp(img)
 
 
 def _media_source_limit(mime_type: str) -> int | None:
@@ -415,36 +523,46 @@ def _media_source_limit(mime_type: str) -> int | None:
     return None
 
 
-def _render_pdf_first_page(data: bytes) -> bytes:
-    """Рендерит первую страницу PDF в PNG-растр.
+def _pdf_to_webp_from_path(path: str) -> bytes:
+    """Рендерит первую страницу PDF в WebP-превью, открывая файл с диска.
+
+    ``fitz.open(path)`` использует memory-mapping и не держит весь PDF в RAM.
+    Масштаб рендера ограничен ``_PDF_RENDER_MAX_DIM`` по длинной стороне, чтобы
+    растр огромной страницы не выел память.
 
     Args:
-        data: Байты PDF-документа.
+        path: Путь к исходному PDF-файлу.
 
     Returns:
-        PNG-байты первой страницы.
+        Байты WebP-превью первой страницы.
 
     Raises:
         ValueError: Если документ не содержит страниц.
         Exception: Если PyMuPDF не смог открыть или отрендерить документ.
     """
 
-    with fitz.open(stream=data, filetype="pdf") as doc:
+    with fitz.open(path, filetype="pdf") as doc:
         if doc.page_count < 1:
             raise ValueError("PDF не содержит страниц.")
         page = doc.load_page(0)
-        pixmap = page.get_pixmap(dpi=_PDF_RENDER_DPI, alpha=False)
-        return pixmap.tobytes("png")
+        scale = _PDF_RENDER_DPI / 72.0
+        longest = max(page.rect.width, page.rect.height) * scale
+        if longest > _PDF_RENDER_MAX_DIM:
+            scale *= _PDF_RENDER_MAX_DIM / longest
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+        png_bytes = pixmap.tobytes("png")
+    return _compress_to_webp(png_bytes)
 
 
-def _extract_video_frame(data: bytes) -> bytes:
-    """Извлекает кадр из видео через ffmpeg и возвращает его как PNG.
+def _extract_video_frame_from_file(path: str) -> bytes:
+    """Извлекает кадр из видеофайла через ffmpeg и возвращает PNG.
 
-    Сначала пробует кадр на отметке ``_VIDEO_FRAME_TIMESTAMP``; для очень
-    коротких видео откатывается к первому кадру.
+    Использует input-seek (``-ss`` до ``-i``) и ``-threads 1``: декодируется лишь
+    кадр около отметки, без полного декода и многопоточных буферов — память не
+    зависит от длины видео. Файл уже на диске (не держится в RAM).
 
     Args:
-        data: Байты видеофайла.
+        path: Путь к исходному видеофайлу.
 
     Returns:
         PNG-байты извлечённого кадра.
@@ -453,44 +571,48 @@ def _extract_video_frame(data: bytes) -> bytes:
         RuntimeError: Если ffmpeg не смог извлечь кадр.
     """
 
-    with tempfile.NamedTemporaryFile(suffix=".video", delete=False) as tmp:
-        tmp.write(data)
-        tmp_path = tmp.name
-
-    try:
-        for timestamp in (_VIDEO_FRAME_TIMESTAMP, "00:00:00"):
-            result = subprocess.run(  # noqa: S603 — фиксированный набор аргументов
-                [
-                    "ffmpeg",
-                    "-nostdin",
-                    "-loglevel",
-                    "error",
-                    "-ss",
-                    timestamp,
-                    "-i",
-                    tmp_path,
-                    "-frames:v",
-                    "1",
-                    "-f",
-                    "image2pipe",
-                    "-vcodec",
-                    "png",
-                    "pipe:1",
-                ],
-                capture_output=True,
-                timeout=_VIDEO_FFMPEG_TIMEOUT_SECONDS,
-                check=False,
-            )
-            if result.returncode == 0 and result.stdout:
-                return result.stdout
-        raise RuntimeError(
-            "ffmpeg не смог извлечь кадр из видео для генерации превью."
+    for timestamp in (_VIDEO_FRAME_TIMESTAMP, "00:00:00"):
+        result = subprocess.run(  # noqa: S603 — фиксированный набор аргументов
+            [
+                "ffmpeg",
+                "-nostdin",
+                "-loglevel",
+                "error",
+                "-threads",
+                "1",
+                "-ss",
+                timestamp,
+                "-i",
+                path,
+                "-frames:v",
+                "1",
+                "-f",
+                "image2pipe",
+                "-vcodec",
+                "png",
+                "pipe:1",
+            ],
+            capture_output=True,
+            timeout=_VIDEO_FFMPEG_TIMEOUT_SECONDS,
+            check=False,
         )
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+        if result.returncode == 0 and result.stdout:
+            return result.stdout
+    raise RuntimeError("ffmpeg не смог извлечь кадр из видео для генерации превью.")
+
+
+def _video_to_webp_from_path(path: str) -> bytes:
+    """Создаёт WebP-превью видео: извлекает кадр ffmpeg'ом и сжимает его.
+
+    Args:
+        path: Путь к исходному видеофайлу.
+
+    Returns:
+        Байты WebP-превью кадра.
+    """
+
+    png_bytes = _extract_video_frame_from_file(path)
+    return _compress_to_webp(png_bytes)
 
 
 def _resolve_owner_id(file_row: Any) -> UUID:

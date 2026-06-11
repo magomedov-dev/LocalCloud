@@ -4,6 +4,7 @@ import { FolderPlus, FolderUp, LayoutGrid, LayoutList, Upload } from "lucide-rea
 import { useQueryClient, useIsFetching } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useFileBrowser } from "@/hooks/useFileBrowser";
+import { useFeatures } from "@/hooks/useFeatures";
 import { TopLoadingBar } from "@/components/TopLoadingBar";
 import { useBreadcrumb } from "@/contexts/breadcrumb-context";
 import { useUpload } from "@/contexts/upload-context";
@@ -73,6 +74,14 @@ export function FilesPage() {
     selectedItemsRef.current = selectedItems;
   }, [selectedItems]);
 
+  // Ref на флаг просмотрщика, чтобы обработчик пробела видел актуальное значение
+  // без перерегистрации слушателя.
+  const features = useFeatures();
+  const fileViewerEnabledRef = useRef(features.file_viewer_enabled);
+  useEffect(() => {
+    fileViewerEnabledRef.current = features.file_viewer_enabled;
+  }, [features.file_viewer_enabled]);
+
   // Пробел — быстрый просмотр: открываем предпросмотр, если выбран ровно один файл.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -81,6 +90,7 @@ export function FilesPage() {
       if (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
       if (target.isContentEditable) return;
       if (target.closest('[role="dialog"]')) return;
+      if (!fileViewerEnabledRef.current) return;
 
       const items = selectedItemsRef.current;
       if (items.length !== 1) return;

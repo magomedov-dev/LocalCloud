@@ -624,6 +624,45 @@ async def test_create_thumbnail_urls_batch_mixes_success_and_failure():
     assert result[str(bad_node)] is None
 
 
+@pytest.mark.asyncio
+async def test_create_thumbnail_urls_batch_bounds_concurrency(monkeypatch):
+    """Батч не запускает все per-node операции разом — конкурентность ограничена."""
+    import asyncio as _asyncio
+
+    from services import downloads as downloads_module
+
+    # Уменьшаем семафор до 3, чтобы проверка была наглядной и быстрой.
+    monkeypatch.setattr(
+        downloads_module, "_thumbnail_batch_semaphore", _asyncio.Semaphore(3)
+    )
+
+    service = make_downloads_service(make_uow())
+    node_ids = [uuid.uuid4() for _ in range(30)]
+
+    in_flight = 0
+    peak = 0
+
+    async def fake(node_id, user_id):
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await _asyncio.sleep(0.005)  # удерживаем слот, чтобы росла конкурентность
+        in_flight -= 1
+        resp = MagicMock()
+        resp.presigned_url = "https://example.com/thumb"
+        return resp
+
+    service.create_thumbnail_url = AsyncMock(side_effect=fake)
+
+    result = await service.create_thumbnail_urls_batch(
+        node_ids=node_ids, user_id=uuid.uuid4()
+    )
+
+    assert len(result) == 30
+    # Одновременно работало не больше, чем разрешает семафор.
+    assert peak <= 3
+
+
 # ---------------------------------------------------------------------------
 # Тесты: stream_file
 # ---------------------------------------------------------------------------

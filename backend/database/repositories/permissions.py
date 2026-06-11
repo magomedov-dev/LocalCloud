@@ -7,7 +7,7 @@ from typing import Any, Final
 from sqlalchemy import Select, or_, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import aliased, selectinload
 
 from database.exceptions import EntityNotFoundError, InvalidQueryError
 from database.models.filesystem import FileSystemNode
@@ -875,6 +875,88 @@ class NodePermissionsRepository(BaseRepository[NodePermission]):
         return await self.scalars_all(
             statement,
             operation="get_node_permissions",
+        )
+
+    async def get_distinct_active_granted_node_ids(
+        self,
+        *,
+        granted_by: uuid.UUID,
+        moment: datetime | None = None,
+    ) -> list[uuid.UUID]:
+        """Возвращает уникальные id узлов с активными грантами пользователя.
+
+        Одним лёгким запросом (``SELECT DISTINCT node_id``), без гидрации ORM-
+        объектов и без постраничного обхода. Нужно для бейджа «доступ выдан».
+
+        Args:
+            granted_by: Идентификатор пользователя, выдавшего гранты.
+            moment: Момент времени для проверки активности (по умолчанию — now).
+
+        Returns:
+            Список уникальных идентификаторов узлов.
+        """
+
+        effective_moment = self._normalize_moment(moment)
+        statement = (
+            select(NodePermission.node_id)
+            .where(
+                NodePermission.granted_by == granted_by,
+                *self._active_conditions(effective_moment),
+            )
+            .distinct()
+        )
+        result = await self.session.execute(statement)
+        return list(result.scalars().all())
+
+    async def get_active_ancestor_permissions(
+        self,
+        *,
+        node_id: uuid.UUID,
+        user_id: uuid.UUID,
+        moment: datetime | None = None,
+    ) -> list[NodePermission]:
+        """Возвращает активные разрешения пользователя на предков узла.
+
+        Одним запросом: рекурсивный CTE поднимается по цепочке ``parent_id``
+        (пропуская удалённых предков) и сразу джойнится к ``node_permissions``.
+        Заменяет обход предков по одному (N+1). Нужно для наследования прав:
+        доступ к папке распространяется на её содержимое.
+
+        Args:
+            node_id: Идентификатор узла, для которого ищутся права предков.
+            user_id: Идентификатор пользователя.
+            moment: Момент времени для проверки активности (по умолчанию — now).
+
+        Returns:
+            Список активных разрешений пользователя на неудалённых предках узла.
+        """
+
+        effective_moment = self._normalize_moment(moment)
+
+        ancestors_cte = (
+            select(FileSystemNode.id, FileSystemNode.parent_id)
+            .where(FileSystemNode.id == node_id)
+            .cte(name="permission_ancestors", recursive=True)
+        )
+        parent_alias = aliased(FileSystemNode)
+        ancestors_cte = ancestors_cte.union_all(
+            select(parent_alias.id, parent_alias.parent_id).where(
+                parent_alias.id == ancestors_cte.c.parent_id,
+                parent_alias.is_deleted.is_(False),
+            )
+        )
+
+        statement = select(NodePermission).where(
+            NodePermission.node_id.in_(
+                select(ancestors_cte.c.id).where(ancestors_cte.c.id != node_id)
+            ),
+            NodePermission.user_id == user_id,
+            *self._active_conditions(effective_moment),
+        )
+
+        return await self.scalars_all(
+            statement,
+            operation="get_active_ancestor_permissions",
         )
 
     async def get_user_permissions(

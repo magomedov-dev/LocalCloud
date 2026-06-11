@@ -8,6 +8,7 @@ import { FilePreviewModal } from "@/components/preview/FilePreviewModal";
 import { detectPreviewKind } from "@/components/preview/filePreviewKind";
 import { getFolderColor, setFolderColor } from "./folderColors";
 import { formatBytes } from "@/hooks/useQuota";
+import { useFeatures } from "@/hooks/useFeatures";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { NodeListItem } from "@/types/nodes";
 import type { SelectOpts } from "./FileGrid";
@@ -103,8 +104,11 @@ export function FileListItem({
     item.node_type === "folder" ? getFolderColor(item.id) : null,
   );
 
+  const features = useFeatures();
   const canPreview =
-    item.node_type === "file" && !!detectPreviewKind(item.name, mimeType ?? item.file_mime_type);
+    features.file_viewer_enabled &&
+    item.node_type === "file" &&
+    !!detectPreviewKind(item.name, mimeType ?? item.file_mime_type);
 
   /**
    * Обновляет локальный цвет папки и сохраняет его в хранилище цветов.

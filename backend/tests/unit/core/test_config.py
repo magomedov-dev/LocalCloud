@@ -7,16 +7,27 @@ from pydantic import ValidationError
 
 from core.config import (
     ApplicationSettings,
+    ArchiveSettings,
     DatabaseSettings,
+    DownloadSettings,
+    FeatureSettings,
     LoggingSettings,
+    PreviewSettings,
     SecuritySettings,
+    ServerSettings,
     Settings,
     StorageSettings,
     WorkerSettings,
     get_settings,
 )
 from core.constants import ApplicationConstants as APC
+from core.constants import ArchiveConstants as ARC
+from core.constants import DownloadConstants as DLC
+from core.constants import FeatureConstants as FTC
+from core.constants import PreviewConstants as PVC
 from core.constants import SecurityConstants as SCC
+from core.constants import ServerConstants as SVC
+from core.constants import StorageConstants as STC
 
 
 class TestApplicationSettings:
@@ -278,6 +289,139 @@ class TestDatabaseSettingsComputedField:
         assert "5432" in settings.database_url
 
 
+class TestServerSettings:
+    def test_defaults_match_constants(self) -> None:
+        settings = ServerSettings()
+        assert settings.max_concurrent_requests == SVC.MAX_CONCURRENT_REQUESTS
+        assert settings.request_timeout_seconds == SVC.REQUEST_TIMEOUT_SECONDS
+
+    def test_env_override(self) -> None:
+        settings = ServerSettings(
+            MAX_CONCURRENT_REQUESTS=256,
+            REQUEST_TIMEOUT_SECONDS=120.5,
+        )
+        assert settings.max_concurrent_requests == 256
+        assert settings.request_timeout_seconds == 120.5
+
+    def test_non_positive_concurrency_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            ServerSettings(MAX_CONCURRENT_REQUESTS=0)
+
+    def test_non_positive_timeout_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            ServerSettings(REQUEST_TIMEOUT_SECONDS=0)
+
+
+class TestPreviewSettings:
+    def test_defaults_match_constants(self) -> None:
+        settings = PreviewSettings()
+        assert settings.generation_enabled is PVC.GENERATION_ENABLED
+        assert settings.render_concurrency == PVC.RENDER_CONCURRENCY
+        assert settings.image_max_source_mb == PVC.IMAGE_MAX_SOURCE_MB
+        assert settings.pdf_render_dpi == PVC.PDF_RENDER_DPI
+
+    def test_byte_helpers_convert_megabytes(self) -> None:
+        settings = PreviewSettings(
+            PREVIEW_IMAGE_MAX_SOURCE_MB=10,
+            PREVIEW_PDF_MAX_SOURCE_MB=20,
+            PREVIEW_VIDEO_MAX_SOURCE_MB=30,
+        )
+        assert settings.image_max_source_bytes == 10 * 1024 * 1024
+        assert settings.pdf_max_source_bytes == 20 * 1024 * 1024
+        assert settings.video_max_source_bytes == 30 * 1024 * 1024
+
+    def test_generation_can_be_disabled(self) -> None:
+        settings = PreviewSettings(PREVIEW_GENERATION_ENABLED=False)
+        assert settings.generation_enabled is False
+
+    def test_render_concurrency_upper_bound_enforced(self) -> None:
+        with pytest.raises(ValidationError):
+            PreviewSettings(PREVIEW_RENDER_CONCURRENCY=17)
+
+    def test_image_quality_bounds_enforced(self) -> None:
+        with pytest.raises(ValidationError):
+            PreviewSettings(PREVIEW_IMAGE_QUALITY=0)
+        with pytest.raises(ValidationError):
+            PreviewSettings(PREVIEW_IMAGE_QUALITY=101)
+
+
+class TestArchiveSettings:
+    def test_defaults_match_constants(self) -> None:
+        settings = ArchiveSettings()
+        assert settings.max_files == ARC.MAX_FILES
+        assert settings.max_total_mb == ARC.MAX_TOTAL_MB
+        assert settings.stream_chunk_bytes == ARC.STREAM_CHUNK_BYTES
+        assert settings.disk_safety_factor == ARC.DISK_SAFETY_FACTOR
+
+    def test_max_total_bytes_helper(self) -> None:
+        settings = ArchiveSettings(ARCHIVE_MAX_TOTAL_MB=4)
+        assert settings.max_total_bytes == 4 * 1024 * 1024
+
+    def test_env_override(self) -> None:
+        settings = ArchiveSettings(
+            ARCHIVE_MAX_FILES=50_000,
+            ARCHIVE_DISK_SAFETY_FACTOR=1.5,
+        )
+        assert settings.max_files == 50_000
+        assert settings.disk_safety_factor == 1.5
+
+    def test_disk_safety_factor_below_one_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            ArchiveSettings(ARCHIVE_DISK_SAFETY_FACTOR=0.9)
+
+
+class TestDownloadSettings:
+    def test_default_matches_constant(self) -> None:
+        settings = DownloadSettings()
+        assert settings.thumbnail_batch_concurrency == DLC.THUMBNAIL_BATCH_CONCURRENCY
+
+    def test_env_override(self) -> None:
+        settings = DownloadSettings(THUMBNAIL_BATCH_CONCURRENCY=16)
+        assert settings.thumbnail_batch_concurrency == 16
+
+    def test_non_positive_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            DownloadSettings(THUMBNAIL_BATCH_CONCURRENCY=0)
+
+
+class TestFeatureSettings:
+    def test_defaults_all_enabled(self) -> None:
+        settings = FeatureSettings()
+        assert settings.previews_enabled is FTC.PREVIEWS_ENABLED
+        assert settings.file_viewer_enabled is FTC.FILE_VIEWER_ENABLED
+        assert settings.media_playback_enabled is FTC.MEDIA_PLAYBACK_ENABLED
+        assert settings.file_editing_enabled is FTC.FILE_EDITING_ENABLED
+
+    def test_flags_can_be_disabled(self) -> None:
+        settings = FeatureSettings(
+            FEATURE_PREVIEWS_ENABLED=False,
+            FEATURE_FILE_VIEWER_ENABLED=False,
+            FEATURE_MEDIA_PLAYBACK_ENABLED=False,
+            FEATURE_FILE_EDITING_ENABLED=False,
+        )
+        assert settings.previews_enabled is False
+        assert settings.file_viewer_enabled is False
+        assert settings.media_playback_enabled is False
+        assert settings.file_editing_enabled is False
+
+
+class TestStorageExecutorSetting:
+    def test_default_matches_constant(self) -> None:
+        settings = StorageSettings()
+        assert (
+            settings.storage_executor_max_workers
+            == STC.STORAGE_EXECUTOR_MAX_WORKERS
+        )
+
+    def test_env_override(self) -> None:
+        settings = StorageSettings(STORAGE_EXECUTOR_MAX_WORKERS=8)
+        assert settings.storage_executor_max_workers == 8
+
+    def test_zero_workers_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            StorageSettings(STORAGE_EXECUTOR_MAX_WORKERS=0)
+
+
 class TestSettingsAggregate:
     def test_settings_has_all_sub_settings(self) -> None:
         settings = Settings()
@@ -288,6 +432,11 @@ class TestSettingsAggregate:
         assert settings.database is not None
         assert settings.storage is not None
         assert settings.workers is not None
+        assert settings.server is not None
+        assert settings.previews is not None
+        assert settings.archives is not None
+        assert settings.downloads is not None
+        assert settings.features is not None
 
     def test_sub_settings_are_correct_types(self) -> None:
         from core.config import (
@@ -307,6 +456,11 @@ class TestSettingsAggregate:
         assert isinstance(settings.database, DatabaseSettings)
         assert isinstance(settings.storage, StorageSettings)
         assert isinstance(settings.workers, WorkerSettings)
+        assert isinstance(settings.server, ServerSettings)
+        assert isinstance(settings.previews, PreviewSettings)
+        assert isinstance(settings.archives, ArchiveSettings)
+        assert isinstance(settings.downloads, DownloadSettings)
+        assert isinstance(settings.features, FeatureSettings)
 
 
 class TestSecuritySettings:

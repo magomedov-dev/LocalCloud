@@ -827,7 +827,7 @@ class AccessService:
                 PermissionDeniedReason.INSUFFICIENT_PERMISSION,
             )
         ):
-            inherited = await self._load_ancestor_permissions(uow, node)
+            inherited = await self._load_ancestor_permissions(uow, node, user_id)
             if inherited:
                 inherited_result = check_node_permission(
                     user=cast(SupportsUser | None, access_user),
@@ -926,33 +926,31 @@ class AccessService:
         return tuple(permissions)
 
     async def _load_ancestor_permissions(
-        self, uow: Any, node: FileSystemNode
+        self, uow: Any, node: FileSystemNode, user_id: UUID | None
     ) -> tuple[AccessPermission, ...]:
-        """Загружает разрешения доступа со всех неудалённых узлов-предков.
+        """Загружает активные разрешения пользователя на неудалённых предков узла.
 
         Используется для наследования прав: грант на папку распространяется на
-        её содержимое. Удалённые предки пропускаются — грант на узел в корзине
-        не должен открывать доступ к его потомкам.
+        её содержимое. Одним запросом (рекурсивный CTE + join), а не обходом
+        предков по одному. Удалённые предки пропускаются — грант на узел в
+        корзине не должен открывать доступ к его потомкам.
 
         Args:
-            uow: Активный UnitOfWork с репозиториями узлов и разрешений.
+            uow: Активный UnitOfWork с репозиторием разрешений.
             node: Узел, для которого собираются разрешения предков.
+            user_id: Идентификатор пользователя (None — анонимный, без наследования).
 
         Returns:
-            Кортеж lightweight-представлений разрешений всех предков узла.
+            Кортеж lightweight-представлений разрешений предков узла.
         """
 
-        ancestors = await uow.nodes.get_ancestors(
+        if user_id is None:
+            return ()
+        permissions = await uow.permissions.get_active_ancestor_permissions(
             node_id=node.id,
-            include_self=False,
-            include_deleted=False,
+            user_id=user_id,
         )
-        permissions: list[AccessPermission] = []
-        for ancestor in ancestors:
-            permissions.extend(
-                await self._load_node_permissions(uow, ancestor.id)
-            )
-        return tuple(permissions)
+        return tuple(_permission_snapshot(permission) for permission in permissions)
 
     @staticmethod
     def _denied_response_error(

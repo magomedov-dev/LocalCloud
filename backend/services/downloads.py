@@ -47,6 +47,16 @@ logger = get_logger("services.downloads")
 SERVICE_NAME = "downloads"
 ZIP_MIME_TYPE = "application/zip"
 
+
+# Потолок одновременных per-node операций в thumbnail-батче. Без него
+# asyncio.gather по 100 узлам открывал бы до 100 UoW/проверок доступа разом и
+# вычерпывал пул БД (а при опросе с фронта — постоянно). Семафор глобальный на
+# процесс: ограничивает суммарную нагрузку батчей по всем одновременным запросам.
+# Значение читается из единой конфигурации (core.config) с дефолтом-литералом из
+# core.constants.DownloadConstants; переопределяется через .env.
+_THUMBNAIL_BATCH_CONCURRENCY = get_settings().downloads.thumbnail_batch_concurrency
+_thumbnail_batch_semaphore = asyncio.Semaphore(_THUMBNAIL_BATCH_CONCURRENCY)
+
 # mimetypes.guess_type полагается на реестр ОС и не распознаёт некоторые форматы
 # в Windows, в частности .mkv, .m4v, .flac, .opus, .m4a. При наличии
 # X-Content-Type-Options: nosniff Chrome строго проверяет объявленный Content-Type
@@ -210,10 +220,16 @@ class DownloadsService:
             Словарь node_id (строка) → presigned URL или None.
         """
 
-        tasks = [
-            self.create_thumbnail_url(node_id=nid, user_id=user_id) for nid in node_ids
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        async def _bounded_thumbnail(nid: UUID) -> Any:
+            # Семафор ограничивает число одновременных per-node операций
+            # (UoW + проверка доступа), чтобы батч не вычерпал пул БД.
+            async with _thumbnail_batch_semaphore:
+                return await self.create_thumbnail_url(node_id=nid, user_id=user_id)
+
+        results = await asyncio.gather(
+            *(_bounded_thumbnail(nid) for nid in node_ids),
+            return_exceptions=True,
+        )
         return {
             str(nid): (r.presigned_url if not isinstance(r, BaseException) else None)
             for nid, r in zip(node_ids, results)

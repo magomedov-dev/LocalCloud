@@ -97,6 +97,37 @@ async def list_public_links(
 
 
 @router.get(
+    "/node-ids",
+    response_model=list[UUID],
+    status_code=status.HTTP_200_OK,
+)
+async def list_active_link_node_ids(
+    current_user: CurrentActiveUserDependency,
+    public_links_service: PublicLinksService = Depends(
+        get_public_links_service_dependency
+    ),
+) -> list[UUID]:
+    """Возвращает id узлов с активными публичными ссылками текущего пользователя.
+
+    Объявлен ДО ``/{link_id}``, иначе ``node-ids`` будет принят за link_id.
+    Лёгкий источник для бейджа «публичная ссылка»: один DISTINCT-запрос вместо
+    выгрузки всех объектов ссылок постранично на каждую навигацию по папкам.
+
+    Args:
+        current_user: Текущий активный пользователь.
+        public_links_service: Сервис публичных ссылок.
+
+    Returns:
+        Список идентификаторов узлов с активными публичными ссылками.
+
+    Raises:
+        HTTPException: Если пользователь не аутентифицирован или неактивен.
+    """
+
+    return await public_links_service.list_active_link_node_ids(user_id=current_user.id)
+
+
+@router.get(
     "/{link_id}",
     response_model=PublicLinkRead,
     status_code=status.HTTP_200_OK,

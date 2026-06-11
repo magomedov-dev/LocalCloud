@@ -622,6 +622,35 @@ class PublicLinksService:
                 exc, service=SERVICE_NAME, operation=operation
             ) from exc
 
+    async def list_active_link_node_ids(self, *, user_id: UUID) -> list[UUID]:
+        """Возвращает id узлов с активными публичными ссылками пользователя.
+
+        Лёгкий источник для бейджа «публичная ссылка»: одним DISTINCT-запросом,
+        без выгрузки всех объектов ссылок постранично.
+
+        Args:
+            user_id: Идентификатор пользователя-владельца ссылок.
+
+        Returns:
+            Список уникальных идентификаторов узлов с активными ссылками.
+
+        Raises:
+            ServiceError: При ошибке БД или непредвиденной ошибке сервиса.
+        """
+
+        operation = "list_active_link_node_ids"
+        try:
+            async with self.uow_factory() as uow:
+                return await uow.links.get_distinct_active_node_ids(created_by=user_id)
+        except DatabaseError as exc:
+            raise service_error_from_database(
+                exc, service=SERVICE_NAME, operation=operation
+            ) from exc
+        except Exception as exc:
+            raise service_error_from_exception(
+                exc, service=SERVICE_NAME, operation=operation
+            ) from exc
+
     async def get_public_link(self, token: str) -> PublicLinkPublicRead:
         """Возвращает публичные данные ссылки по токену без проверки пароля.
 

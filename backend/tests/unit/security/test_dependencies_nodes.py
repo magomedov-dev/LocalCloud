@@ -211,14 +211,18 @@ class TestRequireNodePermissionDependency:
         assert exc_info.value.status_code == 403
 
     @staticmethod
-    def _ancestor_session(file_node: object, parent: object) -> AsyncMock:
-        """Сессия, отдающая сперва файл, затем его родителя (для наследования)."""
+    def _ancestor_session(file_node: object, ancestor_grants: list) -> AsyncMock:
+        """Сессия: get_node_by_id → файл; запрос прав предков → гранты.
+
+        Наследование теперь делается одним запросом (рекурсивный CTE + join),
+        поэтому второй вызов execute возвращает сразу права предков.
+        """
         session = AsyncMock()
         r_file = MagicMock()
         r_file.scalar_one_or_none.return_value = file_node
-        r_parent = MagicMock()
-        r_parent.scalar_one_or_none.return_value = parent
-        session.execute = AsyncMock(side_effect=[r_file, r_parent])
+        r_perms = MagicMock()
+        r_perms.scalars.return_value.all.return_value = ancestor_grants
+        session.execute = AsyncMock(side_effect=[r_file, r_perms])
         return session
 
     @staticmethod
@@ -243,16 +247,16 @@ class TestRequireNodePermissionDependency:
         from database.models.enums import NodeVisibility, PermissionLevel
 
         user = make_user()
-        parent = make_node()
-        parent.parent_id = None
-        parent.permissions = [self._grant(user.id, PermissionLevel.DOWNLOAD)]
         file_node = make_node()  # другой владелец, без прямых прав
-        file_node.parent_id = parent.id
+        file_node.parent_id = uuid.uuid4()
         file_node.permissions = []
         file_node.visibility = NodeVisibility.PRIVATE
 
         dep = require_node_permission_dependency(PermissionAction.READ)
-        session = self._ancestor_session(file_node, parent)
+        # Запрос прав предков возвращает download-грант пользователя.
+        session = self._ancestor_session(
+            file_node, [self._grant(user.id, PermissionLevel.DOWNLOAD)]
+        )
 
         result = await dep(node_id=file_node.id, user=user, session=session)
         assert result is None
@@ -263,16 +267,16 @@ class TestRequireNodePermissionDependency:
         from database.models.enums import NodeVisibility, PermissionLevel
 
         user = make_user()
-        parent = make_node()
-        parent.parent_id = None
-        parent.permissions = [self._grant(user.id, PermissionLevel.DOWNLOAD)]
         file_node = make_node()
-        file_node.parent_id = parent.id
+        file_node.parent_id = uuid.uuid4()
         file_node.permissions = []
         file_node.visibility = NodeVisibility.PRIVATE
 
         dep = require_node_permission_dependency(PermissionAction.WRITE)
-        session = self._ancestor_session(file_node, parent)
+        # Наследуется только download-грант — записи он не даёт.
+        session = self._ancestor_session(
+            file_node, [self._grant(user.id, PermissionLevel.DOWNLOAD)]
+        )
 
         with pytest.raises(SecurityDependencyError) as exc_info:
             await dep(node_id=file_node.id, user=user, session=session)

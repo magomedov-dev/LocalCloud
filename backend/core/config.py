@@ -10,10 +10,15 @@ from sqlalchemy.engine import URL
 
 from core.constants import ENV_FILE, LoggingLevels
 from core.constants import ApplicationConstants as APC
+from core.constants import ArchiveConstants as ARC
 from core.constants import CookieConstants as CKC
 from core.constants import DatabaseConstants as DTC
+from core.constants import DownloadConstants as DLC
+from core.constants import FeatureConstants as FTC
 from core.constants import LoggingConstants as LGC
+from core.constants import PreviewConstants as PVC
 from core.constants import SecurityConstants as SCC
+from core.constants import ServerConstants as SVC
 from core.constants import StorageConstants as STC
 from core.constants import WorkerConstants as WRC
 
@@ -320,6 +325,8 @@ class StorageSettings(BaseSettings):
         storage_capacity_bytes: Явно заданная общая ёмкость пула хранилища
             в байтах. Если не задана, пул определяется автоматически как доля
             от физической ёмкости диска, которую видит MinIO.
+        storage_executor_max_workers: Размер пула потоков для блокирующего
+            MinIO SDK.
     """
 
     model_config = SettingsConfigDict(
@@ -354,6 +361,12 @@ class StorageSettings(BaseSettings):
         default=None,
         ge=0,
         alias="STORAGE_CAPACITY_BYTES",
+    )
+    storage_executor_max_workers: int = Field(
+        default=STC.STORAGE_EXECUTOR_MAX_WORKERS,
+        ge=1,
+        le=64,
+        alias="STORAGE_EXECUTOR_MAX_WORKERS",
     )
 
     @computed_field
@@ -673,12 +686,284 @@ class WorkerSettings(BaseSettings):
         return self
 
 
+class ServerSettings(BaseSettings):
+    """Настройки обработки HTTP-запросов (backpressure и таймауты).
+
+    Описывает потолок одновременно обрабатываемых запросов и таймаут фазы
+    формирования ответа. Параметры влияют на потребление памяти, число
+    одновременных подключений к БД и устойчивость хоста под пиковой нагрузкой.
+    Значения по умолчанию подобраны под маленький хост и переопределяются
+    через переменные окружения или `.env`.
+
+    Attributes:
+        max_concurrent_requests: Потолок одновременно обрабатываемых запросов,
+            сверх которого backpressure отдаёт 503.
+        request_timeout_seconds: Таймаут фазы формирования ответа в секундах,
+            после которого отдаётся 504.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=ENV_FILE,
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+        populate_by_name=True,
+    )
+
+    max_concurrent_requests: int = Field(
+        default=SVC.MAX_CONCURRENT_REQUESTS,
+        ge=1,
+        alias="MAX_CONCURRENT_REQUESTS",
+    )
+    request_timeout_seconds: float = Field(
+        default=SVC.REQUEST_TIMEOUT_SECONDS,
+        gt=0,
+        alias="REQUEST_TIMEOUT_SECONDS",
+    )
+
+
+class PreviewSettings(BaseSettings):
+    """Настройки генерации preview-миниатюр.
+
+    Описывает мастер-флаг генерации, параллелизм тяжёлых рендеров, лимиты
+    исходного размера (защита памяти и от «decompression bomb»), параметры
+    растрирования PDF, размеры/качество растров изображений и таймаут ffmpeg.
+    Значения по умолчанию подобраны под маленький хост (1 ГБ ОЗУ) и
+    переопределяются через переменные окружения или `.env`.
+
+    Attributes:
+        generation_enabled: Мастер-флаг генерации превью. Если выключен,
+            worker помечает файлы `NOT_REQUIRED` и не тратит RAM/CPU.
+        render_concurrency: Максимальное число одновременных тяжёлых рендеров.
+        image_max_source_mb: Лимит исходного размера изображения в мегабайтах.
+        pdf_max_source_mb: Лимит исходного размера PDF в мегабайтах.
+        video_max_source_mb: Лимит исходного размера видео в мегабайтах.
+        image_max_dimension: Потолок длинной стороны растра превью изображения.
+        image_quality: Качество WebP-превью изображения (1–100).
+        image_max_pixels: Глобальный предел Pillow на число пикселей растра.
+        pdf_render_dpi: DPI растрирования первой страницы PDF.
+        pdf_render_max_dim: Потолок длинной стороны растра PDF в пикселях.
+        video_ffmpeg_timeout_seconds: Таймаут вызова ffmpeg в секундах.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=ENV_FILE,
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+        populate_by_name=True,
+    )
+
+    generation_enabled: bool = Field(
+        default=PVC.GENERATION_ENABLED,
+        alias="PREVIEW_GENERATION_ENABLED",
+    )
+    render_concurrency: int = Field(
+        default=PVC.RENDER_CONCURRENCY,
+        ge=1,
+        le=16,
+        alias="PREVIEW_RENDER_CONCURRENCY",
+    )
+    image_max_source_mb: int = Field(
+        default=PVC.IMAGE_MAX_SOURCE_MB,
+        ge=1,
+        alias="PREVIEW_IMAGE_MAX_SOURCE_MB",
+    )
+    pdf_max_source_mb: int = Field(
+        default=PVC.PDF_MAX_SOURCE_MB,
+        ge=1,
+        alias="PREVIEW_PDF_MAX_SOURCE_MB",
+    )
+    video_max_source_mb: int = Field(
+        default=PVC.VIDEO_MAX_SOURCE_MB,
+        ge=1,
+        alias="PREVIEW_VIDEO_MAX_SOURCE_MB",
+    )
+    image_max_dimension: int = Field(
+        default=PVC.IMAGE_MAX_DIMENSION,
+        ge=16,
+        alias="PREVIEW_IMAGE_MAX_DIMENSION",
+    )
+    image_quality: int = Field(
+        default=PVC.IMAGE_QUALITY,
+        ge=1,
+        le=100,
+        alias="PREVIEW_IMAGE_QUALITY",
+    )
+    image_max_pixels: int = Field(
+        default=PVC.IMAGE_MAX_PIXELS,
+        ge=1,
+        alias="PREVIEW_IMAGE_MAX_PIXELS",
+    )
+    pdf_render_dpi: int = Field(
+        default=PVC.PDF_RENDER_DPI,
+        ge=36,
+        le=600,
+        alias="PREVIEW_PDF_RENDER_DPI",
+    )
+    pdf_render_max_dim: int = Field(
+        default=PVC.PDF_RENDER_MAX_DIM,
+        ge=64,
+        alias="PREVIEW_PDF_RENDER_MAX_DIM",
+    )
+    video_ffmpeg_timeout_seconds: int = Field(
+        default=PVC.VIDEO_FFMPEG_TIMEOUT_SECONDS,
+        ge=1,
+        alias="PREVIEW_VIDEO_FFMPEG_TIMEOUT_SECONDS",
+    )
+
+    @computed_field
+    @property
+    def image_max_source_bytes(self) -> int:
+        """Возвращает лимит исходного размера изображения в байтах."""
+
+        return self.image_max_source_mb * 1024 * 1024
+
+    @computed_field
+    @property
+    def pdf_max_source_bytes(self) -> int:
+        """Возвращает лимит исходного размера PDF в байтах."""
+
+        return self.pdf_max_source_mb * 1024 * 1024
+
+    @computed_field
+    @property
+    def video_max_source_bytes(self) -> int:
+        """Возвращает лимит исходного размера видео в байтах."""
+
+        return self.video_max_source_mb * 1024 * 1024
+
+
+class ArchiveSettings(BaseSettings):
+    """Настройки фоновой сборки ZIP-архивов.
+
+    Описывает лимиты архива и параметры потокового копирования объектов в ZIP.
+    Нужны, чтобы сборка архива не выела диск под временный файл и не загрузила
+    в память слишком большой список записей. Значения по умолчанию подобраны
+    под маленький хост и переопределяются через переменные окружения или `.env`.
+
+    Attributes:
+        max_files: Максимальное число файлов в одном архиве.
+        max_total_mb: Максимальный суммарный размер источников в мегабайтах.
+        stream_chunk_bytes: Размер блока потоковой передачи объекта в ZIP.
+        disk_safety_factor: Множитель запаса свободного места на диске
+            относительно суммарного размера источников.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=ENV_FILE,
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+        populate_by_name=True,
+    )
+
+    max_files: int = Field(
+        default=ARC.MAX_FILES,
+        ge=1,
+        alias="ARCHIVE_MAX_FILES",
+    )
+    max_total_mb: int = Field(
+        default=ARC.MAX_TOTAL_MB,
+        ge=1,
+        alias="ARCHIVE_MAX_TOTAL_MB",
+    )
+    stream_chunk_bytes: int = Field(
+        default=ARC.STREAM_CHUNK_BYTES,
+        ge=4096,
+        alias="ARCHIVE_STREAM_CHUNK_BYTES",
+    )
+    disk_safety_factor: float = Field(
+        default=ARC.DISK_SAFETY_FACTOR,
+        ge=1.0,
+        alias="ARCHIVE_DISK_SAFETY_FACTOR",
+    )
+
+    @computed_field
+    @property
+    def max_total_bytes(self) -> int:
+        """Возвращает максимальный суммарный размер источников в байтах."""
+
+        return self.max_total_mb * 1024 * 1024
+
+
+class DownloadSettings(BaseSettings):
+    """Настройки скачивания и thumbnail-батчей.
+
+    Описывает потолок параллелизма thumbnail-батча. Влияет на число
+    одновременных проверок доступа и подключений к БД при опросе превью
+    с фронта. Переопределяется через переменные окружения или `.env`.
+
+    Attributes:
+        thumbnail_batch_concurrency: Потолок одновременных per-node операций
+            в thumbnail-батче (глобальный семафор на процесс).
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=ENV_FILE,
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+        populate_by_name=True,
+    )
+
+    thumbnail_batch_concurrency: int = Field(
+        default=DLC.THUMBNAIL_BATCH_CONCURRENCY,
+        ge=1,
+        le=64,
+        alias="THUMBNAIL_BATCH_CONCURRENCY",
+    )
+
+
+class FeatureSettings(BaseSettings):
+    """Флаги функциональности приложения.
+
+    Описывают возможности, которые имеет смысл отключать на слабых серверах
+    или в ограниченных развёртываниях. Флаги отдаются фронтенду через
+    публичный endpoint конфигурации и управляют отображением превью,
+    просмотром, проигрыванием и редактированием файлов. Переопределяются
+    через переменные окружения или `.env`.
+
+    Attributes:
+        previews_enabled: Показывать ли в UI preview-миниатюры файлов.
+        file_viewer_enabled: Доступен ли просмотр содержимого файлов в UI.
+        media_playback_enabled: Доступно ли проигрывание аудио/видео в UI.
+        file_editing_enabled: Доступно ли редактирование текстовых файлов в UI.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=ENV_FILE,
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+        populate_by_name=True,
+    )
+
+    previews_enabled: bool = Field(
+        default=FTC.PREVIEWS_ENABLED,
+        alias="FEATURE_PREVIEWS_ENABLED",
+    )
+    file_viewer_enabled: bool = Field(
+        default=FTC.FILE_VIEWER_ENABLED,
+        alias="FEATURE_FILE_VIEWER_ENABLED",
+    )
+    media_playback_enabled: bool = Field(
+        default=FTC.MEDIA_PLAYBACK_ENABLED,
+        alias="FEATURE_MEDIA_PLAYBACK_ENABLED",
+    )
+    file_editing_enabled: bool = Field(
+        default=FTC.FILE_EDITING_ENABLED,
+        alias="FEATURE_FILE_EDITING_ENABLED",
+    )
+
+
 class Settings(BaseModel):
     """Общие настройки приложения.
 
     Агрегирует настройки всех основных подсистем backend-приложения:
     приложения, логирования, безопасности, cookie, базы данных, объектного
-    хранилища и worker-процессов.
+    хранилища, worker-процессов, обработки запросов, генерации превью,
+    архивов, скачивания и флагов функциональности.
 
     Attributes:
         app: Настройки приложения.
@@ -688,6 +973,11 @@ class Settings(BaseModel):
         database: Настройки подключения к базе данных.
         storage: Настройки объектного хранилища.
         workers: Настройки worker-процессов.
+        server: Настройки обработки HTTP-запросов (backpressure и таймауты).
+        previews: Настройки генерации preview-миниатюр.
+        archives: Настройки фоновой сборки ZIP-архивов.
+        downloads: Настройки скачивания и thumbnail-батчей.
+        features: Флаги функциональности приложения.
     """
 
     app: ApplicationSettings = Field(default_factory=ApplicationSettings)
@@ -697,6 +987,11 @@ class Settings(BaseModel):
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
     workers: WorkerSettings = Field(default_factory=WorkerSettings)
+    server: ServerSettings = Field(default_factory=ServerSettings)
+    previews: PreviewSettings = Field(default_factory=PreviewSettings)
+    archives: ArchiveSettings = Field(default_factory=ArchiveSettings)
+    downloads: DownloadSettings = Field(default_factory=DownloadSettings)
+    features: FeatureSettings = Field(default_factory=FeatureSettings)
 
 
 @lru_cache(maxsize=1)

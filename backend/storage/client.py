@@ -13,8 +13,7 @@ from minio import Minio
 from minio.error import S3Error
 from urllib3 import PoolManager
 
-from core.config import StorageSettings
-from core.constants import StorageConstants
+from core.config import StorageSettings, get_settings
 from storage.exceptions import (
     StorageAuthenticationError,
     StorageConnectionError,
@@ -41,7 +40,7 @@ def _get_storage_executor() -> ThreadPoolExecutor:
         with _storage_executor_lock:
             if _storage_executor is None:
                 _storage_executor = ThreadPoolExecutor(
-                    max_workers=StorageConstants.STORAGE_EXECUTOR_MAX_WORKERS,
+                    max_workers=get_settings().storage.storage_executor_max_workers,
                     thread_name_prefix="storage-io",
                 )
     return _storage_executor

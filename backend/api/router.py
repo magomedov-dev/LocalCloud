@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from api.v1.audit import router as audit_router
 from api.v1.auth import router as auth_router
+from api.v1.config import router as config_router
 from api.v1.downloads import router as downloads_router
 from api.v1.folders import router as folders_router
 from api.v1.health import router as health_router
@@ -27,6 +28,7 @@ api_router = APIRouter()
 v1_router = APIRouter(prefix=settings.app.api_v1_prefix)
 
 v1_router.include_router(health_router)
+v1_router.include_router(config_router)
 v1_router.include_router(auth_router)
 v1_router.include_router(registration_router)
 v1_router.include_router(users_router)

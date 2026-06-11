@@ -10,7 +10,14 @@ from starlette.responses import Response
 from starlette.types import ASGIApp
 
 from app.dependencies import RequestContext
-from app.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
+import asyncio
+
+from app.middleware import (
+    ConcurrencyLimitMiddleware,
+    RequestContextMiddleware,
+    RequestTimeoutMiddleware,
+    SecurityHeadersMiddleware,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -310,3 +317,108 @@ class TestSecurityHeadersMiddleware:
 
         response = await middleware.dispatch(request, call_next)
         assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# ConcurrencyLimitMiddleware
+# ---------------------------------------------------------------------------
+
+
+class TestConcurrencyLimitMiddleware:
+    @pytest.mark.asyncio
+    async def test_under_limit_passes(self) -> None:
+        mw = ConcurrencyLimitMiddleware(_make_mock_app(), max_concurrency=2)
+        request = _make_request(path="/api/v1/nodes")
+
+        async def call_next(req):
+            return _make_response(200)
+
+        response = await mw.dispatch(request, call_next)
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_over_limit_sheds_503(self) -> None:
+        mw = ConcurrencyLimitMiddleware(_make_mock_app(), max_concurrency=1)
+        gate = asyncio.Event()
+
+        async def slow_call_next(req):
+            await gate.wait()
+            return _make_response(200)
+
+        # Первый запрос занимает единственный слот и «висит».
+        first = asyncio.create_task(
+            mw.dispatch(_make_request(path="/api/v1/a"), slow_call_next)
+        )
+        await asyncio.sleep(0)  # дать первому запросу занять слот
+
+        async def call_next(req):
+            return _make_response(200)
+
+        # Второй запрос сверх потолка → 503.
+        second = await mw.dispatch(_make_request(path="/api/v1/b"), call_next)
+        assert second.status_code == 503
+        assert second.headers.get("Retry-After") == "2"
+
+        gate.set()
+        assert (await first).status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_health_path_never_shed(self) -> None:
+        mw = ConcurrencyLimitMiddleware(_make_mock_app(), max_concurrency=1)
+        mw._inflight = 999  # имитируем перегрузку
+
+        async def call_next(req):
+            return _make_response(200)
+
+        response = await mw.dispatch(_make_request(path="/"), call_next)
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_slot_released_after_request(self) -> None:
+        mw = ConcurrencyLimitMiddleware(_make_mock_app(), max_concurrency=1)
+
+        async def call_next(req):
+            return _make_response(200)
+
+        await mw.dispatch(_make_request(path="/api/v1/a"), call_next)
+        await mw.dispatch(_make_request(path="/api/v1/b"), call_next)
+        assert mw._inflight == 0
+
+    @pytest.mark.asyncio
+    async def test_slot_released_on_exception(self) -> None:
+        mw = ConcurrencyLimitMiddleware(_make_mock_app(), max_concurrency=1)
+
+        async def call_next(req):
+            raise ValueError("boom")
+
+        with pytest.raises(ValueError):
+            await mw.dispatch(_make_request(path="/api/v1/a"), call_next)
+        assert mw._inflight == 0
+
+
+# ---------------------------------------------------------------------------
+# RequestTimeoutMiddleware
+# ---------------------------------------------------------------------------
+
+
+class TestRequestTimeoutMiddleware:
+    @pytest.mark.asyncio
+    async def test_fast_handler_passes(self) -> None:
+        mw = RequestTimeoutMiddleware(_make_mock_app(), timeout_seconds=5.0)
+
+        async def call_next(req):
+            return _make_response(200)
+
+        response = await mw.dispatch(_make_request(), call_next)
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_slow_handler_times_out_504(self) -> None:
+        mw = RequestTimeoutMiddleware(_make_mock_app(), timeout_seconds=0.01)
+
+        async def slow_call_next(req):
+            await asyncio.sleep(1)
+            return _make_response(200)
+
+        response = await mw.dispatch(_make_request(), slow_call_next)
+        assert response.status_code == 504

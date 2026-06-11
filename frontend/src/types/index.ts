@@ -12,3 +12,4 @@ export type * from "./permissions";
 export type * from "./registration";
 export type * from "./audit";
 export type * from "./tasks";
+export type * from "./config";

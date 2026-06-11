@@ -244,6 +244,35 @@ class PublicLinksRepository(BaseRepository[PublicLink]):
             operation="get_available_link_by_token",
         )
 
+    async def get_distinct_active_node_ids(
+        self,
+        *,
+        created_by: uuid.UUID,
+    ) -> list[uuid.UUID]:
+        """Возвращает уникальные node_id активных публичных ссылок пользователя.
+
+        Одним лёгким запросом (``SELECT DISTINCT node_id``), без гидрации полных
+        объектов ссылок и постраничного обхода. Нужно для бейджа «публичная
+        ссылка» в файловом менеджере.
+
+        Args:
+            created_by: Идентификатор пользователя, создавшего ссылки.
+
+        Returns:
+            Список уникальных идентификаторов узлов с активными ссылками.
+        """
+
+        statement = (
+            select(PublicLink.node_id)
+            .where(
+                PublicLink.created_by == created_by,
+                *self._active_conditions(),
+            )
+            .distinct()
+        )
+        result = await self.session.execute(statement)
+        return list(result.scalars().all())
+
     async def get_required_available_link_by_token(
         self,
         token: str,

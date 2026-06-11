@@ -1034,6 +1034,12 @@ def build_complete_service(
 
     parts_repo = AsyncMock()
 
+    async def _get_session_parts(sid, *, offset=0, limit=1000):
+        # Все части одной страницей (их меньше лимита).
+        return list(parts_db) if offset == 0 else []
+
+    parts_repo.get_session_parts = AsyncMock(side_effect=_get_session_parts)
+
     async def _get_part(sid, num):
         for p in parts_db:
             if p.part_number == num:
@@ -1087,6 +1093,39 @@ async def test_complete_upload_success():
     tasks_repo.create_task.assert_not_awaited()
     assert audit.log_success.await_count == 2
     uow.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_complete_upload_batch_loads_parts_no_n_plus_1():
+    """Завершение загружает части одним батчем, без SELECT на каждую часть."""
+    user_id = uuid.uuid4()
+    parts_db = [
+        make_part(part_number=n, status=UploadPartStatus.UPLOADED, etag=f"e{n}", size_bytes=1024)
+        for n in (1, 2, 3)
+    ]
+    session = make_session(
+        user_id=user_id,
+        status=UploadSessionStatus.UPLOADING,
+        parts_count=3,
+        uploaded_parts_count=3,
+        uploaded_bytes=3072,
+        mime_type="application/octet-stream",
+        file_name="big.bin",
+    )
+    uow, session, file, tasks_repo, quotas = build_complete_service(
+        user_id=user_id, session=session, parts_db=parts_db
+    )
+    service = make_service(uow, storage=make_storage())
+
+    data = make_complete_request(
+        session.id,
+        [make_part_complete(part_number=n, etag=f"e{n}") for n in (1, 2, 3)],
+    )
+    await service.complete_upload(data, user_id=user_id)
+
+    # Один батч-запрос частей; per-part get_required не вызывается.
+    uow.upload_parts.get_session_parts.assert_awaited()
+    uow.upload_parts.get_required_by_session_and_part_number.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1149,6 +1188,12 @@ async def test_complete_upload_invalid_part_numbers_raises_validation():
     sessions_repo.get_required_session_by_id = AsyncMock(return_value=session)
     sessions_repo.recalculate_progress_from_parts = AsyncMock(return_value=session)
     parts_repo = AsyncMock()
+
+    async def _get_session_parts(sid, *, offset=0, limit=1000):
+        # Все части одной страницей (их меньше лимита).
+        return list(parts_db) if offset == 0 else []
+
+    parts_repo.get_session_parts = AsyncMock(side_effect=_get_session_parts)
 
     async def _get_part(sid, num):
         for p in parts_db:
