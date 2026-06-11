@@ -3,9 +3,11 @@ import { X } from "lucide-react";
 import { FileIcon } from "./FileIcon";
 import { getFolderColor } from "./folderColors";
 import { formatBytes } from "@/hooks/useQuota";
+import { useFeatures } from "@/hooks/useFeatures";
 import { nodesApi } from "@/api/nodes";
 import { queryClient } from "@/lib/query-client";
 import { getThumbnailCache, setThumbnailCache } from "@/lib/thumbnailCache";
+import { thumbnailSupported } from "@/lib/preview";
 import type { NodeListItem } from "@/types/nodes";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -61,32 +63,45 @@ interface Props {
  * Показывает превью, название и основные метаданные элемента:
  * тип, MIME-тип, размер, видимость, путь, дату изменения и дату создания.
  *
- * Для изображений пытается отобразить миниатюру из кеша React Query,
- * затем из `sessionStorage`, а при отсутствии кеша загружает её через API.
+ * Миниатюра показывается для всех типов, которым её рендерит backend
+ * (изображения, PDF, видео — см. `thumbnailSupported`), и только когда превью
+ * включены флагом развёртывания. Берётся из кеша React Query, затем из
+ * `sessionStorage`, а при отсутствии — загружается через API. Это согласовано
+ * с миниатюрами в сетке файлов.
  *
  * На мобильных устройствах отображается как выезжающая панель с backdrop,
  * на desktop — как встроенная боковая панель.
  */
 export function NodeInfoPanel({ item, onClose }: Props) {
-  const isImage = item.node_type === "file" && !!item.file_mime_type?.startsWith("image/");
+  const features = useFeatures();
+  const hasThumbnail =
+    features.previews_enabled &&
+    item.node_type === "file" &&
+    thumbnailSupported(item.file_mime_type);
   const folderColor = item.node_type === "folder" ? getFolderColor(item.id) : null;
 
   const [previewUrl, setPreviewUrl] = useState<string | null>(() => {
-    if (!isImage) return null;
+    if (!hasThumbnail) return null;
     const rq = queryClient.getQueryData<string | null>(["thumbnail", item.id]);
     if (rq !== undefined) return rq;
     return getThumbnailCache(item.id) ?? null;
   });
-  const [previewLoading, setPreviewLoading] = useState(!previewUrl && isImage);
+  const [previewLoading, setPreviewLoading] = useState(!previewUrl && hasThumbnail);
 
   /**
-   * Загружает миниатюру изображения.
+   * Загружает миниатюру файла.
    *
    * Сначала проверяет кеш React Query, затем `sessionStorage`.
    * Если миниатюра не найдена, запрашивает её через API
    * и сохраняет результат в оба кеша.
    */
   useEffect(() => {
+    if (!hasThumbnail) {
+      setPreviewUrl(null);
+      setPreviewLoading(false);
+      return;
+    }
+
     const rq = queryClient.getQueryData<string | null>(["thumbnail", item.id]);
     if (rq !== undefined) {
       setPreviewUrl(rq);
@@ -102,20 +117,27 @@ export function NodeInfoPanel({ item, onClose }: Props) {
     }
 
     setPreviewUrl(null);
-    if (!isImage) return;
-
     setPreviewLoading(true);
+    // Эффект асинхронный: отменяем устаревший результат при смене файла/размонтировании.
+    let cancelled = false;
     nodesApi
       .thumbnail(item.id)
       .then((resp) => {
         const url = resp.presigned_url;
         queryClient.setQueryData(["thumbnail", item.id], url);
         setThumbnailCache(item.id, url);
-        setPreviewUrl(url);
+        if (!cancelled) setPreviewUrl(url);
       })
-      .catch(() => setPreviewUrl(null))
-      .finally(() => setPreviewLoading(false));
-  }, [item.id, isImage]);
+      .catch(() => {
+        if (!cancelled) setPreviewUrl(null);
+      })
+      .finally(() => {
+        if (!cancelled) setPreviewLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [item.id, hasThumbnail]);
 
   return (
     <>
@@ -133,23 +155,14 @@ export function NodeInfoPanel({ item, onClose }: Props) {
 
         {/* Предпросмотр */}
         <div className="bg-muted/20 flex min-h-36 items-center justify-center border-b p-6">
-          {isImage ? (
-            previewLoading ? (
-              <Skeleton className="h-32 w-full rounded-lg" />
-            ) : previewUrl ? (
-              <img
-                src={previewUrl}
-                alt={item.name}
-                className="max-h-36 max-w-full rounded-lg object-contain shadow"
-              />
-            ) : (
-              <FileIcon
-                nodeType={item.node_type}
-                mimeType={item.file_mime_type}
-                className="h-16 w-16"
-                color={folderColor}
-              />
-            )
+          {hasThumbnail && previewLoading ? (
+            <Skeleton className="h-32 w-full rounded-lg" />
+          ) : hasThumbnail && previewUrl ? (
+            <img
+              src={previewUrl}
+              alt={item.name}
+              className="max-h-36 max-w-full rounded-lg object-contain shadow"
+            />
           ) : (
             <FileIcon
               nodeType={item.node_type}

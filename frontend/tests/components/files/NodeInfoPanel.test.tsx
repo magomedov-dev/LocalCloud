@@ -9,6 +9,16 @@ vi.mock("@/api/nodes", () => ({
   nodesApi: { thumbnail: vi.fn() },
 }));
 
+let previewsEnabled = true;
+vi.mock("@/hooks/useFeatures", () => ({
+  useFeatures: () => ({
+    previews_enabled: previewsEnabled,
+    file_viewer_enabled: true,
+    media_playback_enabled: true,
+    file_editing_enabled: true,
+  }),
+}));
+
 const getThumbnailCache = vi.fn<(id: string) => string | null | undefined>();
 const setThumbnailCache = vi.fn();
 vi.mock("@/lib/thumbnailCache", () => ({
@@ -66,8 +76,13 @@ describe("NodeInfoPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     queryData.clear();
+    previewsEnabled = true;
     getThumbnailCache.mockReturnValue(undefined);
     getFolderColor.mockReturnValue(null);
+    // Дефолт: thumbnail-эндпоинт что-то возвращает (тесты метаданных используют
+    // PDF, который теперь тоже запрашивает миниатюру). Тесты про сами превью
+    // переопределяют этот мок.
+    mockThumbnail.mockResolvedValue({ presigned_url: "https://cdn/default.webp" } as never);
   });
 
   it("показывает метаданные файла", () => {
@@ -106,8 +121,13 @@ describe("NodeInfoPanel", () => {
     expect(onClose).toHaveBeenCalledTimes(2);
   });
 
-  it("не запрашивает thumbnail для не-изображения", () => {
-    render(<NodeInfoPanel item={fileNode()} onClose={vi.fn()} />);
+  it("не запрашивает thumbnail для типа без миниатюры (zip)", () => {
+    render(
+      <NodeInfoPanel
+        item={fileNode({ name: "a.zip", file_mime_type: "application/zip" })}
+        onClose={vi.fn()}
+      />,
+    );
     expect(mockThumbnail).not.toHaveBeenCalled();
   });
 
@@ -120,6 +140,42 @@ describe("NodeInfoPanel", () => {
     const el = await screen.findByAltText("pic.png");
     expect(el).toHaveAttribute("src", "https://cdn/thumb.png");
     expect(setThumbnailCache).toHaveBeenCalledWith("f1", "https://cdn/thumb.png");
+  });
+
+  it("показывает миниатюру для PDF (а не только для изображений)", async () => {
+    mockThumbnail.mockResolvedValue({ presigned_url: "https://cdn/book.webp" } as never);
+    // По умолчанию fileNode — это PDF; теперь у него тоже есть миниатюра.
+    render(<NodeInfoPanel item={fileNode({ name: "book.pdf" })} onClose={vi.fn()} />);
+
+    await waitFor(() => expect(mockThumbnail).toHaveBeenCalledWith("f1"));
+    expect(await screen.findByAltText("book.pdf")).toHaveAttribute(
+      "src",
+      "https://cdn/book.webp",
+    );
+  });
+
+  it("показывает миниатюру для видео", async () => {
+    mockThumbnail.mockResolvedValue({ presigned_url: "https://cdn/clip.webp" } as never);
+    render(
+      <NodeInfoPanel
+        item={fileNode({ name: "clip.mp4", file_mime_type: "video/mp4" })}
+        onClose={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(mockThumbnail).toHaveBeenCalledWith("f1"));
+    expect(await screen.findByAltText("clip.mp4")).toBeInTheDocument();
+  });
+
+  it("не запрашивает миниатюру и показывает иконку при выключенных превью", () => {
+    previewsEnabled = false;
+    render(
+      <NodeInfoPanel
+        item={fileNode({ name: "pic.png", file_mime_type: "image/png" })}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(mockThumbnail).not.toHaveBeenCalled();
+    expect(screen.queryByAltText("pic.png")).not.toBeInTheDocument();
   });
 
   it("использует thumbnail из React Query кеша без вызова API", async () => {

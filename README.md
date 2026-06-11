@@ -95,7 +95,7 @@ Dropbox, разворачиваемая на собственном сервер
 
 | Слой | Технологии |
 |---|---|
-| **Frontend** | React 19, TypeScript 6, Vite 8, React Router 7, TanStack Query 5, Tailwind CSS v4, Radix UI / shadcn, Axios, lucide-react, Sonner |
+| **Frontend** | React 19, TypeScript 6, Vite 8, React Router 7, TanStack Query 5, TanStack Virtual, Tailwind CSS v4, Radix UI / shadcn, Axios, lucide-react, Sonner |
 | **Backend** | Python 3.13+, FastAPI, SQLAlchemy 2 (async) + asyncpg, Pydantic v2 / pydantic-settings, Alembic, python-jose (JWT), passlib (bcrypt/argon2), Pillow + PyMuPDF + ffmpeg (превью), MinIO SDK |
 | **Хранилище** | PostgreSQL 16 (метаданные), MinIO / S3-совместимое (объекты) |
 | **Инфраструктура** | Docker Compose (6 сервисов), nginx (шлюз + SPA), `uv` (Python), `npm`, `ruff` (lint), ESLint + Prettier, pytest, vitest |
@@ -113,7 +113,9 @@ LocalCloud/
 │   ├── Dockerfile           сборка SPA → статика в nginx
 │   └── nginx.conf           SPA-сервер (history-fallback)
 ├── nginx/               Шлюз / reverse-proxy
-│   └── nginx.conf           / → SPA, /api → api, bucket-пути → MinIO
+│   ├── Dockerfile           образ шлюза (nginx:alpine)
+│   ├── nginx.conf           / → SPA, /api → api, bucket-пути → MinIO
+│   └── nginx-tls.conf.example  пример HTTPS-конфигурации (TLS, HSTS)
 ├── scripts/
 │   ├── generate_env.py      генератор .env под характеристики сервера
 │   └── test_generate_env.py тесты генератора
@@ -123,6 +125,8 @@ LocalCloud/
 ├── .env.example         Канонический шаблон (= слабый хост, 1 CPU / 1 ГБ)
 ├── .env.example.small   Пресет слабого хоста (1 CPU / 1 ГБ)
 ├── .env.example.medium  Пресет среднего хоста (2 CPU / 4 ГБ / 128 ГБ)
+├── CHANGELOG.md         История изменений по версиям
+├── LICENSE              Лицензия
 └── README.md            Этот файл
 ```
 
@@ -134,9 +138,15 @@ LocalCloud/
 
 ```bash
 git clone <URL-репозитория> && cd LocalCloud
-cp .env.example .env          # затем поправьте секреты (см. ниже)
+python3 scripts/generate_env.py       # .env под ресурсы хоста + случайные секреты
 docker compose up -d --build
 ```
+
+Вместо генератора можно скопировать шаблон (`cp .env.example .env`), но тогда
+**обязательно замените placeholder-секреты**: вне debug-режима `api` проверяет
+секреты на старте и отказывается подниматься с дефолтными
+`SECRET_KEY`/паролями из шаблона; seed администратора пропускается при
+дефолтном `ADMIN_PASSWORD`.
 
 Compose автоматически читает корневой `.env` (и для подстановки `${VAR}` в
 `docker-compose.yml`, и как `env_file` контейнеров `api`/`worker`) — флаг
@@ -266,10 +276,12 @@ python3 scripts/generate_env.py --cpu 2 --ram 4G --disk 128G   # отдать р
 python3 scripts/generate_env.py --fraction 0.5 --dry-run        # 50% хоста, без записи
 python3 scripts/generate_env.py --no-previews                   # выключить превью
 ```
-Полезные флаги: `--fraction`, `--cpu/--ram/--disk`, `--users`,
+Полезные флаги: `--fraction`, `--cpu/--ram/--disk`, `--disk-path`, `--users`,
 `--no-previews/--no-viewer/--no-playback/--no-editing`, `--public-host/--public-port`,
-`-o/--output`, `-f/--force`, `--dry-run`, `--no-gen-secrets`. По умолчанию
-генерирует случайные секреты и печатает пароль администратора. Полный список —
+`-o/--output`, `-f/--force`, `--dry-run`, `--no-gen-secrets`, `--rotate-secrets`.
+По умолчанию генерирует случайные секреты и печатает пароль администратора;
+при повторной генерации в существующий `.env` секреты **сохраняются** (новые —
+только через `--rotate-secrets`). Полный список —
 `python3 scripts/generate_env.py --help`.
 
 **2. Готовый пресет.** Скопируйте ближайший шаблон:
@@ -325,6 +337,10 @@ docker run -d --name localcloud-minio \
 Конфигурация — единый **корневой** `.env`. Для локального запуска без шлюза
 выставьте `MINIO_PUBLIC_PORT=9000` (браузер ходит в MinIO напрямую).
 
+Для локальной разработки выставьте в `.env` `DEBUG=true` — иначе backend
+откажется стартовать с placeholder-секретами из шаблона (стартовая проверка
+секретов действует вне debug-режима).
+
 ```bash
 cp .env.example .env          # в корне проекта; поправьте значения
 cd backend
@@ -352,12 +368,18 @@ npm run dev                   # http://localhost:5173 (проксирует /api
 
 ## Учётная запись по умолчанию
 
-Если секреты не сгенерированы автоматически — берётся из `ADMIN_*` в `.env`:
+Администратор создаётся из `ADMIN_*` в `.env`. Генератор `.env` задаёт
+случайный пароль и печатает его в конце работы — сохраните его. Дефолтные
+значения шаблона:
 
 ```
 email:   admin@localcloud.dev
 пароль:  Admin@LocalCloud123
 ```
+
+> Вне debug-режима seed **отказывается** создавать администратора с дефолтным
+> `Admin@LocalCloud123` — задайте свой `ADMIN_PASSWORD` (или используйте
+> генератор).
 
 ---
 
@@ -371,8 +393,13 @@ email:   admin@localcloud.dev
   (TLS 1.2/1.3, HSTS, редирект HTTP→HTTPS) и выставьте `COOKIE_SECURE=true`
   (без этого backend вне `DEBUG` громко предупредит в логах);
 - задайте `MINIO_PUBLIC_HOST` / `MINIO_PUBLIC_PORT` под ваш домен;
-- не запускайте генератор `.env` повторно над уже инициализированной БД — иначе
-  сменится `POSTGRES_PASSWORD` и контейнер не поднимется.
+- при повторной генерации `.env` поверх существующего секреты сохраняются;
+  `--rotate-secrets` меняет их — после этого синхронизируйте пароль роли
+  PostgreSQL (см. [починку](#api-не-стартует-password-authentication-failed))
+  или пересоздайте том (`down -v`, с потерей данных).
+
+Вне debug-режима backend сам проверяет секреты на старте и не поднимется с
+дефолтными/placeholder-значениями — это страховка, а не замена пунктов выше.
 
 ---
 
@@ -389,6 +416,7 @@ email:   admin@localcloud.dev
   темизация, тесты.
 - **[`docs/env-tuning-guide.md`](./docs/env-tuning-guide.md)** — подбор `.env`
   под произвольный сервер по формулам.
+- **[`CHANGELOG.md`](./CHANGELOG.md)** — история изменений по версиям.
 
 ---
 
