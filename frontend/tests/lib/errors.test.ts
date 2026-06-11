@@ -1,9 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { friendlyError, parseApiError, UserFacingError } from "@/lib/errors";
+import { friendlyError, isAbortError, parseApiError, UserFacingError } from "@/lib/errors";
 
 function axiosError(status: number, data?: unknown) {
   return { response: { status, data }, request: {}, message: "Request failed" };
 }
+
+describe("isAbortError", () => {
+  it("распознаёт fetch AbortError", () => {
+    expect(isAbortError(Object.assign(new Error("x"), { name: "AbortError" }))).toBe(true);
+  });
+
+  it("распознаёт axios CanceledError по name", () => {
+    expect(isAbortError(Object.assign(new Error("x"), { name: "CanceledError" }))).toBe(true);
+  });
+
+  it("распознаёт axios отмену по code ERR_CANCELED", () => {
+    expect(isAbortError({ code: "ERR_CANCELED" })).toBe(true);
+  });
+
+  it("обычные ошибки и не-объекты не считаются отменой", () => {
+    expect(isAbortError(new Error("boom"))).toBe(false);
+    expect(isAbortError(null)).toBe(false);
+    expect(isAbortError("string")).toBe(false);
+  });
+});
 
 describe("parseApiError", () => {
   it("извлекает code/message/status/details из axios-ошибки", () => {

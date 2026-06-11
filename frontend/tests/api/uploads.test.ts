@@ -19,15 +19,26 @@ describe("uploadsApi", () => {
     mockApi.post.mockResolvedValueOnce({ data: expected });
     const data = { filename: "a.bin", size: 100 } as never;
     const result = await uploadsApi.create(data);
-    expect(mockApi.post).toHaveBeenCalledWith("/uploads/", data);
+    expect(mockApi.post).toHaveBeenCalledWith("/uploads/", data, { signal: undefined });
     expect(result).toEqual(expected);
+  });
+
+  it("create forwards the abort signal", async () => {
+    mockApi.post.mockResolvedValueOnce({ data: {} });
+    const controller = new AbortController();
+    await uploadsApi.create({ filename: "a.bin" } as never, controller.signal);
+    expect(mockApi.post).toHaveBeenCalledWith("/uploads/", expect.anything(), {
+      signal: controller.signal,
+    });
   });
 
   it("getPresignedParts posts to /uploads/:id/parts/presigned", async () => {
     const expected = { parts: [] };
     mockApi.post.mockResolvedValueOnce({ data: expected });
     const result = await uploadsApi.getPresignedParts("up1");
-    expect(mockApi.post).toHaveBeenCalledWith("/uploads/up1/parts/presigned");
+    expect(mockApi.post).toHaveBeenCalledWith("/uploads/up1/parts/presigned", undefined, {
+      signal: undefined,
+    });
     expect(result).toEqual(expected);
   });
 
@@ -36,7 +47,9 @@ describe("uploadsApi", () => {
     mockApi.post.mockResolvedValueOnce({ data: expected });
     const data = { etag: "e1", size: 50 } as never;
     const result = await uploadsApi.completePart("up1", 2, data);
-    expect(mockApi.post).toHaveBeenCalledWith("/uploads/up1/parts/2/complete", data);
+    expect(mockApi.post).toHaveBeenCalledWith("/uploads/up1/parts/2/complete", data, {
+      signal: undefined,
+    });
     expect(result).toEqual(expected);
   });
 
@@ -45,7 +58,9 @@ describe("uploadsApi", () => {
     mockApi.post.mockResolvedValueOnce({ data: expected });
     const data = { parts: [{ part_number: 1, etag: "e1" }] } as never;
     const result = await uploadsApi.complete("up1", data);
-    expect(mockApi.post).toHaveBeenCalledWith("/uploads/up1/complete", data);
+    expect(mockApi.post).toHaveBeenCalledWith("/uploads/up1/complete", data, {
+      signal: undefined,
+    });
     expect(result).toEqual(expected);
   });
 

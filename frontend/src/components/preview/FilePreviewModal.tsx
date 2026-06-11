@@ -800,11 +800,19 @@ export function FilePreviewModal({ item, mimeType, open, onClose }: Props) {
       kind === "pdf"
     )
       return;
+    let cancelled = false;
     setPosterUrl(undefined);
     nodesApi
       .thumbnail(item.id)
-      .then((r) => setPosterUrl(r.presigned_url))
-      .catch(() => setPosterUrl(null));
+      .then((r) => {
+        if (!cancelled) setPosterUrl(r.presigned_url);
+      })
+      .catch(() => {
+        if (!cancelled) setPosterUrl(null);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [open, item.id, kind]);
 
   /**
@@ -836,9 +844,16 @@ export function FilePreviewModal({ item, mimeType, open, onClose }: Props) {
       blobRef.current = null;
     }
 
+    // Флаг отмены: эффект асинхронный, и его продолжение может выполниться уже
+    // после размонтирования/смены файла (когда cleanup отработал). Без этого
+    // флага созданный ниже blob-URL присвоился бы blobRef ПОСЛЕ revoke в
+    // cleanup и утёк бы навсегда.
+    let cancelled = false;
+
     nodesApi
       .download(item.id, false)
       .then(async (resp) => {
+        if (cancelled) return;
         const url = resp.presigned_url;
         setPresignedUrl(url);
 
@@ -848,20 +863,30 @@ export function FilePreviewModal({ item, mimeType, open, onClose }: Props) {
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const blob = await res.blob();
             const blobUrl = URL.createObjectURL(new Blob([blob], { type: "application/pdf" }));
+            // Эффект отменён, пока качался blob — немедленно освобождаем его.
+            if (cancelled) {
+              URL.revokeObjectURL(blobUrl);
+              return;
+            }
             blobRef.current = blobUrl;
             setPdfBlobUrl(blobUrl);
           } catch {
-            setPdfBlobUrl(url);
+            if (!cancelled) setPdfBlobUrl(url);
           }
         } else if (kind === "text" || kind === "markdown") {
           const text = await fetch(url).then((r) => r.text());
-          setTextContent(text);
+          if (!cancelled) setTextContent(text);
         }
       })
-      .catch((e: Error) => setError(e.message ?? "Не удалось загрузить файл"))
-      .finally(() => setLoading(false));
+      .catch((e: Error) => {
+        if (!cancelled) setError(e.message ?? "Не удалось загрузить файл");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
 
     return () => {
+      cancelled = true;
       if (blobRef.current) {
         URL.revokeObjectURL(blobRef.current);
         blobRef.current = null;

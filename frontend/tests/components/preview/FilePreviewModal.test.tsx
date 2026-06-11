@@ -259,6 +259,32 @@ describe("FilePreviewModal — pdf preview", () => {
     });
     expect(iframe.getAttribute("src")).toBe("https://storage.example/presigned");
   });
+
+  it("revokes a blob created after unmount instead of leaking it", async () => {
+    // Blob создаётся уже после размонтирования: его нужно сразу отозвать, иначе
+    // он утечёт (cleanup-эффект отработал до создания blob).
+    let resolveBlob: (b: Blob) => void = () => {};
+    stubFetch(() => ({
+      ok: true,
+      blob: () => new Promise<Blob>((res) => (resolveBlob = res)),
+    }));
+
+    const { unmount } = renderModal({
+      item: makeItem({ name: "doc.pdf", file_mime_type: "application/pdf" }),
+    });
+
+    // Дожидаемся старта fetch (download → fetch вызваны), но blob ещё не готов.
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+
+    // Размонтируем до готовности blob — cleanup помечает эффект отменённым.
+    unmount();
+
+    // Теперь blob готов: продолжение создаёт URL и должно сразу его отозвать.
+    resolveBlob(new Blob(["%PDF"]));
+    await waitFor(() =>
+      expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:mock-url"),
+    );
+  });
 });
 
 describe("FilePreviewModal — audio preview", () => {

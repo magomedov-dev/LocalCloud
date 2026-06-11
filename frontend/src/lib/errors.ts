@@ -71,6 +71,29 @@ export class UserFacingError extends Error {
 }
 
 /**
+ * Проверяет, является ли ошибка отменой запроса (а не настоящим сбоем).
+ *
+ * Распознаёт оба источника отмены: `fetch` бросает `DOMException` с
+ * `name === "AbortError"`, axios — `CanceledError` с `code === "ERR_CANCELED"`.
+ * Отменённые пользователем/размонтированием запросы не должны показываться как
+ * ошибки.
+ *
+ * Args:
+ *   err: Любая перехваченная ошибка.
+ *
+ * Returns:
+ *   `true`, если запрос был отменён.
+ */
+export function isAbortError(err: unknown): boolean {
+  if (err && typeof err === "object") {
+    const e = err as { name?: unknown; code?: unknown };
+    if (e.name === "AbortError" || e.name === "CanceledError") return true;
+    if (e.code === "ERR_CANCELED") return true;
+  }
+  return false;
+}
+
+/**
  * Форма тела ответа об ошибке от backend.
  */
 interface BackendErrorBody {

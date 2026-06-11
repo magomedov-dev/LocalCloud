@@ -142,4 +142,19 @@ describe("SearchBar", () => {
     await u.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByText("Гамма")).not.toBeInTheDocument());
   });
+
+  it("blur закрывает выпадающий список (без таймера)", async () => {
+    search.mockResolvedValue({
+      items: [makeItem({ node_type: "folder", name: "Дельта", path: "/Дельта" })],
+    });
+    const u = userEvent.setup();
+    renderWithProviders(<SearchBar />);
+    const input = screen.getByLabelText("Поиск файлов и папок");
+    await u.type(input, "д");
+
+    expect(await screen.findByText("Дельта", {}, { timeout: 2000 })).toBeInTheDocument();
+    // Уводим фокус с поля — список закрывается сразу, без отложенного таймера.
+    await u.tab();
+    await waitFor(() => expect(screen.queryByText("Дельта")).not.toBeInTheDocument());
+  });
 });

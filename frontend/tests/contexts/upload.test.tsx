@@ -87,27 +87,38 @@ describe("UploadProvider", () => {
     expect(task.error).toBeNull();
 
     // API-вызовы прошли в правильном порядке.
+    // Каждому сетевому вызову передаётся AbortSignal для отмены.
     expect(createMock).toHaveBeenCalledWith(
       expect.objectContaining({
         parent_node_id: "parent-1",
         filename: "photo.png",
         parts_count: 1,
       }),
+      expect.any(AbortSignal),
     );
-    expect(partsMock).toHaveBeenCalledWith("session-1");
+    expect(partsMock).toHaveBeenCalledWith("session-1", expect.any(AbortSignal));
     expect(globalThis.fetch).toHaveBeenCalledWith(
       "https://minio/put/1",
-      expect.objectContaining({ method: "PUT" }),
+      expect.objectContaining({ method: "PUT", signal: expect.any(AbortSignal) }),
     );
-    expect(completePartMock).toHaveBeenCalledWith("session-1", 1, {
-      part_number: 1,
-      etag: "etag-123",
-      size_bytes: 10,
-    });
-    expect(completeMock).toHaveBeenCalledWith("session-1", {
-      upload_session_id: "session-1",
-      parts: [{ part_number: 1, etag: "etag-123", size_bytes: 10 }],
-    });
+    expect(completePartMock).toHaveBeenCalledWith(
+      "session-1",
+      1,
+      {
+        part_number: 1,
+        etag: "etag-123",
+        size_bytes: 10,
+      },
+      expect.any(AbortSignal),
+    );
+    expect(completeMock).toHaveBeenCalledWith(
+      "session-1",
+      {
+        upload_session_id: "session-1",
+        parts: [{ part_number: 1, etag: "etag-123", size_bytes: 10 }],
+      },
+      expect.any(AbortSignal),
+    );
 
     // Оптимистичная вставка в кэш папки.
     expect(insertMock).toHaveBeenCalledWith(
@@ -167,6 +178,27 @@ describe("UploadProvider", () => {
     expect(completeMock).not.toHaveBeenCalled();
   });
 
+  it("показывает статус-зависимое сообщение при 403 (истёкшая ссылка)", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(fetchResponse(false, 403)) as never;
+    const { result } = setup();
+
+    act(() => result.current.enqueue([makeFile("doc.pdf")], "parent-1", QKEY));
+
+    await waitFor(() => expect(result.current.tasks[0].status).toBe("error"));
+    expect(result.current.tasks[0].error).toContain("истекла");
+    expect(result.current.tasks[0].error).toContain("doc.pdf");
+  });
+
+  it("показывает сообщение о недоступности хранилища при 5xx", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(fetchResponse(false, 503)) as never;
+    const { result } = setup();
+
+    act(() => result.current.enqueue([makeFile("doc.pdf")], "parent-1", QKEY));
+
+    await waitFor(() => expect(result.current.tasks[0].status).toBe("error"));
+    expect(result.current.tasks[0].error).toContain("временно недоступно");
+  });
+
   it("не падает, если abort после ошибки тоже бросает", async () => {
     completeMock.mockRejectedValueOnce(new Error("complete failed"));
     abortMock.mockRejectedValueOnce(new Error("abort failed"));
@@ -189,7 +221,7 @@ describe("UploadProvider", () => {
 
     await waitFor(() => expect(result.current.tasks[0].status).toBe("done"), { timeout: 5000 });
     expect(createMock).toHaveBeenCalledTimes(2);
-    expect(partsMock).toHaveBeenCalledWith("session-retry");
+    expect(partsMock).toHaveBeenCalledWith("session-retry", expect.any(AbortSignal));
   }, 10000);
 
   it("обрабатывает несколько частей с обновлением прогресса", async () => {
@@ -227,6 +259,51 @@ describe("UploadProvider", () => {
 
     act(() => result.current.dismiss(id));
     expect(result.current.tasks).toHaveLength(0);
+  });
+
+  it("прогресс между частями не достигает 100 % до complete()", async () => {
+    // Удерживаем complete() до проверки прогресса, чтобы поймать момент после
+    // загрузки части, но до финализации.
+    let resolveComplete: (v: unknown) => void = () => {};
+    completeMock.mockImplementationOnce(
+      () => new Promise((res) => (resolveComplete = res)) as never,
+    );
+    const { result } = setup();
+
+    act(() => result.current.enqueue([makeFile()], "parent-1", QKEY));
+
+    // Дожидаемся, пока единственная часть загрузится — прогресс должен быть 99,
+    // а не 100 (последний процент зарезервирован за complete()).
+    await waitFor(() => expect(result.current.tasks[0].progress).toBe(99));
+    expect(result.current.tasks[0].status).toBe("uploading");
+
+    act(() => resolveComplete({ node_id: "node-1" }));
+    await waitFor(() => expect(result.current.tasks[0].status).toBe("done"));
+    expect(result.current.tasks[0].progress).toBe(100);
+  });
+
+  it("dismiss отменяет загрузку незавершённой задачи", async () => {
+    // Зависшая загрузка части: разрешится только через abort signal.
+    globalThis.fetch = vi.fn().mockImplementation(
+      (_url: string, opts: { signal?: AbortSignal }) =>
+        new Promise((_res, rej) => {
+          opts.signal?.addEventListener("abort", () =>
+            rej(Object.assign(new Error("aborted"), { name: "AbortError" })),
+          );
+        }),
+    ) as never;
+    const { result } = setup();
+
+    act(() => result.current.enqueue([makeFile()], "parent-1", QKEY));
+    // Ждём, пока PUT части реально стартует (зависнет на signal).
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+    const id = result.current.tasks[0].id;
+
+    act(() => result.current.dismiss(id));
+
+    // Задача удалена, ошибка не показана (отмена — не сбой), слот освобождён.
+    expect(result.current.tasks).toHaveLength(0);
+    await waitFor(() => expect(abortMock).toHaveBeenCalledWith("session-1"));
   });
 
   it("dismissAllDone удаляет завершённые и ошибочные задачи", async () => {

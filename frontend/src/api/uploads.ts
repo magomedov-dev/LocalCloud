@@ -17,24 +17,28 @@ export const uploadsApi = {
    *
    * Args:
    *   data: Данные загружаемого файла и параметры multipart upload.
+   *   signal: Abort signal для отмены запроса (например, при размонтировании).
    *
    * Returns:
    *   Promise с созданной upload-сессией.
    */
-  create: (data: UploadSessionCreateRequest) =>
-    api.post<UploadSessionRead>("/uploads/", data).then((r) => r.data),
+  create: (data: UploadSessionCreateRequest, signal?: AbortSignal) =>
+    api.post<UploadSessionRead>("/uploads/", data, { signal }).then((r) => r.data),
 
   /**
    * Возвращает presigned URL для загрузки частей multipart upload.
    *
    * Args:
    *   id: Идентификатор upload-сессии.
+   *   signal: Abort signal для отмены запроса.
    *
    * Returns:
    *   Promise со списком presigned URL для частей upload.
    */
-  getPresignedParts: (id: string) =>
-    api.post<PresignedPartsResponse>(`/uploads/${id}/parts/presigned`).then((r) => r.data),
+  getPresignedParts: (id: string, signal?: AbortSignal) =>
+    api
+      .post<PresignedPartsResponse>(`/uploads/${id}/parts/presigned`, undefined, { signal })
+      .then((r) => r.data),
 
   /**
    * Помечает часть upload как загруженную.
@@ -43,12 +47,17 @@ export const uploadsApi = {
    *   id: Идентификатор upload-сессии.
    *   partNumber: Номер загруженной части.
    *   data: ETag и размер загруженной части.
+   *   signal: Abort signal для отмены запроса.
    *
    * Returns:
    *   Promise с ответом API.
    */
-  completePart: (id: string, partNumber: number, data: UploadPartCompleteRequest) =>
-    api.post(`/uploads/${id}/parts/${partNumber}/complete`, data).then((r) => r.data),
+  completePart: (
+    id: string,
+    partNumber: number,
+    data: UploadPartCompleteRequest,
+    signal?: AbortSignal,
+  ) => api.post(`/uploads/${id}/parts/${partNumber}/complete`, data, { signal }).then((r) => r.data),
 
   /**
    * Завершает multipart upload.
@@ -56,12 +65,13 @@ export const uploadsApi = {
    * Args:
    *   id: Идентификатор upload-сессии.
    *   data: Список загруженных частей для финализации upload.
+   *   signal: Abort signal для отмены запроса.
    *
    * Returns:
    *   Promise с результатом завершения upload.
    */
-  complete: (id: string, data: UploadCompleteRequest) =>
-    api.post<UploadCompleteResponse>(`/uploads/${id}/complete`, data).then((r) => r.data),
+  complete: (id: string, data: UploadCompleteRequest, signal?: AbortSignal) =>
+    api.post<UploadCompleteResponse>(`/uploads/${id}/complete`, data, { signal }).then((r) => r.data),
 
   /**
    * Отменяет multipart upload-сессию.

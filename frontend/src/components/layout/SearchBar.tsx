@@ -155,7 +155,10 @@ export function SearchBar() {
           onFocus={() => {
             if (query) setOpen(true);
           }}
-          onBlur={() => setTimeout(() => setOpen(false), 150)}
+          // Закрываем сразу: клик по результату использует onMouseDown +
+          // preventDefault, поэтому blur при выборе элемента не срабатывает.
+          // Это убирает гонку и утечку таймера прежнего setTimeout(150).
+          onBlur={() => setOpen(false)}
           onKeyDown={handleKeyDown}
         />
         <kbd className="border-border text-muted-foreground pointer-events-none absolute right-3 hidden rounded border px-1 py-0.5 font-mono text-[10px] select-none sm:block">
