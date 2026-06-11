@@ -67,6 +67,10 @@ def make_settings(
     settings.minio_region = region
     settings.minio_base_url = base_url
     settings.minio_public_url = public_url
+    # Реальные значения для построения HTTP-клиента с socket-таймаутами.
+    settings.storage_executor_max_workers = 4
+    settings.minio_connect_timeout_seconds = 5.0
+    settings.minio_read_timeout_seconds = 60.0
     return settings
 
 
@@ -100,7 +104,10 @@ class TestConstruction:
         assert kwargs["secret_key"] == "sk"
         assert kwargs["secure"] is True
         assert kwargs["region"] == "eu-west-1"
-        assert kwargs["http_client"] is None
+        # Без явного http_client клиент строит PoolManager с socket-таймаутами.
+        from urllib3 import PoolManager
+
+        assert isinstance(kwargs["http_client"], PoolManager)
 
     def test_attributes_assigned(self) -> None:
         client, _, minio_instance = make_client()
@@ -411,10 +418,11 @@ class TestHighLevelOperations:
 
 class TestClose:
     @pytest.mark.asyncio
-    async def test_close_noop_when_no_http_client(self) -> None:
+    async def test_close_releases_auto_built_http_client(self) -> None:
         client, _, _ = make_client()
-        # http_client равен None -> ранний выход, проверяем лишь отсутствие исключения.
-        assert client.http_client is None
+        # Без явного http_client строится PoolManager; close() освобождает его
+        # без ошибок (PoolManager поддерживает clear/close).
+        assert client.http_client is not None
         await client.close()
 
     @pytest.mark.asyncio

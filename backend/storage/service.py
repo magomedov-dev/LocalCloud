@@ -6,6 +6,7 @@ from typing import Any, BinaryIO
 
 from core.config import StorageSettings
 from core.constants import StorageConstants
+from core.logging import get_logger
 from storage.buckets import (
     StorageBucketManager,
     StorageBucketNameValidator,
@@ -46,6 +47,8 @@ from storage.types import (
     StoragePresignedUrl,
     StorageUploadPart,
 )
+
+logger = get_logger("storage.service")
 
 
 class StorageService:
@@ -251,6 +254,24 @@ class StorageService:
                     region=resolved_region,
                     object_lock=object_lock,
                 )
+                # Авто-аборт незавершённых multipart-загрузок: best-effort,
+                # чтобы недоступность lifecycle-API (нестандартный S3-совместимый
+                # бэкенд) не блокировала запуск приложения.
+                try:
+                    await self.buckets.ensure_incomplete_multipart_lifecycle(
+                        normalized_bucket,
+                        days=self.settings.incomplete_multipart_expiry_days,
+                    )
+                except StorageError as exc:
+                    logger.warning(
+                        "Не удалось установить lifecycle-правило авто-аборта "
+                        "незавершённых multipart-загрузок.",
+                        extra={
+                            "bucket": normalized_bucket,
+                            "error_type": exc.__class__.__name__,
+                            "reason": str(exc),
+                        },
+                    )
                 result[normalized_bucket] = True
                 continue
 

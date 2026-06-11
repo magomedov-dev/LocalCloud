@@ -11,7 +11,7 @@ from typing import Any, TypeVar
 
 from minio import Minio
 from minio.error import S3Error
-from urllib3 import PoolManager
+from urllib3 import PoolManager, Timeout
 
 from core.config import StorageSettings, get_settings
 from storage.exceptions import (
@@ -106,7 +106,11 @@ class StorageClient:
         )
         self.secure = settings.minio_secure
         self.region = settings.minio_region if settings.minio_region else None
-        self.http_client = http_client
+        # Если HTTP-клиент не передан явно, создаём PoolManager с socket-таймаутами:
+        # без них зависшее соединение держит поток пула вечно и исчерпывает его.
+        # read_timeout — на каждое чтение из сокета, поэтому большие потоковые
+        # передачи не рвутся, пока данные продолжают идти.
+        self.http_client = http_client or self._build_http_client(settings)
 
         try:
             self._client = Minio(
@@ -129,6 +133,32 @@ class StorageClient:
                 },
                 cause=exc,
             ) from exc
+
+    @staticmethod
+    def _build_http_client(settings: StorageSettings) -> PoolManager:
+        """Строит HTTP-клиент MinIO с socket-таймаутами и пулом под размер executor.
+
+        Размер пула соединений согласован с числом потоков storage-executor,
+        чтобы параллельные операции не конкурировали за соединения. Таймауты
+        берутся из настроек.
+
+        Args:
+            settings: Настройки объектного хранилища.
+
+        Returns:
+            Настроенный ``urllib3.PoolManager``.
+        """
+
+        pool_size = max(1, settings.storage_executor_max_workers)
+        timeout = Timeout(
+            connect=settings.minio_connect_timeout_seconds,
+            read=settings.minio_read_timeout_seconds,
+        )
+        return PoolManager(
+            timeout=timeout,
+            maxsize=pool_size,
+            retries=False,
+        )
 
     @property
     def is_secure(self) -> bool:

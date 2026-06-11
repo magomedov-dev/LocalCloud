@@ -70,6 +70,7 @@ class TestStartupBackend:
         mock_settings.logging = MagicMock()
         mock_settings.database = MagicMock()
         mock_settings.storage = MagicMock()
+        mock_settings.storage.storage_startup_timeout_seconds = 30.0
         mock_settings.app = MagicMock()
         mock_settings.app.app_name = "TestApp"
         mock_settings.app.app_version = "1.0"
@@ -109,7 +110,8 @@ class TestStartupBackend:
 
         with (
             patch("app.lifecycle.get_settings", return_value=MagicMock(
-                logging=MagicMock(), database=MagicMock(), storage=MagicMock(),
+                logging=MagicMock(), database=MagicMock(),
+                storage=MagicMock(storage_startup_timeout_seconds=30.0),
                 app=MagicMock(app_name="App", app_version="1", debug=False),
             )),
             patch("app.lifecycle.setup_logging"),
@@ -134,7 +136,8 @@ class TestStartupBackend:
 
         with (
             patch("app.lifecycle.get_settings", return_value=MagicMock(
-                logging=MagicMock(), database=MagicMock(), storage=MagicMock(),
+                logging=MagicMock(), database=MagicMock(),
+                storage=MagicMock(storage_startup_timeout_seconds=30.0),
                 app=MagicMock(app_name="App", app_version="1", debug=False),
             )),
             patch("app.lifecycle.setup_logging"),
@@ -147,6 +150,39 @@ class TestStartupBackend:
             patch("app.lifecycle.is_db_client_initialized", return_value=False),
         ):
             with pytest.raises(RuntimeError, match="DB unavailable"):
+                await startup_backend(app)
+
+    @pytest.mark.asyncio
+    async def test_startup_fails_when_storage_not_ready_in_time(self) -> None:
+        """Зависшая инициализация хранилища роняет старт по таймауту."""
+        import asyncio
+
+        from app.lifecycle import startup_backend
+
+        app = MagicMock(spec=FastAPI)
+        app.state = MagicMock()
+
+        async def never_ready(*args, **kwargs):
+            await asyncio.sleep(10)
+
+        mock_storage = AsyncMock()
+        mock_storage.ensure_buckets_ready = AsyncMock(side_effect=never_ready)
+
+        with (
+            patch("app.lifecycle.get_settings", return_value=MagicMock(
+                logging=MagicMock(), database=MagicMock(),
+                storage=MagicMock(storage_startup_timeout_seconds=0.01),
+                app=MagicMock(app_name="App", app_version="1", debug=False),
+            )),
+            patch("app.lifecycle.setup_logging"),
+            patch("app.lifecycle.silence_noisy_loggers"),
+            patch("app.lifecycle.configure_root_exception_logging"),
+            patch("app.lifecycle.is_db_client_initialized", return_value=True),
+            patch("app.lifecycle.ping_database", new_callable=AsyncMock),
+            patch("app.lifecycle.get_storage_service", return_value=mock_storage),
+            patch("app.lifecycle.shutdown_storage_executor"),
+        ):
+            with pytest.raises(RuntimeError, match="не готов"):
                 await startup_backend(app)
 
 

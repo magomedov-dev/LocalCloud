@@ -34,6 +34,9 @@ def make_uow():
     uow.files.get_by_node_id = AsyncMock(return_value=None)
     uow.links = AsyncMock()
     uow.links.find_expired_links = AsyncMock(return_value=[])
+    uow.quotas = AsyncMock()
+    uow.quotas.decrease_used_space = AsyncMock()
+    uow.quotas.decrease_files_used = AsyncMock()
     return uow
 
 
@@ -297,9 +300,10 @@ def make_trash_item(*, node_id=None, node=None, deleted_at=None):
     return item
 
 
-def make_file_node():
+def make_file_node(*, owner_id=None):
     node = MagicMock()
     node.node_type = NodeType.FILE
+    node.owner_id = owner_id or uuid.uuid4()
     return node
 
 
@@ -309,11 +313,18 @@ def make_folder_node():
     return node
 
 
-def make_file_row(*, storage_key="files/obj", storage_bucket="bucket", versions=None):
+def make_file_row(
+    *,
+    storage_key="files/obj",
+    storage_bucket="bucket",
+    versions=None,
+    size_bytes=1024,
+):
     file_row = MagicMock()
     file_row.storage_key = storage_key
     file_row.storage_bucket = storage_bucket
     file_row.versions = versions if versions is not None else []
+    file_row.size_bytes = size_bytes
     return file_row
 
 
@@ -417,6 +428,66 @@ class TestCleanTrashFallback:
         assert result.success is True
         ctx.storage_service.delete_file_object.assert_not_called()
         assert result.result_data["deleted_storage_objects_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_fallback_decrements_quota_per_owner(self) -> None:
+        """Purged-файлы освобождают квоту владельца (атомарно с purge)."""
+        ctx, uow = make_exec_context()
+        owner = uuid.uuid4()
+        node1 = make_file_node(owner_id=owner)
+        node2 = make_file_node(owner_id=owner)
+        item1 = make_trash_item(node=node1)
+        item2 = make_trash_item(node=node2)
+        uow.trash.get_expired_items = AsyncMock(return_value=[item1, item2])
+        uow.files.get_by_node_id = AsyncMock(
+            side_effect=[
+                make_file_row(size_bytes=1000, storage_key="f1"),
+                make_file_row(size_bytes=500, storage_key="f2"),
+            ]
+        )
+
+        result = await clean_trash_handler(ctx)
+
+        assert result.success is True
+        assert result.result_data["purged_count"] == 2
+        # Два файла одного владельца агрегируются в один декремент.
+        uow.quotas.decrease_used_space.assert_awaited_once_with(
+            user_id=owner, size_bytes=1500, flush=True, refresh=False
+        )
+        uow.quotas.decrease_files_used.assert_awaited_once_with(
+            user_id=owner, count=2, flush=True, refresh=False
+        )
+
+    @pytest.mark.asyncio
+    async def test_fallback_no_quota_change_for_folder_only(self) -> None:
+        """Папки не занимают квоту — декремента нет."""
+        ctx, uow = make_exec_context()
+        item = make_trash_item(node=make_folder_node())
+        uow.trash.get_expired_items = AsyncMock(return_value=[item])
+
+        result = await clean_trash_handler(ctx)
+
+        assert result.success is True
+        assert result.result_data["purged_count"] == 1
+        uow.quotas.decrease_used_space.assert_not_awaited()
+        uow.quotas.decrease_files_used.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_fallback_failed_purge_does_not_decrement_quota(self) -> None:
+        """Сбой mark_purged не списывает квоту за этот файл."""
+        ctx, uow = make_exec_context()
+        item = make_trash_item(node=make_file_node())
+        uow.trash.get_expired_items = AsyncMock(return_value=[item])
+        uow.files.get_by_node_id = AsyncMock(return_value=make_file_row())
+        uow.trash.mark_purged = AsyncMock(side_effect=RuntimeError("boom"))
+
+        result = await clean_trash_handler(ctx)
+
+        assert result.success is True
+        assert result.result_data["failed_count"] == 1
+        assert result.result_data["purged_count"] == 0
+        uow.quotas.decrease_used_space.assert_not_awaited()
+        uow.quotas.decrease_files_used.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_fallback_per_item_error_increments_failed(self) -> None:

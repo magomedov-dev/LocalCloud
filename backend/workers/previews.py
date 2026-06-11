@@ -5,6 +5,7 @@ import io
 import os
 import subprocess
 import tempfile
+import threading
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
@@ -76,22 +77,55 @@ _VIDEO_FFMPEG_TIMEOUT_SECONDS = _preview_settings.video_ffmpeg_timeout_seconds
 _RENDER_MAX_CONCURRENCY = _preview_settings.render_concurrency
 _render_semaphore = asyncio.Semaphore(_RENDER_MAX_CONCURRENCY)
 # Выделенный пул потоков под рендеры, чтобы они не конкурировали с дефолтным
-# пулом asyncio (storage I/O и пр.) за потоки на единственном ядре.
-_render_executor = ThreadPoolExecutor(
-    max_workers=_RENDER_MAX_CONCURRENCY,
-    thread_name_prefix="preview-render",
-)
+# пулом asyncio (storage I/O и пр.) за потоки на единственном ядре. Создаётся
+# лениво и пересоздаётся после shutdown — чтобы остановка пула на завершении
+# worker'а не делала модуль непригодным навсегда.
+_render_executor: ThreadPoolExecutor | None = None
+_render_executor_lock = threading.Lock()
 
 # Глобальный предел Pillow на число пикселей растра: декодер сам прерывает
 # распаковку изображений-«бомб», не выделяя память под полный растр.
 Image.MAX_IMAGE_PIXELS = _IMAGE_PREVIEW_MAX_PIXELS
 
 
+def _get_render_executor() -> ThreadPoolExecutor:
+    """Возвращает пул потоков рендеров, создавая его при необходимости."""
+
+    global _render_executor
+    if _render_executor is None:
+        with _render_executor_lock:
+            if _render_executor is None:
+                _render_executor = ThreadPoolExecutor(
+                    max_workers=_RENDER_MAX_CONCURRENCY,
+                    thread_name_prefix="preview-render",
+                )
+    return _render_executor
+
+
 async def _run_render(func: Callable[..., bytes], *args: Any) -> bytes:
     """Запускает блокирующий рендер в выделенном пуле потоков рендеров."""
 
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(_render_executor, func, *args)
+    return await loop.run_in_executor(_get_render_executor(), func, *args)
+
+
+def shutdown_render_executor(*, wait: bool = True) -> None:
+    """Останавливает пул потоков рендеров превью.
+
+    Вызывается при штатном завершении worker-процесса, чтобы потоки рендеров
+    не оставались висеть (удерживая файловые дескрипторы временных файлов) и
+    процесс мог чисто завершиться. Пул сбрасывается в ``None`` и будет создан
+    заново при следующем рендере.
+
+    Args:
+        wait: Дождаться ли завершения уже выполняющихся рендеров.
+    """
+
+    global _render_executor
+    executor = _render_executor
+    _render_executor = None
+    if executor is not None:
+        executor.shutdown(wait=wait, cancel_futures=True)
 
 
 async def generate_file_preview_handler(

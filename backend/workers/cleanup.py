@@ -229,8 +229,18 @@ async def _fallback_cleanup(
             items = [item for item in items if item.deleted_at <= deleted_before]
 
         scanned_count = len(items)
+        # Накапливаем освобождаемую квоту по владельцам и списываем её в той же
+        # транзакции, что и purge — иначе удалённые из корзины файлы навсегда
+        # оставались бы учтёнными в квоте (over-count). Файлы в корзине ещё
+        # занимают квоту: декремент происходит именно при окончательном удалении.
+        freed_bytes_by_owner: dict[UUID, int] = {}
+        freed_files_by_owner: dict[UUID, int] = {}
         for item in items:
             try:
+                # Освобождаемая квота этого файла; учитывается в накопителях
+                # только после успешного mark_purged ниже.
+                item_owner: UUID | None = None
+                item_freed_bytes = 0
                 node = item.node or await uow.nodes.get_by_id(item.node_id)
                 if node is not None and node.node_type == NodeType.FILE:
                     file_row = await uow.files.get_by_node_id(
@@ -253,6 +263,8 @@ async def _fallback_cleanup(
                                     missing_ok=True,
                                 )
                                 deleted_storage_objects_count += 1
+                        item_owner = node.owner_id
+                        item_freed_bytes = int(file_row.size_bytes or 0)
 
                 await uow.trash.mark_purged(
                     trash_item_id=item.id,
@@ -261,8 +273,32 @@ async def _fallback_cleanup(
                     refresh=False,
                 )
                 purged_count += 1
+                if item_owner is not None:
+                    freed_bytes_by_owner[item_owner] = (
+                        freed_bytes_by_owner.get(item_owner, 0) + item_freed_bytes
+                    )
+                    freed_files_by_owner[item_owner] = (
+                        freed_files_by_owner.get(item_owner, 0) + 1
+                    )
             except Exception:
                 failed_count += 1
+
+        for owner, freed_bytes in freed_bytes_by_owner.items():
+            if freed_bytes > 0:
+                await uow.quotas.decrease_used_space(
+                    user_id=owner,
+                    size_bytes=freed_bytes,
+                    flush=True,
+                    refresh=False,
+                )
+        for owner, freed_files in freed_files_by_owner.items():
+            if freed_files > 0:
+                await uow.quotas.decrease_files_used(
+                    user_id=owner,
+                    count=freed_files,
+                    flush=True,
+                    refresh=False,
+                )
 
         await uow.commit()
 

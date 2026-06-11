@@ -122,6 +122,35 @@ class TestShutdownWorker:
             await shutdown_worker(None)  # не должно выбрасывать исключение
 
     @pytest.mark.asyncio
+    async def test_shutdown_stops_render_executor(self) -> None:
+        """Останов worker'а закрывает пул потоков рендеров превью."""
+        with (
+            patch("workers.lifecycle.close_db_client", new_callable=AsyncMock),
+            patch(
+                "workers.previews.shutdown_render_executor"
+            ) as mock_shutdown,
+        ):
+            from workers.lifecycle import shutdown_worker
+
+            await shutdown_worker(None)
+
+        mock_shutdown.assert_called_once_with(wait=True)
+
+    @pytest.mark.asyncio
+    async def test_shutdown_render_executor_failure_is_swallowed(self) -> None:
+        """Сбой остановки пула рендеров не роняет shutdown_worker."""
+        with (
+            patch("workers.lifecycle.close_db_client", new_callable=AsyncMock),
+            patch(
+                "workers.previews.shutdown_render_executor",
+                side_effect=RuntimeError("boom"),
+            ),
+        ):
+            from workers.lifecycle import shutdown_worker
+
+            await shutdown_worker(None)  # не должно выбрасывать исключение
+
+    @pytest.mark.asyncio
     async def test_shutdown_closes_storage_if_has_close(self) -> None:
         mock_context = MagicMock()
         mock_context.worker_id = "w-001"

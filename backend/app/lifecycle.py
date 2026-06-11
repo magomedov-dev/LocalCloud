@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from typing import Any
 
@@ -72,7 +73,20 @@ async def startup_backend(app: FastAPI) -> None:
         await ping_database()
 
         storage_service = get_storage_service(settings=settings.storage)
-        await storage_service.ensure_buckets_ready(create_missing=True)
+        # Таймаут на готовность хранилища: при недоступном/зависшем MinIO старт
+        # падает с понятной ошибкой, а не висит бесконечно (блокируя healthcheck
+        # и рестарты).
+        try:
+            await asyncio.wait_for(
+                storage_service.ensure_buckets_ready(create_missing=True),
+                timeout=settings.storage.storage_startup_timeout_seconds,
+            )
+        except TimeoutError as exc:
+            raise RuntimeError(
+                "Объектное хранилище не готово в отведённое время "
+                f"({settings.storage.storage_startup_timeout_seconds:g}s): "
+                "MinIO недоступен или не отвечает."
+            ) from exc
 
         # Определяем пул хранилища и проверяем конфигурацию ёмкости. Падаем на
         # старте, если задано больше реального диска или пул нельзя определить.

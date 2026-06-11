@@ -466,6 +466,79 @@ class StorageBucketManager:
 
         return result
 
+    async def ensure_incomplete_multipart_lifecycle(
+        self,
+        bucket: str,
+        *,
+        days: int,
+    ) -> bool:
+        """Включает авто-аборт незавершённых multipart-загрузок для bucket.
+
+        Ставит lifecycle-правило: MinIO сам отменяет multipart-загрузки,
+        начатые более ``days`` дней назад. Это убирает «мусорные» части,
+        оставшиеся от осиротевших загрузок (сессия в БД удалена) или от
+        неудачного abort при истечении сессии. Правило не затрагивает
+        завершённые объекты. Операция идемпотентна — её можно вызывать на
+        каждом старте.
+
+        Метод best-effort: при ``days <= 0`` ничего не делает; ошибки бросаются
+        как ``StorageBucketError``, но вызывающий код на старте может их
+        проглатывать, чтобы недоступность lifecycle-API не блокировала запуск.
+
+        Args:
+            bucket: Имя bucket.
+            days: Через сколько дней отменять незавершённые загрузки. ``<= 0`` —
+                правило не ставится.
+
+        Returns:
+            ``True``, если правило установлено; ``False``, если пропущено
+            (``days <= 0``).
+
+        Raises:
+            StorageBucketError: Если установка lifecycle-правила не удалась.
+            InvalidStorageBucketNameError: Если имя bucket некорректно.
+        """
+
+        if days <= 0:
+            return False
+
+        from minio.commonconfig import ENABLED, Filter
+        from minio.lifecycleconfig import (
+            AbortIncompleteMultipartUpload,
+            LifecycleConfig,
+            Rule,
+        )
+
+        normalized_bucket = self._validate_bucket_name(bucket)
+        config = LifecycleConfig(
+            [
+                Rule(
+                    ENABLED,
+                    rule_id="localcloud-abort-incomplete-multipart",
+                    rule_filter=Filter(prefix=""),
+                    abort_incomplete_multipart_upload=(
+                        AbortIncompleteMultipartUpload(days_after_initiation=days)
+                    ),
+                ),
+            ]
+        )
+
+        try:
+            await self.client.execute(
+                self.client.get_raw_client().set_bucket_lifecycle,
+                normalized_bucket,
+                config,
+                operation_name="set_bucket_lifecycle",
+            )
+        except StorageError as exc:
+            raise self._bucket_error(
+                exc,
+                bucket=normalized_bucket,
+                operation="ensure_incomplete_multipart_lifecycle",
+            ) from exc
+
+        return True
+
     async def remove_bucket(
         self,
         bucket: str,

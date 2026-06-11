@@ -330,6 +330,23 @@ class StorageConstants:
     # 4 достаточно для параллельных presigned/object-операций.
     STORAGE_EXECUTOR_MAX_WORKERS: Final[int] = 4
 
+    # Socket-таймауты HTTP-клиента MinIO (urllib3). Без них зависшее соединение
+    # держит поток пула вечно и в итоге исчерпывает его. connect — установка
+    # TCP-соединения; read — ожидание данных на КАЖДОЕ чтение (не суммарное
+    # время передачи), поэтому большие файлы не рвутся, пока данные идут.
+    MINIO_CONNECT_TIMEOUT_SECONDS: Final[float] = 5.0
+    MINIO_READ_TIMEOUT_SECONDS: Final[float] = 60.0
+
+    # Потолок ожидания готовности хранилища на старте приложения: если MinIO
+    # не отвечает, backend падает с понятной ошибкой, а не висит бесконечно.
+    STORAGE_STARTUP_TIMEOUT_SECONDS: Final[float] = 30.0
+
+    # Авто-очистка незавершённых multipart-загрузок: MinIO сам абортит загрузки,
+    # начатые более N дней назад. Покрывает осиротевшие части (сессия в БД уже
+    # удалена) и случаи неудачного abort на пути истечения сессий, чтобы
+    # «мусорные» части не копились в хранилище. 0 — правило не ставится.
+    INCOMPLETE_MULTIPART_EXPIRY_DAYS: Final[int] = 7
+
     DEFAULT_STORAGE_LIMIT_BYTES: Final[int] = 10 * 1024 * 1024 * 1024
     STORAGE_AUTO_CAPACITY_FRACTION: Final[float] = 0.85
     CAPACITY_ADVISORY_LOCK_KEY: Final[int] = 0x10C_CACE_70C_5

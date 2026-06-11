@@ -80,12 +80,16 @@ def make_storage_service() -> tuple[StorageService, MagicMock, MagicMock, MagicM
     """Создаёт StorageService со всеми замоканными подменеджерами."""
     settings = MagicMock()
     settings.minio_region = "us-east-1"
+    settings.incomplete_multipart_expiry_days = 7
 
     client = MagicMock()
     client.ping = AsyncMock(return_value=True)
 
     object_manager = MagicMock()
     bucket_manager = MagicMock()
+    bucket_manager.ensure_bucket_exists = AsyncMock()
+    bucket_manager.ensure_incomplete_multipart_lifecycle = AsyncMock(return_value=True)
+    bucket_manager.check_bucket_access = AsyncMock(return_value=True)
     multipart_manager = MagicMock()
     presigned_manager = MagicMock()
     integrity_checker = MagicMock()
@@ -515,6 +519,26 @@ class TestEnsureBucketsReady:
         bucket_manager.ensure_bucket_exists.assert_awaited_once()
         call_kwargs = bucket_manager.ensure_bucket_exists.call_args[1]
         assert call_kwargs["region"] == service.settings.minio_region
+        # Для созданного bucket ставится lifecycle авто-аборта multipart.
+        bucket_manager.ensure_incomplete_multipart_lifecycle.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_lifecycle_failure_does_not_block_startup(self) -> None:
+        from storage.exceptions import StorageError
+
+        service, _object_manager, bucket_manager, *_ = make_storage_service()
+        bucket_manager.ensure_bucket_exists = AsyncMock(return_value=True)
+        bucket_manager.ensure_incomplete_multipart_lifecycle = AsyncMock(
+            side_effect=StorageError("lifecycle API unavailable")
+        )
+
+        # Сбой установки lifecycle проглатывается — bucket всё равно готов.
+        result = await service.ensure_buckets_ready(
+            buckets=["localcloud-files"],
+            create_missing=True,
+        )
+
+        assert result == {"localcloud-files": True}
 
 
 # ---------------------------------------------------------------------------

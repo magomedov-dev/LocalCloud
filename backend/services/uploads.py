@@ -737,6 +737,19 @@ class UploadsService:
                     user_id=user_id,
                     operation=operation,
                 )
+
+                # Идемпотентность: повторный вызов (например, ретрай после
+                # потерянного ответа) на уже завершённой сессии возвращает тот
+                # же результат, а не ошибку «нельзя завершить». Иначе клиент
+                # видел бы 4xx при успешной первой попытке, а двойное создание
+                # файла/инкремент квоты было бы недопустимо.
+                if upload_session.status == UploadSessionStatus.COMPLETED:
+                    existing = await self._build_completed_idempotent_response(
+                        uow, upload_session=upload_session
+                    )
+                    if existing is not None:
+                        return existing
+
                 _ensure_can_complete(upload_session, operation=operation)
                 parts_by_number = await self._confirm_completion_parts(
                     uow,
@@ -1008,6 +1021,44 @@ class UploadsService:
                 operation=operation,
                 message="Не удалось загрузить ход загрузки.",
             ) from exc
+
+    async def _build_completed_idempotent_response(
+        self,
+        uow: Any,
+        *,
+        upload_session: UploadSession,
+    ) -> UploadCompleteResponse | None:
+        """Формирует ответ для повторного завершения уже завершённой сессии.
+
+        Находит файл, ранее созданный для этой сессии (по bucket/key объекта),
+        и возвращает тот же ответ, что и при первом успешном завершении —
+        ничего не создавая и не меняя квоту. Если файл найти не удалось
+        (например, он был удалён), возвращает ``None`` — вызывающий код пойдёт
+        обычным путём проверки статуса.
+
+        Args:
+            uow: Активный Unit of Work.
+            upload_session: Уже завершённая upload-сессия.
+
+        Returns:
+            Идемпотентный ответ завершения или ``None``, если исходный файл
+            не найден.
+        """
+
+        file = await uow.files.get_by_storage_key(
+            storage_bucket=upload_session.storage_bucket,
+            storage_key=upload_session.storage_key,
+        )
+        if file is None:
+            return None
+
+        snapshot = _session_snapshot(upload_session)
+        return UploadCompleteResponse(
+            upload_session=UploadSessionRead.model_validate(snapshot),
+            file_id=file.id,
+            node_id=file.node_id,
+            message="Загрузка уже была завершена.",
+        )
 
     async def _get_owned_session(
         self,

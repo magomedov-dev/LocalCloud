@@ -637,3 +637,48 @@ class TestBucketErrorMapping:
         result = StorageBucketManager._bucket_error(exc, bucket="b", operation="op")
         assert isinstance(result, StorageBucketError)
         assert result.cause is exc
+
+
+# ---------------------------------------------------------------------------
+# ensure_incomplete_multipart_lifecycle
+# ---------------------------------------------------------------------------
+
+class TestIncompleteMultipartLifecycle:
+    @pytest.mark.asyncio
+    async def test_sets_lifecycle_rule(self) -> None:
+        manager, client, raw = make_manager()
+
+        result = await manager.ensure_incomplete_multipart_lifecycle(
+            "localcloud-files", days=7
+        )
+
+        assert result is True
+        # Вызван set_bucket_lifecycle с конфигом из одного правила abort.
+        client.execute.assert_awaited_once()
+        call = client.execute.await_args
+        assert call.args[0] is raw.set_bucket_lifecycle
+        assert call.args[1] == "localcloud-files"
+        config = call.args[2]
+        rule = config.rules[0]
+        assert rule.abort_incomplete_multipart_upload.days_after_initiation == 7
+
+    @pytest.mark.asyncio
+    async def test_zero_days_skips(self) -> None:
+        manager, client, raw = make_manager()
+
+        result = await manager.ensure_incomplete_multipart_lifecycle(
+            "localcloud-files", days=0
+        )
+
+        assert result is False
+        client.execute.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_storage_error_wrapped(self) -> None:
+        manager, client, raw = make_manager()
+        client.execute = AsyncMock(side_effect=StorageError("boom"))
+
+        with pytest.raises(StorageBucketError):
+            await manager.ensure_incomplete_multipart_lifecycle(
+                "localcloud-files", days=7
+            )

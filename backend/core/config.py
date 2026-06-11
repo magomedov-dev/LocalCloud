@@ -368,6 +368,13 @@ class StorageSettings(BaseSettings):
             от физической ёмкости диска, которую видит MinIO.
         storage_executor_max_workers: Размер пула потоков для блокирующего
             MinIO SDK.
+        minio_connect_timeout_seconds: Таймаут установки TCP-соединения с MinIO.
+        minio_read_timeout_seconds: Таймаут ожидания данных на каждое чтение
+            из сокета MinIO (не суммарное время передачи файла).
+        storage_startup_timeout_seconds: Потолок ожидания готовности хранилища
+            на старте приложения.
+        incomplete_multipart_expiry_days: Через сколько дней MinIO авто-абортит
+            незавершённые multipart-загрузки (0 — правило не ставится).
     """
 
     model_config = SettingsConfigDict(
@@ -408,6 +415,26 @@ class StorageSettings(BaseSettings):
         ge=1,
         le=64,
         alias="STORAGE_EXECUTOR_MAX_WORKERS",
+    )
+    minio_connect_timeout_seconds: float = Field(
+        default=STC.MINIO_CONNECT_TIMEOUT_SECONDS,
+        gt=0,
+        alias="MINIO_CONNECT_TIMEOUT_SECONDS",
+    )
+    minio_read_timeout_seconds: float = Field(
+        default=STC.MINIO_READ_TIMEOUT_SECONDS,
+        gt=0,
+        alias="MINIO_READ_TIMEOUT_SECONDS",
+    )
+    storage_startup_timeout_seconds: float = Field(
+        default=STC.STORAGE_STARTUP_TIMEOUT_SECONDS,
+        gt=0,
+        alias="STORAGE_STARTUP_TIMEOUT_SECONDS",
+    )
+    incomplete_multipart_expiry_days: int = Field(
+        default=STC.INCOMPLETE_MULTIPART_EXPIRY_DAYS,
+        ge=0,
+        alias="INCOMPLETE_MULTIPART_EXPIRY_DAYS",
     )
 
     @computed_field

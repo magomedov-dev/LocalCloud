@@ -1231,11 +1231,64 @@ async def test_complete_upload_storage_error_marks_failed():
 
 @pytest.mark.asyncio
 async def test_complete_upload_inactive_session_raises_upload_error():
+    """Сессия в нефинализируемом статусе (FAILED) не может быть завершена."""
+    user_id = uuid.uuid4()
+    session = make_session(user_id=user_id, status=UploadSessionStatus.FAILED)
+    sessions_repo = AsyncMock()
+    sessions_repo.get_required_session_by_id = AsyncMock(return_value=session)
+    uow = make_uow(upload_sessions=sessions_repo, upload_parts=AsyncMock())
+    service = make_service(uow)
+    data = make_complete_request(session.id, [make_part_complete(part_number=1)])
+    with pytest.raises(UploadServiceError):
+        await service.complete_upload(data, user_id=user_id)
+
+
+@pytest.mark.asyncio
+async def test_complete_upload_completed_session_is_idempotent():
+    """Повторный complete на COMPLETED-сессии возвращает прежний результат."""
+    user_id = uuid.uuid4()
+    session = make_session(user_id=user_id, status=UploadSessionStatus.COMPLETED)
+    existing_file = make_file_with_node()
+    sessions_repo = AsyncMock()
+    sessions_repo.get_required_session_by_id = AsyncMock(return_value=session)
+    files_repo = AsyncMock()
+    files_repo.get_by_storage_key = AsyncMock(return_value=existing_file)
+    # Эти репозитории НЕ должны вызываться на идемпотентном пути.
+    quotas = make_quotas()
+    uow = make_uow(
+        upload_sessions=sessions_repo,
+        upload_parts=AsyncMock(),
+        files=files_repo,
+        quotas=quotas,
+    )
+    storage = make_storage()
+    service = make_service(uow, storage=storage)
+    data = make_complete_request(session.id, [make_part_complete(part_number=1)])
+
+    result = await service.complete_upload(data, user_id=user_id)
+
+    assert result.file_id == existing_file.id
+    assert result.node_id == existing_file.node_id
+    # Ни повторного завершения в хранилище, ни нового файла, ни инкремента квоты.
+    storage.complete_multipart_upload.assert_not_called()
+    files_repo.create_file_with_node.assert_not_called()
+    quotas.increase_used_space.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_complete_upload_completed_but_file_missing_falls_through():
+    """COMPLETED без найденного файла идёт обычным путём и даёт ошибку статуса."""
     user_id = uuid.uuid4()
     session = make_session(user_id=user_id, status=UploadSessionStatus.COMPLETED)
     sessions_repo = AsyncMock()
     sessions_repo.get_required_session_by_id = AsyncMock(return_value=session)
-    uow = make_uow(upload_sessions=sessions_repo, upload_parts=AsyncMock())
+    files_repo = AsyncMock()
+    files_repo.get_by_storage_key = AsyncMock(return_value=None)
+    uow = make_uow(
+        upload_sessions=sessions_repo,
+        upload_parts=AsyncMock(),
+        files=files_repo,
+    )
     service = make_service(uow)
     data = make_complete_request(session.id, [make_part_complete(part_number=1)])
     with pytest.raises(UploadServiceError):

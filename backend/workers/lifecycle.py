@@ -81,6 +81,24 @@ async def shutdown_worker(context: WorkerContext | None) -> None:
     storage_error: BaseException | None = None
     db_error: BaseException | None = None
 
+    # Останавливаем пул потоков рендеров превью: иначе его потоки переживают
+    # завершение event loop, удерживая дескрипторы временных файлов, и процесс
+    # не завершается чисто. Импорт локальный — модуль previews тянет тяжёлые
+    # зависимости (PyMuPDF/Pillow), не нужные на пути запуска без рендеров.
+    try:
+        from workers.previews import shutdown_render_executor
+
+        shutdown_render_executor(wait=True)
+    except Exception as exc:
+        logger.warning(
+            "Ошибка при остановке пула рендеров превью.",
+            extra={
+                "worker_id": worker_id,
+                "error_type": exc.__class__.__name__,
+                "reason": str(exc),
+            },
+        )
+
     if context is not None:
         try:
             close_candidate: Any = getattr(context.storage_service, "close", None)
