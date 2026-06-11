@@ -413,6 +413,12 @@ class WorkerConstants:
     INTEGRITY_BATCH_SIZE: Final[int] = 100
     QUOTA_BATCH_SIZE: Final[int] = 100
 
+    # Параллелизм проверки целостности: verify_file_object — это I/O к MinIO
+    # (чтение + хеширование объекта), поэтому файлы проверяются пачкой
+    # одновременно вместо строго последовательного обхода. Бьётся об размер
+    # storage-пула потоков; 5 — разумный потолок на слабом хосте.
+    INTEGRITY_CONCURRENCY: Final[int] = 5
+
 
 class ServerConstants:
     """Константы обработки HTTP-запросов (backpressure и таймауты).

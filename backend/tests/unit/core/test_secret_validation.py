@@ -15,6 +15,7 @@ from core.secret_validation import (
     find_insecure_secrets,
     validate_secrets_or_raise,
     warn_if_cookies_insecure,
+    warn_if_db_pool_oversized,
 )
 
 _STRONG_SECRET = "a-strong-random-key-0123456789abcdef"
@@ -157,3 +158,63 @@ class TestWarnIfCookiesInsecure:
     def test_never_raises(self) -> None:
         # Это предупреждение, а не отказ старта — исключений быть не должно.
         warn_if_cookies_insecure(make_settings(debug=False, cookie_secure=False))
+
+
+class TestWarnIfDbPoolOversized:
+    def _settings(
+        self,
+        *,
+        pool: int,
+        overflow: int,
+        workers: int,
+        max_connections: int | None,
+    ) -> Settings:
+        return Settings(
+            app=ApplicationSettings(_env_file=None),
+            security=SecuritySettings(_env_file=None, SECRET_KEY=_STRONG_SECRET),
+            database=DatabaseSettings(
+                _env_file=None,
+                POSTGRES_PASSWORD=_STRONG_DB,
+                POSTGRES_POOL_SIZE=pool,
+                POSTGRES_MAX_OVERFLOW=overflow,
+                UVICORN_WORKERS=workers,
+                POSTGRES_MAX_CONNECTIONS=max_connections,
+            ),
+        )
+
+    def test_warns_when_pool_exceeds_limit(self, caplog) -> None:
+        import logging
+
+        # (4+1) × (10+5) = 75, +10 запас = 85 > 50.
+        settings = self._settings(
+            pool=10, overflow=5, workers=4, max_connections=50
+        )
+        with caplog.at_level(logging.WARNING):
+            warn_if_db_pool_oversized(settings)
+        assert any("пул БД" in r.message for r in caplog.records)
+
+    def test_no_warning_when_pool_fits(self, caplog) -> None:
+        import logging
+
+        # (1+1) × (5+5) = 20, +10 = 30 < 50.
+        settings = self._settings(
+            pool=5, overflow=5, workers=1, max_connections=50
+        )
+        with caplog.at_level(logging.WARNING):
+            warn_if_db_pool_oversized(settings)
+        assert not any("пул БД" in r.message for r in caplog.records)
+
+    def test_skips_when_max_connections_unset(self, caplog) -> None:
+        import logging
+
+        settings = self._settings(
+            pool=10, overflow=5, workers=8, max_connections=None
+        )
+        with caplog.at_level(logging.WARNING):
+            warn_if_db_pool_oversized(settings)
+        assert not any("пул БД" in r.message for r in caplog.records)
+
+    def test_never_raises(self) -> None:
+        warn_if_db_pool_oversized(
+            self._settings(pool=50, overflow=50, workers=16, max_connections=50)
+        )

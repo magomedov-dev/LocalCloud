@@ -16,6 +16,7 @@ from core.logging import (
 from core.secret_validation import (
     validate_secrets_or_raise,
     warn_if_cookies_insecure,
+    warn_if_db_pool_oversized,
 )
 from database import (
     close_db_client,
@@ -67,6 +68,7 @@ async def startup_backend(app: FastAPI) -> None:
         # явный отказ на старте, чем тихая компрометация.
         validate_secrets_or_raise(settings)
         warn_if_cookies_insecure(settings)
+        warn_if_db_pool_oversized(settings)
 
         if not is_db_client_initialized():
             init_db_client(settings.database)

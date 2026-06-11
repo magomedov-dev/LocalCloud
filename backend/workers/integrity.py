@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from typing import Any
 from uuid import UUID
@@ -58,50 +59,46 @@ async def check_storage_integrity_handler(
             limit=limit,
         )
 
+        # Фаза 1 — параллельная проверка объектов в хранилище. verify_file_object
+        # это I/O к MinIO (чтение + хеш), поэтому файлы проверяются пачкой под
+        # семафором, а не строго по одному (последовательный обход N файлов по
+        # ~100 мс давал бы линейную задержку батча).
+        semaphore = asyncio.Semaphore(
+            context.worker_settings.worker_integrity_concurrency
+        )
+
+        async def _verify(file_row: Any) -> tuple[Any, Any, Exception | None]:
+            async with semaphore:
+                try:
+                    report = await context.storage_service.verify_file_object(
+                        bucket=file_row.storage_bucket,
+                        object_key=file_row.storage_key,
+                        expected_size_bytes=int(file_row.size_bytes),
+                        expected_checksum=_expected_checksum(file_row),
+                        expected_checksum_algorithm=(
+                            _expected_checksum_algorithm(file_row)
+                        ),
+                    )
+                    return file_row, report, None
+                except Exception as exc:  # noqa: BLE001 — ошибка обрабатывается ниже
+                    return file_row, None, exc
+
+        verifications = await asyncio.gather(
+            *(_verify(file_row) for file_row in files)
+        )
+
+        # Фаза 2 — последовательная обработка результатов: DB-записи статусов и
+        # агрегация счётчиков идут по одному (общий UoW не должен использоваться
+        # конкурентно), но они быстрые по сравнению с фазой проверки.
         checked_count = 0
         missing_count = 0
         corrupted_count = 0
         failed_count = 0
         problems: list[dict[str, Any]] = []
 
-        for file_row in files:
+        for file_row, report, error in verifications:
             checked_count += 1
-            try:
-                report = await context.storage_service.verify_file_object(
-                    bucket=file_row.storage_bucket,
-                    object_key=file_row.storage_key,
-                    expected_size_bytes=int(file_row.size_bytes),
-                    expected_checksum=_expected_checksum(file_row),
-                    expected_checksum_algorithm=_expected_checksum_algorithm(file_row),
-                )
-
-                if report.object_exists is False:
-                    await _mark_missing(context, file_row.id)
-                    missing_count += 1
-                    problems.append(
-                        _problem_payload(
-                            file_id=file_row.id,
-                            bucket=file_row.storage_bucket,
-                            object_key=file_row.storage_key,
-                            problem_type=StorageIntegrityProblemType.OBJECT_NOT_FOUND,
-                            message="Объект отсутствует в объектном хранилище.",
-                        )
-                    )
-                    continue
-
-                if _has_corruption_problem(report):
-                    await _mark_corrupted(context, file_row.id)
-                    corrupted_count += 1
-                    problems.append(
-                        _problem_payload(
-                            file_id=file_row.id,
-                            bucket=file_row.storage_bucket,
-                            object_key=file_row.storage_key,
-                            problem_type=_first_corruption_type(report),
-                            message="Найдены несоответствия размера или контрольной суммы.",
-                        )
-                    )
-            except Exception as exc:
+            if error is not None:
                 failed_count += 1
                 problems.append(
                     _problem_payload(
@@ -111,9 +108,37 @@ async def check_storage_integrity_handler(
                         problem_type=None,
                         message="Ошибка проверки целостности файла.",
                         details={
-                            "reason": str(exc),
-                            "error_type": exc.__class__.__name__,
+                            "reason": str(error),
+                            "error_type": error.__class__.__name__,
                         },
+                    )
+                )
+                continue
+
+            if report.object_exists is False:
+                await _mark_missing(context, file_row.id)
+                missing_count += 1
+                problems.append(
+                    _problem_payload(
+                        file_id=file_row.id,
+                        bucket=file_row.storage_bucket,
+                        object_key=file_row.storage_key,
+                        problem_type=StorageIntegrityProblemType.OBJECT_NOT_FOUND,
+                        message="Объект отсутствует в объектном хранилище.",
+                    )
+                )
+                continue
+
+            if _has_corruption_problem(report):
+                await _mark_corrupted(context, file_row.id)
+                corrupted_count += 1
+                problems.append(
+                    _problem_payload(
+                        file_id=file_row.id,
+                        bucket=file_row.storage_bucket,
+                        object_key=file_row.storage_key,
+                        problem_type=_first_corruption_type(report),
+                        message="Найдены несоответствия размера или контрольной суммы.",
                     )
                 )
 

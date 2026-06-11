@@ -281,6 +281,10 @@ class DatabaseSettings(BaseSettings):
         postgres_pool_recycle: Время переработки подключения в секундах.
         postgres_pool_pre_ping: Признак проверки подключения перед
             использованием.
+        postgres_max_connections: Лимит подключений сервера Postgres (для
+            валидации согласованности пула на старте; само подключение не
+            использует).
+        uvicorn_workers: Число процессов uvicorn (для той же валидации).
         database_url: SQLAlchemy URL для подключения к PostgreSQL.
     """
 
@@ -319,6 +323,20 @@ class DatabaseSettings(BaseSettings):
     postgres_pool_pre_ping: bool = Field(
         default=DTC.POSTGRES_POOL_PRE_PING,
         alias="POSTGRES_POOL_PRE_PING",
+    )
+    # Поля только для валидации согласованности пула на старте (см.
+    # core.secret_validation.warn_if_db_pool_oversized). Само подключение их не
+    # использует: max_connections — настройка сервера Postgres, uvicorn_workers —
+    # параметр запуска API. Читаются из тех же env, что и docker-compose.
+    postgres_max_connections: int | None = Field(
+        default=None,
+        ge=1,
+        alias="POSTGRES_MAX_CONNECTIONS",
+    )
+    uvicorn_workers: int = Field(
+        default=1,
+        ge=1,
+        alias="UVICORN_WORKERS",
     )
 
     @computed_field
@@ -530,6 +548,8 @@ class WorkerSettings(BaseSettings):
             целостности хранилища в секундах.
         worker_cleanup_batch_size: Размер batch-а для задач очистки.
         worker_integrity_batch_size: Размер batch-а для проверки целостности.
+        worker_integrity_concurrency: Число одновременных проверок объектов
+            в batch-е проверки целостности.
         worker_quota_batch_size: Размер batch-а для пересчета квот.
     """
 
@@ -609,6 +629,12 @@ class WorkerSettings(BaseSettings):
     worker_integrity_batch_size: int = Field(
         default=WRC.INTEGRITY_BATCH_SIZE,
         alias="WORKER_INTEGRITY_BATCH_SIZE",
+    )
+    worker_integrity_concurrency: int = Field(
+        default=WRC.INTEGRITY_CONCURRENCY,
+        ge=1,
+        le=64,
+        alias="WORKER_INTEGRITY_CONCURRENCY",
     )
     worker_quota_batch_size: int = Field(
         default=WRC.QUOTA_BATCH_SIZE,

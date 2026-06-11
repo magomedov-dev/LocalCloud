@@ -77,6 +77,39 @@ class TestRunDueSchedules:
         result = await scheduler.run_due_schedules()
         assert result == 0
 
+    @pytest.mark.asyncio
+    async def test_second_run_in_same_slot_skips_db(self) -> None:
+        # После создания задач в первом запуске повторный тик в том же слоте
+        # не должен ходить в БД (кэш обработанных слотов).
+        context, mock_uow = make_mock_context(scheduler_enabled=True)
+        scheduler = WorkerScheduler(context)
+
+        first = await scheduler.run_due_schedules()
+        assert first == 5
+        lookups_after_first = mock_uow.tasks.get_by_idempotency_key.await_count
+
+        second = await scheduler.run_due_schedules()
+        assert second == 0
+        # Ни одного нового обращения к БД во втором запуске.
+        assert mock_uow.tasks.get_by_idempotency_key.await_count == lookups_after_first
+        assert mock_uow.tasks.create_task.await_count == 5  # не пересоздаём
+
+    @pytest.mark.asyncio
+    async def test_existing_task_slot_cached_after_first_lookup(self) -> None:
+        # Если задачу уже создал другой воркер: первый тик делает SELECT и
+        # кэширует слот, повторный тик в БД не ходит.
+        context, mock_uow = make_mock_context(scheduler_enabled=True)
+        mock_uow.tasks.get_by_idempotency_key = AsyncMock(return_value=MagicMock())
+        scheduler = WorkerScheduler(context)
+
+        await scheduler.run_due_schedules()
+        lookups = mock_uow.tasks.get_by_idempotency_key.await_count
+        assert lookups == 5
+
+        await scheduler.run_due_schedules()
+        # Слоты закэшированы — повторных SELECT'ов нет.
+        assert mock_uow.tasks.get_by_idempotency_key.await_count == lookups
+
 
 # ---------------------------------------------------------------------------
 # Отдельные методы планирования — задача уже существует

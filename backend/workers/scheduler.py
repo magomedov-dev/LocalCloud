@@ -57,6 +57,12 @@ class WorkerScheduler:
         """
 
         self.context = context
+        # Кэш последнего обработанного временного слота на каждое расписание.
+        # Планировщик опрашивается каждый worker-тик (секунды), а слоты длятся
+        # часы/сутки — без кэша каждый тик делал бы лишний SELECT по
+        # idempotency_key. Запомнив обработанный слот, в его пределах вообще не
+        # ходим в БД. На рестарте кэш пуст → один SELECT на слот, дальше тихо.
+        self._handled_slots: dict[str, datetime] = {}
 
     async def run_due_schedules(self) -> int:
         """Создаёт задачи для всех активных расписаний.
@@ -186,6 +192,11 @@ class WorkerScheduler:
 
         now = datetime.now(UTC)
         scheduled_at = _floor_to_interval(now, spec.interval_seconds)
+
+        # Этот слот уже обработан в текущем процессе — не ходим в БД повторно.
+        if self._handled_slots.get(spec.key_prefix) == scheduled_at:
+            return 0
+
         idempotency_key = f"{spec.key_prefix}:{scheduled_at.strftime(spec.key_format)}"
 
         payload: dict[str, Any] = {
@@ -196,6 +207,9 @@ class WorkerScheduler:
         async with self.context.uow_factory() as uow:
             existing = await uow.tasks.get_by_idempotency_key(idempotency_key)
             if existing is not None:
+                # Слот закрыт (задачу создал другой воркер) — запоминаем, чтобы
+                # больше не опрашивать БД до следующего слота.
+                self._handled_slots[spec.key_prefix] = scheduled_at
                 return 0
 
             task = await uow.tasks.create_task(
@@ -224,6 +238,9 @@ class WorkerScheduler:
 
             await uow.flush()
             await uow.commit()
+
+        # Слот обработан этим процессом — дальнейшие тики в его пределах пропускаем.
+        self._handled_slots[spec.key_prefix] = scheduled_at
 
         logger.info(
             "Создана системная фоновая задача scheduler",

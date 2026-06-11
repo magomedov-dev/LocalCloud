@@ -82,6 +82,7 @@ def make_ctx(payload=None, *, uow=None, batch_size=100):
     ctx.settings = MagicMock()
     ctx.worker_settings = MagicMock()
     ctx.worker_settings.worker_integrity_batch_size = batch_size
+    ctx.worker_settings.worker_integrity_concurrency = 5
 
     uow = uow or make_uow()
     ctx.uow_factory = MagicMock(return_value=uow)

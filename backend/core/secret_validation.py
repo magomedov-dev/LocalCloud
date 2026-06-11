@@ -161,3 +161,60 @@ def warn_if_cookies_insecure(settings: Settings) -> None:
         "иначе сессию можно перехватить. Допустимо только в доверённой сети "
         "без TLS. Пример TLS-конфигурации: nginx/nginx-tls.conf.example."
     )
+
+
+# Запас подключений сверх пула приложения: миграции, seed администратора,
+# psql-сессии администратора, мониторинг.
+_DB_CONNECTION_HEADROOM = 10
+
+
+def warn_if_db_pool_oversized(settings: Settings) -> None:
+    """Предупреждает, если суммарный пул БД может превысить лимит Postgres.
+
+    Каждый процесс (uvicorn-воркеры + 1 worker-процесс) держит до
+    ``pool_size + max_overflow`` подключений. Если их сумма с запасом превышает
+    ``max_connections`` сервера Postgres, под нагрузкой приложение упрётся в
+    лимит и начнёт отдавать 503/таймауты пула. Это типичный footgun при
+    повышении ``UVICORN_WORKERS`` без согласованной правки пула/лимита.
+
+    Предупреждение, а не отказ: расчёт приблизительный (worker-процесс может
+    быть отключён, запас зависит от среды), а ``POSTGRES_MAX_CONNECTIONS`` в
+    настройках приложения может быть не задан (тогда проверка пропускается).
+
+    Args:
+        settings: Настройки приложения.
+    """
+
+    db = settings.database
+    max_connections = db.postgres_max_connections
+    # Пропускаем, если лимит не задан или значения не числовые (в реальных
+    # Settings всегда int; не-int встречается лишь в тестовых mock'ах).
+    if not isinstance(max_connections, int) or isinstance(max_connections, bool):
+        return
+    if not all(
+        isinstance(v, int)
+        for v in (db.postgres_pool_size, db.postgres_max_overflow, db.uvicorn_workers)
+    ):
+        return
+
+    per_process = db.postgres_pool_size + db.postgres_max_overflow
+    # +1 процесс — фоновый worker, который держит собственный пул.
+    process_count = db.uvicorn_workers + 1
+    required = per_process * process_count
+
+    if required + _DB_CONNECTION_HEADROOM > max_connections:
+        from core.logging import get_logger
+
+        get_logger("core.secret_validation").warning(
+            "Суммарный пул БД может превысить лимит Postgres: "
+            "(UVICORN_WORKERS=%d + 1 worker) × (POOL_SIZE=%d + MAX_OVERFLOW=%d) "
+            "= %d подключений, запас %d, лимит POSTGRES_MAX_CONNECTIONS=%d. "
+            "Под нагрузкой возможны таймауты пула и 503. Уменьшите пул/число "
+            "воркеров или повысьте POSTGRES_MAX_CONNECTIONS.",
+            db.uvicorn_workers,
+            db.postgres_pool_size,
+            db.postgres_max_overflow,
+            required,
+            _DB_CONNECTION_HEADROOM,
+            max_connections,
+        )
