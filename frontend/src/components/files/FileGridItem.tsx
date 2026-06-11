@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Link2, Users } from "lucide-react";
 import { FileIcon } from "./FileIcon";
@@ -89,8 +89,11 @@ function formatDate(iso: string): string {
  *
  * Поддерживает выбор, двойной клик для открытия папки или предпросмотра файла,
  * drag-and-drop перемещение в папку и предзагрузку содержимого папки при наведении.
+ *
+ * Обёрнут в `React.memo`: обновление миниатюр или выбора перерисовывает
+ * только затронутые карточки, а не все элементы сетки.
  */
-export function FileGridItem({
+function FileGridItemComponent({
   item,
   mimeType,
   sizeBytes,
@@ -316,3 +319,5 @@ export function FileGridItem({
     </>
   );
 }
+
+export const FileGridItem = memo(FileGridItemComponent);

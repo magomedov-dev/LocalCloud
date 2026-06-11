@@ -175,45 +175,53 @@ export function FilesPage() {
     [uploadFolder, parentNodeId, folderQueryKey],
   );
 
-  function handleSelectItem(item: NodeListItem, opts: SelectOpts) {
-    const filteredSorted = sortItems(applyFilter(data?.items ?? [], filter));
+  const handleDeselect = useCallback(() => setSelectedIds(new Set()), []);
 
-    if (opts.shift && lastSelectedIdRef.current) {
-      const anchorIdx = filteredSorted.findIndex((i) => i.id === lastSelectedIdRef.current);
-      const clickIdx = filteredSorted.findIndex((i) => i.id === item.id);
-      if (anchorIdx !== -1 && clickIdx !== -1) {
-        const [lo, hi] = anchorIdx < clickIdx ? [anchorIdx, clickIdx] : [clickIdx, anchorIdx];
-        const rangeIds = filteredSorted.slice(lo, hi + 1).map((i) => i.id);
+  // useCallback: стабильная ссылка нужна React.memo элементов списка — иначе
+  // каждый рендер страницы пересоздавал бы обработчик и перерисовывал все
+  // карточки. Пересоздаётся только при смене данных/фильтра/инфо-панели.
+  const handleSelectItem = useCallback(
+    (item: NodeListItem, opts: SelectOpts) => {
+      const filteredSorted = sortItems(applyFilter(data?.items ?? [], filter));
+
+      if (opts.shift && lastSelectedIdRef.current) {
+        const anchorIdx = filteredSorted.findIndex((i) => i.id === lastSelectedIdRef.current);
+        const clickIdx = filteredSorted.findIndex((i) => i.id === item.id);
+        if (anchorIdx !== -1 && clickIdx !== -1) {
+          const [lo, hi] = anchorIdx < clickIdx ? [anchorIdx, clickIdx] : [clickIdx, anchorIdx];
+          const rangeIds = filteredSorted.slice(lo, hi + 1).map((i) => i.id);
+          setSelectedIds((prev) => {
+            const next = new Set(prev);
+            for (const id of rangeIds) next.add(id);
+            return next;
+          });
+        }
+        return;
+      }
+
+      if (opts.ctrl) {
         setSelectedIds((prev) => {
           const next = new Set(prev);
-          for (const id of rangeIds) next.add(id);
+          if (next.has(item.id)) {
+            next.delete(item.id);
+          } else {
+            next.add(item.id);
+            lastSelectedIdRef.current = item.id;
+          }
           return next;
         });
+        return;
       }
-      return;
-    }
 
-    if (opts.ctrl) {
-      setSelectedIds((prev) => {
-        const next = new Set(prev);
-        if (next.has(item.id)) {
-          next.delete(item.id);
-        } else {
-          next.add(item.id);
-          lastSelectedIdRef.current = item.id;
-        }
-        return next;
-      });
-      return;
-    }
-
-    // Plain click — single select
-    lastSelectedIdRef.current = item.id;
-    setSelectedIds(new Set([item.id]));
-    if (infoPanelItem !== null) {
-      openInfo(item);
-    }
-  }
+      // Plain click — single select
+      lastSelectedIdRef.current = item.id;
+      setSelectedIds(new Set([item.id]));
+      if (infoPanelItem !== null) {
+        openInfo(item);
+      }
+    },
+    [data?.items, filter, infoPanelItem, openInfo],
+  );
 
   const handleDrop = useCallback(
     async (draggedId: string, targetFolderId: string) => {
@@ -352,13 +360,13 @@ export function FilesPage() {
         <FileMultiActionBar
           items={selectedItems}
           folderQueryKey={folderQueryKey}
-          onDeselect={() => setSelectedIds(new Set())}
+          onDeselect={handleDeselect}
         />
       ) : singleSelected ? (
         <FileActionBar
           item={singleSelected}
           folderQueryKey={folderQueryKey}
-          onDeselect={() => setSelectedIds(new Set())}
+          onDeselect={handleDeselect}
         />
       ) : (
         <FileFilterBar active={filter} onChange={setFilter} />
@@ -376,7 +384,7 @@ export function FilesPage() {
                 view={view}
                 selectedIds={selectedIds}
                 onSelectItem={handleSelectItem}
-                onDeselect={() => setSelectedIds(new Set())}
+                onDeselect={handleDeselect}
                 onDrop={handleDrop}
                 hasNextPage={hasNextPage}
                 isFetchingNextPage={isFetchingNextPage}

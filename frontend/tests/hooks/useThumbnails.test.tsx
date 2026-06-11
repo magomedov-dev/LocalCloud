@@ -167,6 +167,28 @@ describe("useThumbnails", () => {
     expect(batch).toHaveBeenCalledWith(["book"], expect.anything());
   });
 
+  it("fetches only uncached ids when the item set grows (pagination)", async () => {
+    batch.mockResolvedValueOnce({
+      a: { status: "ready", url: "https://x/a.png" },
+    } as never);
+    const { result, rerender } = renderHook(
+      ({ items }: { items: NodeListItem[] }) => useThumbnails(items),
+      { wrapper: wrapper(), initialProps: { items: [imageNode("a")] } },
+    );
+    await waitFor(() => expect(result.current.get("a")).toBe("https://x/a.png"));
+
+    // Подгрузилась следующая страница: "a" уже в кэше, запрашивается только "b".
+    batch.mockResolvedValueOnce({
+      b: { status: "ready", url: "https://x/b.png" },
+    } as never);
+    rerender({ items: [imageNode("a"), imageNode("b")] });
+
+    await waitFor(() => expect(result.current.get("b")).toBe("https://x/b.png"));
+    expect(batch).toHaveBeenCalledTimes(2);
+    expect(batch).toHaveBeenLastCalledWith(["b"], expect.anything());
+    expect(result.current.get("a")).toBe("https://x/a.png");
+  });
+
   it("chunks more than 100 ids into separate batch requests of <=100", async () => {
     batch.mockImplementation((ids: string[]) =>
       Promise.resolve(

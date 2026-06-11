@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { publicLinksApi } from "@/api/public-links";
 import { permissionsApi } from "@/api/permissions";
@@ -39,8 +40,6 @@ export const ACTIVE_LINKS_QUERY_KEY = ["public-links", "all-active"] as const;
  *   Map вида `nodeId -> ShareBadge`.
  */
 export function useShareBadges(items: NodeListItem[]): Map<string, ShareBadge> {
-  const nodeIds = new Set(items.map((i) => i.id));
-
   // Узлы с активной публичной ссылкой — один лёгкий DISTINCT-запрос, кэшируется
   // на сессию (refetchOnMount: false), а не выгрузка всех объектов ссылок.
   const { data: publicLinkNodeIds } = useQuery({
@@ -51,7 +50,6 @@ export function useShareBadges(items: NodeListItem[]): Map<string, ShareBadge> {
     refetchOnWindowFocus: false,
     refetchOnMount: false,
   });
-  const publicLinkSet = new Set(publicLinkNodeIds ?? []);
 
   // Узлы, к которым текущий пользователь выдал доступ другим пользователям.
   const { data: sharedByMe } = useQuery({
@@ -62,20 +60,26 @@ export function useShareBadges(items: NodeListItem[]): Map<string, ShareBadge> {
     refetchOnWindowFocus: false,
     refetchOnMount: false,
   });
-  const sharedSet = new Set(sharedByMe ?? []);
 
-  const map = new Map<string, ShareBadge>();
-  const ensure = (id: string): ShareBadge => {
-    let badge = map.get(id);
-    if (!badge) {
-      badge = { hasPublicLink: false, hasSharedAccess: false };
-      map.set(id, badge);
+  // useMemo: badge-объекты должны сохранять идентичность между рендерами,
+  // иначе React.memo элементов списка перерисовывал бы их на каждом рендере.
+  return useMemo(() => {
+    const publicLinkSet = new Set(publicLinkNodeIds ?? []);
+    const sharedSet = new Set(sharedByMe ?? []);
+
+    const map = new Map<string, ShareBadge>();
+    const ensure = (id: string): ShareBadge => {
+      let badge = map.get(id);
+      if (!badge) {
+        badge = { hasPublicLink: false, hasSharedAccess: false };
+        map.set(id, badge);
+      }
+      return badge;
+    };
+    for (const item of items) {
+      if (publicLinkSet.has(item.id)) ensure(item.id).hasPublicLink = true;
+      if (sharedSet.has(item.id)) ensure(item.id).hasSharedAccess = true;
     }
-    return badge;
-  };
-  for (const id of nodeIds) {
-    if (publicLinkSet.has(id)) ensure(id).hasPublicLink = true;
-    if (sharedSet.has(id)) ensure(id).hasSharedAccess = true;
-  }
-  return map;
+    return map;
+  }, [items, publicLinkNodeIds, sharedByMe]);
 }

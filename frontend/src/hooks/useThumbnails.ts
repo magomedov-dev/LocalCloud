@@ -1,4 +1,5 @@
 import type { Query } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { nodesApi } from "@/api/nodes";
 import { getThumbnailCache, setThumbnailCache } from "@/lib/thumbnailCache";
@@ -27,7 +28,31 @@ function chunk<T>(items: T[], size: number): T[][] {
 }
 
 /**
+ * Стабильный короткий ключ для набора идентификаторов (FNV-1a).
+ *
+ * Используется в query key вместо `ids.join(",")`: сотня UUID дала бы ключ в
+ * несколько килобайт, который к тому же менялся бы при каждом разрешении
+ * миниатюры. Хэш зависит только от состава списка элементов.
+ */
+function hashIds(ids: string[]): string {
+  const s = ids.join(",");
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return `${(h >>> 0).toString(36)}:${ids.length}`;
+}
+
+/**
  * Загружает состояние миниатюр для preview-элементов одним batch-запросом.
+ *
+ * Query key стабилен для текущего набора элементов списка (хэш всех id) и не
+ * зависит от того, какие миниатюры уже разрешились: разрешение части превью
+ * не пересоздаёт запрос и не сбрасывает счётчик опроса. Набор id для запроса
+ * вычисляется в момент фетча — каждый повторный опрос запрашивает только ещё
+ * не известные узлы. Изменение списка (навигация, подгрузка страницы) меняет
+ * ключ и сразу догружает миниатюры новых элементов.
  *
  * Сервер различает три исхода, и оба терминальных кэшируются (в React Query и
  * `sessionStorage`):
@@ -57,8 +82,12 @@ export function useThumbnails(
 ): Map<string, string | null> {
   const qc = useQueryClient();
 
-  const previewItems = items.filter(
-    (i) => i.node_type === "file" && thumbnailSupported(i.file_mime_type),
+  const previewItems = useMemo(
+    () =>
+      items.filter(
+        (i) => i.node_type === "file" && thumbnailSupported(i.file_mime_type),
+      ),
+    [items],
   );
 
   // Терминальное значение из кэша: string — готовый URL, null — миниатюры не
@@ -69,16 +98,30 @@ export function useThumbnails(
     return getThumbnailCache(id);
   };
 
+  // Неизвестные id вычисляются на каждый рендер (кэш — внешнее изменяемое
+  // состояние), но используются только для флага enabled и итоговой map;
+  // в query key они не входят.
   const pendingIds = enabled
     ? previewItems.map((i) => i.id).filter((id) => cachedValue(id) === undefined)
     : [];
 
+  const itemsKey = useMemo(
+    () => hashIds(previewItems.map((i) => i.id)),
+    [previewItems],
+  );
+
   const { data: batch } = useQuery({
-    queryKey: ["thumbnails-batch", pendingIds.join(",")],
+    queryKey: ["thumbnails-batch", itemsKey],
     queryFn: async ({ signal }) => {
+      // Набор id определяется в момент запроса: повторный опрос (поллинг)
+      // запрашивает только то, что ещё не разрешилось в ready/none.
+      const ids = previewItems
+        .map((i) => i.id)
+        .filter((id) => cachedValue(id) === undefined);
+      if (ids.length === 0) return {} as BatchResult;
       // Режем на части по серверному лимиту и собираем результат воедино.
       const parts = await Promise.all(
-        chunk(pendingIds, BATCH_LIMIT).map((ids) => nodesApi.thumbnailsBatch(ids, signal)),
+        chunk(ids, BATCH_LIMIT).map((part) => nodesApi.thumbnailsBatch(part, signal)),
       );
       const result: BatchResult = Object.assign({}, ...parts);
       for (const [id, item] of Object.entries(result)) {
@@ -91,7 +134,7 @@ export function useThumbnails(
           qc.setQueryData(["thumbnail", id], null);
           setThumbnailCache(id, null);
         }
-        // pending не кэшируем — узел останется в pendingIds и будет опрошен.
+        // pending не кэшируем — узел будет запрошен следующим опросом.
       }
       return result;
     },
@@ -102,7 +145,8 @@ export function useThumbnails(
     refetchIntervalInBackground: false,
     // Опрашиваем, пока сервер сообщает о генерирующихся превью (pending), с
     // экспоненциальной задержкой и не дольше MAX_POLLS попыток — защита от
-    // зависших в генерации файлов.
+    // зависших в генерации файлов. Ключ стабилен, поэтому счётчик опроса не
+    // сбрасывается при разрешении части миниатюр.
     refetchInterval: (query: Query<BatchResult>) => {
       const data = query.state.data;
       if (!data) return false;

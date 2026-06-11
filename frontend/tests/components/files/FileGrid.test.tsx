@@ -179,3 +179,63 @@ describe("FileGrid", () => {
     expect(screen.queryByRole("button", { name: "Показать ещё" })).not.toBeInTheDocument();
   });
 });
+
+describe("FileGrid virtualization", () => {
+  function makeMany(count: number): NodeListItem[] {
+    return Array.from({ length: count }, (_, i) =>
+      makeItem({ id: `n${i}`, name: `file-${String(i).padStart(4, "0")}` }),
+    );
+  }
+
+  it("renders only a window of rows for large grids", () => {
+    renderWithProviders(
+      <FileGrid {...baseProps} items={makeMany(500)} view="grid" />,
+    );
+    const rendered = screen.getAllByTestId("grid-item");
+    // Виртуализация: в DOM только видимое окно + overscan, а не все 500.
+    expect(rendered.length).toBeGreaterThan(0);
+    expect(rendered.length).toBeLessThan(100);
+  });
+
+  it("renders only a window of rows for large lists", () => {
+    renderWithProviders(
+      <FileGrid {...baseProps} items={makeMany(500)} view="list" />,
+    );
+    const rendered = screen.getAllByTestId("list-item");
+    expect(rendered.length).toBeGreaterThan(0);
+    expect(rendered.length).toBeLessThan(100);
+    // Заголовок таблицы остаётся над виртуализированным списком.
+    expect(screen.getByText("Название")).toBeInTheDocument();
+  });
+
+  it("keeps sort order in the virtualized window", () => {
+    const items = [
+      ...makeMany(100),
+      makeItem({ id: "zf", name: "afolder", node_type: "folder" }),
+    ];
+    renderWithProviders(<FileGrid {...baseProps} items={items} view="grid" />);
+    const rendered = screen.getAllByTestId("grid-item");
+    // Папки сортируются перед файлами и попадают в первое окно.
+    expect(rendered[0]).toHaveTextContent("afolder");
+  });
+
+  it("renders all items below the virtualization threshold", () => {
+    renderWithProviders(
+      <FileGrid {...baseProps} items={makeMany(50)} view="grid" />,
+    );
+    expect(screen.getAllByTestId("grid-item")).toHaveLength(50);
+  });
+
+  it("still renders load-more footer with virtualization", () => {
+    renderWithProviders(
+      <FileGrid
+        {...baseProps}
+        items={makeMany(200)}
+        view="grid"
+        hasNextPage
+        onLoadMore={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Показать ещё" })).toBeInTheDocument();
+  });
+});

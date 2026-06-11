@@ -560,3 +560,153 @@ class TestRetryBackoff:
         delay = (values["scheduled_at"] - before).total_seconds()
         # attempts_count=3 → 60 * 2^2 = 240 c.
         assert 235 <= delay <= 250
+
+
+# ---------------------------------------------------------------------------
+# process_task — финализация провала задачи превью
+# ---------------------------------------------------------------------------
+
+class TestFinalizeTerminalFailure:
+    @pytest.mark.asyncio
+    async def test_failed_preview_task_finalizes_file_status(self, monkeypatch) -> None:
+        """Финальный провал задачи превью помечает превью файла FAILED."""
+        from workers import dispatcher as dispatcher_module
+
+        finalize = AsyncMock(return_value=True)
+        monkeypatch.setattr(
+            dispatcher_module, "finalize_failed_preview_task", finalize
+        )
+
+        ctx, uow = make_context()
+        payload = {"file_id": str(uuid.uuid4())}
+        task = make_task(task_type=BackgroundTaskType.GENERATE_FILE_PREVIEW)
+        task.payload = payload
+
+        registry = make_registry()
+
+        async def failing_handler(context):
+            return WorkerTaskExecutionResult(
+                success=False,
+                progress_percent=0,
+                result_data=None,
+                error_message="storage down",
+                error_code="storage_error",
+                retry=False,
+            )
+
+        registry.register(BackgroundTaskType.GENERATE_FILE_PREVIEW, failing_handler)
+        dispatcher = WorkerDispatcher(context=ctx, registry=registry)
+
+        outcome = await dispatcher.process_task(task)
+
+        assert outcome == "failed"
+        finalize.assert_awaited_once_with(
+            uow_factory=ctx.uow_factory, payload=payload
+        )
+
+    @pytest.mark.asyncio
+    async def test_retry_exhausted_preview_task_finalizes(self, monkeypatch) -> None:
+        """Исчерпание попыток retry тоже приводит к финализации статуса файла."""
+        from workers import dispatcher as dispatcher_module
+
+        finalize = AsyncMock(return_value=True)
+        monkeypatch.setattr(
+            dispatcher_module, "finalize_failed_preview_task", finalize
+        )
+
+        ctx, uow = make_context()
+        task = make_task(
+            task_type=BackgroundTaskType.GENERATE_FILE_PREVIEW,
+            attempts=3,
+            max_attempts=3,
+        )
+
+        registry = make_registry()
+
+        async def retrying_handler(context):
+            return WorkerTaskExecutionResult(
+                success=False,
+                progress_percent=0,
+                result_data=None,
+                error_message="temporary",
+                error_code="temporary_unavailable",
+                retry=True,
+            )
+
+        registry.register(BackgroundTaskType.GENERATE_FILE_PREVIEW, retrying_handler)
+        dispatcher = WorkerDispatcher(context=ctx, registry=registry)
+
+        outcome = await dispatcher.process_task(task)
+
+        assert outcome == "failed"
+        finalize.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_retried_preview_task_not_finalized(self, monkeypatch) -> None:
+        """Пока остаются попытки, файл не помечается FAILED."""
+        from workers import dispatcher as dispatcher_module
+
+        finalize = AsyncMock(return_value=True)
+        monkeypatch.setattr(
+            dispatcher_module, "finalize_failed_preview_task", finalize
+        )
+
+        ctx, uow = make_context()
+        task = make_task(
+            task_type=BackgroundTaskType.GENERATE_FILE_PREVIEW,
+            attempts=1,
+            max_attempts=3,
+        )
+
+        registry = make_registry()
+
+        async def retrying_handler(context):
+            return WorkerTaskExecutionResult(
+                success=False,
+                progress_percent=0,
+                result_data=None,
+                error_message="temporary",
+                error_code="temporary_unavailable",
+                retry=True,
+            )
+
+        registry.register(BackgroundTaskType.GENERATE_FILE_PREVIEW, retrying_handler)
+        dispatcher = WorkerDispatcher(context=ctx, registry=registry)
+
+        outcome = await dispatcher.process_task(task)
+
+        assert outcome == "retried"
+        finalize.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_failed_non_preview_task_not_finalized(self, monkeypatch) -> None:
+        """Провал задач других типов не трогает превью."""
+        from workers import dispatcher as dispatcher_module
+
+        finalize = AsyncMock(return_value=True)
+        monkeypatch.setattr(
+            dispatcher_module, "finalize_failed_preview_task", finalize
+        )
+
+        ctx, uow = make_context()
+        task = make_task(task_type=BackgroundTaskType.CLEAN_TRASH)
+
+        registry = make_registry()
+
+        async def failing_handler(context):
+            return WorkerTaskExecutionResult(
+                success=False,
+                progress_percent=0,
+                result_data=None,
+                error_message="boom",
+                error_code="error",
+                retry=False,
+            )
+
+        registry.register(BackgroundTaskType.CLEAN_TRASH, failing_handler)
+        dispatcher = WorkerDispatcher(context=ctx, registry=registry)
+
+        outcome = await dispatcher.process_task(task)
+
+        assert outcome == "failed"
+        finalize.assert_not_awaited()

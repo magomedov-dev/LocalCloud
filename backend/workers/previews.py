@@ -5,6 +5,7 @@ import io
 import os
 import subprocess
 import tempfile
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
 from uuid import UUID
@@ -430,6 +431,71 @@ async def generate_file_preview_handler(
             retry=False,
             progress_percent=0,
         )
+
+
+async def finalize_failed_preview_task(
+    *,
+    uow_factory: Any,
+    payload: Mapping[str, Any],
+) -> bool:
+    """Помечает превью файла FAILED после финального провала задачи генерации.
+
+    Вызывается диспетчером, когда задача ``GENERATE_FILE_PREVIEW`` исчерпала
+    попытки или завершилась невосстановимой ошибкой, не успев обновить статус
+    файла. Без этого файл навсегда остаётся в ``PENDING``/``GENERATING``, и
+    клиенты бесконечно опрашивают его миниатюру. Терминальные статусы
+    (``READY``, ``NOT_REQUIRED``), выставленные ветками самого обработчика,
+    не перезаписываются.
+
+    Метод best-effort: любые ошибки логируются и не пробрасываются — доводка
+    статуса не должна влиять на обработку остальных задач.
+
+    Args:
+        uow_factory: Фабрика UnitOfWork.
+        payload: Payload провалившейся задачи (ожидается поле ``file_id``).
+
+    Returns:
+        ``True``, если статус файла переведён в ``FAILED``, иначе ``False``.
+    """
+
+    raw_file_id = payload.get("file_id")
+    try:
+        file_id = raw_file_id if isinstance(raw_file_id, UUID) else UUID(str(raw_file_id))
+    except (TypeError, ValueError):
+        logger.warning(
+            "finalize_failed_preview_task: некорректный file_id в payload",
+            extra={"file_id": repr(raw_file_id)},
+        )
+        return False
+
+    try:
+        async with uow_factory() as uow:
+            file_row = await uow.files.get_by_id(file_id)
+            if file_row is None:
+                return False
+            if file_row.preview_status not in (
+                FilePreviewStatus.PENDING,
+                FilePreviewStatus.GENERATING,
+            ):
+                return False
+            await uow.files.mark_preview_failed(
+                file_id=file_id,
+                flush=True,
+                refresh=False,
+            )
+            await uow.commit()
+    except Exception:
+        logger.exception(
+            "finalize_failed_preview_task: не удалось пометить превью FAILED",
+            extra={"file_id": str(file_id)},
+        )
+        return False
+
+    logger.info(
+        "finalize_failed_preview_task: превью помечено FAILED после провала задачи",
+        extra={"file_id": str(file_id)},
+    )
+    return True
 
 
 def _image_to_webp(img: Image.Image) -> bytes:

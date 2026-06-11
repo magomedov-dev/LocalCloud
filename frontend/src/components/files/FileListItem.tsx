@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Link2, Users } from "lucide-react";
 import { FileIcon } from "./FileIcon";
@@ -82,8 +82,11 @@ function formatDate(iso: string): string {
  *
  * Поддерживает выбор, двойной клик для открытия папки или предпросмотра файла,
  * drag-and-drop перемещение в папку и предзагрузку содержимого папки при наведении.
+ *
+ * Обёрнут в `React.memo`: обновление выбора или бейджей перерисовывает
+ * только затронутые строки, а не весь список.
  */
-export function FileListItem({
+function FileListItemComponent({
   item,
   mimeType,
   sizeBytes,
@@ -273,3 +276,5 @@ export function FileListItem({
     </>
   );
 }
+
+export const FileListItem = memo(FileListItemComponent);

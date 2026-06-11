@@ -289,7 +289,8 @@ class TestDatabaseSettingsComputedField:
 
 class TestServerSettings:
     def test_defaults_match_constants(self) -> None:
-        settings = ServerSettings()
+        # _env_file=None: дефолты проверяются без локального .env разработчика.
+        settings = ServerSettings(_env_file=None)
         assert settings.max_concurrent_requests == SVC.MAX_CONCURRENT_REQUESTS
         assert settings.request_timeout_seconds == SVC.REQUEST_TIMEOUT_SECONDS
 
@@ -312,7 +313,8 @@ class TestServerSettings:
 
 class TestPreviewSettings:
     def test_defaults_match_constants(self) -> None:
-        settings = PreviewSettings()
+        # _env_file=None: дефолты проверяются без локального .env разработчика.
+        settings = PreviewSettings(_env_file=None)
         assert settings.generation_enabled is PVC.GENERATION_ENABLED
         assert settings.render_concurrency == PVC.RENDER_CONCURRENCY
         assert settings.image_max_source_mb == PVC.IMAGE_MAX_SOURCE_MB
@@ -345,7 +347,8 @@ class TestPreviewSettings:
 
 class TestArchiveSettings:
     def test_defaults_match_constants(self) -> None:
-        settings = ArchiveSettings()
+        # _env_file=None: дефолты проверяются без локального .env разработчика.
+        settings = ArchiveSettings(_env_file=None)
         assert settings.max_files == ARC.MAX_FILES
         assert settings.max_total_mb == ARC.MAX_TOTAL_MB
         assert settings.stream_chunk_bytes == ARC.STREAM_CHUNK_BYTES
@@ -391,7 +394,8 @@ class TestFeatureSettings:
 
 class TestStorageExecutorSetting:
     def test_default_matches_constant(self) -> None:
-        settings = StorageSettings()
+        # _env_file=None: дефолты проверяются без локального .env разработчика.
+        settings = StorageSettings(_env_file=None)
         assert (
             settings.storage_executor_max_workers
             == STC.STORAGE_EXECUTOR_MAX_WORKERS

@@ -7,10 +7,11 @@ from typing import Any
 from uuid import UUID
 
 from core.logging import get_logger
-from database.models.enums import BackgroundTaskStatus
+from database.models.enums import BackgroundTaskStatus, BackgroundTaskType
 from database.models.tasks import BackgroundTask
 from workers.context import WorkerContext
 from workers.exceptions import WorkerTaskDispatchError, WorkerTaskHandlerError
+from workers.previews import finalize_failed_preview_task
 from workers.registry import WorkerTaskRegistry
 from workers.tasks import failure_result, jsonable, retry_result
 from workers.types import (
@@ -161,6 +162,7 @@ class WorkerDispatcher:
                 return _OUTCOME_RETRIED
 
             await self.fail_task(task.id, result)
+            await self._finalize_terminal_failure(task)
             return _OUTCOME_FAILED
 
         except Exception:
@@ -172,6 +174,35 @@ class WorkerDispatcher:
                 },
             )
             return _OUTCOME_FAILED
+
+    async def _finalize_terminal_failure(self, task: BackgroundTask) -> None:
+        """Доводит доменное состояние после финального провала задачи.
+
+        Задача генерации превью оставляет файл в ``PENDING``/``GENERATING``,
+        если провалилась до обновления его статуса (ошибка хранилища,
+        исчерпание попыток после временных сбоев и т.п.) — такой файл клиенты
+        опрашивали бы бесконечно. Здесь его превью помечается ``FAILED``.
+
+        Финализация best-effort и не влияет на исход задачи: сама задача уже
+        помечена ``FAILED`` в :meth:`fail_task`.
+
+        Args:
+            task: Провалившаяся фоновая задача.
+        """
+
+        if task.task_type != BackgroundTaskType.GENERATE_FILE_PREVIEW:
+            return
+
+        payload: Mapping[str, Any]
+        if isinstance(task.payload, Mapping):
+            payload = task.payload
+        else:
+            payload = {}
+
+        await finalize_failed_preview_task(
+            uow_factory=self.context.uow_factory,
+            payload=payload,
+        )
 
     async def fetch_and_lock_tasks(self, limit: int) -> list[BackgroundTask]:
         """Выбирает и блокирует задачи для текущего worker.

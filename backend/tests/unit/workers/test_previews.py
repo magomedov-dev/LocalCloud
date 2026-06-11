@@ -205,7 +205,10 @@ def _png_bytes(mode: str = "RGB", size=(800, 600)) -> bytes:
 
 
 class TestCompressToWebp:
-    def test_rgb_image_compressed_and_resized(self) -> None:
+    def test_rgb_image_compressed_and_resized(self, monkeypatch) -> None:
+        # Лимит фиксируется явно: модульная константа читается из настроек и
+        # может быть переопределена локальным .env разработчика.
+        monkeypatch.setattr(previews, "_IMAGE_PREVIEW_MAX_DIMENSION", 400)
         webp = _compress_to_webp(_png_bytes("RGB", (800, 600)))
         with Image.open(io.BytesIO(webp)) as img:
             assert img.format == "WEBP"
@@ -749,3 +752,105 @@ class TestErrorBranches:
 
         assert result.success is False
         assert result.error_code == "unexpected_preview_processing_error"
+
+
+# ---------------------------------------------------------------------------
+# finalize_failed_preview_task — доводка статуса после финального провала
+# ---------------------------------------------------------------------------
+
+class TestFinalizeFailedPreviewTask:
+    @pytest.mark.asyncio
+    async def test_marks_pending_file_as_failed(self) -> None:
+        """Файл в PENDING помечается FAILED после финального провала задачи."""
+        file_row = make_file_row(preview_status=FilePreviewStatus.PENDING)
+        uow = make_uow()
+        uow.files.get_by_id = AsyncMock(return_value=file_row)
+        uow.files.mark_preview_failed = AsyncMock(return_value=file_row)
+
+        result = await previews.finalize_failed_preview_task(
+            uow_factory=MagicMock(return_value=uow),
+            payload={"file_id": str(file_row.id)},
+        )
+
+        assert result is True
+        uow.files.mark_preview_failed.assert_awaited_once()
+        uow.commit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_marks_generating_file_as_failed(self) -> None:
+        """Файл, зависший в GENERATING, тоже помечается FAILED."""
+        file_row = make_file_row(preview_status=FilePreviewStatus.GENERATING)
+        uow = make_uow()
+        uow.files.get_by_id = AsyncMock(return_value=file_row)
+        uow.files.mark_preview_failed = AsyncMock(return_value=file_row)
+
+        result = await previews.finalize_failed_preview_task(
+            uow_factory=MagicMock(return_value=uow),
+            payload={"file_id": file_row.id},
+        )
+
+        assert result is True
+        uow.files.mark_preview_failed.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "status",
+        [
+            FilePreviewStatus.READY,
+            FilePreviewStatus.NOT_REQUIRED,
+            FilePreviewStatus.FAILED,
+        ],
+    )
+    async def test_terminal_statuses_not_overwritten(self, status) -> None:
+        """Терминальные статусы (READY/NOT_REQUIRED/FAILED) не перезаписываются."""
+        file_row = make_file_row(preview_status=status)
+        uow = make_uow()
+        uow.files.get_by_id = AsyncMock(return_value=file_row)
+        uow.files.mark_preview_failed = AsyncMock()
+
+        result = await previews.finalize_failed_preview_task(
+            uow_factory=MagicMock(return_value=uow),
+            payload={"file_id": str(file_row.id)},
+        )
+
+        assert result is False
+        uow.files.mark_preview_failed.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_missing_file_returns_false(self) -> None:
+        """Отсутствующий файл — False без ошибок."""
+        uow = make_uow()
+        uow.files.get_by_id = AsyncMock(return_value=None)
+
+        result = await previews.finalize_failed_preview_task(
+            uow_factory=MagicMock(return_value=uow),
+            payload={"file_id": str(uuid.uuid4())},
+        )
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_invalid_payload_returns_false(self) -> None:
+        """Некорректный file_id в payload — False без обращения к БД."""
+        factory = MagicMock()
+
+        result = await previews.finalize_failed_preview_task(
+            uow_factory=factory,
+            payload={"file_id": "not-a-uuid"},
+        )
+
+        assert result is False
+        factory.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_database_error_swallowed(self) -> None:
+        """Ошибка БД глотается (best-effort), результат False."""
+        uow = make_uow()
+        uow.files.get_by_id = AsyncMock(side_effect=DatabaseConnectionError("db down"))
+
+        result = await previews.finalize_failed_preview_task(
+            uow_factory=MagicMock(return_value=uow),
+            payload={"file_id": str(uuid.uuid4())},
+        )
+
+        assert result is False
