@@ -1925,19 +1925,35 @@ def _audit_upload(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+# Максимальная длина расширения — совпадает с лимитом колонки files.extension
+# (см. database/models/filesystem.py). Хвост после точки длиннее этого — почти
+# наверняка не расширение, а часть названия.
+_MAX_EXTENSION_LENGTH = 32
+
+
 def _filename_extension(filename: str) -> str | None:
     """Извлекает расширение имени файла.
+
+    ``PurePath.suffix`` берёт всё после последней точки, но в именах вроде
+    «Книга. 2-е издание — Автор» точка стоит внутри названия, и «расширением»
+    оказался бы человеческий текст. Такой хвост (с пробелами или длиннее лимита
+    колнки) расширением не считается: файл сохраняется без расширения, а не
+    роняет загрузку из-за нарушения инварианта репозитория.
 
     Args:
         filename: Имя файла.
 
     Returns:
-        Расширение файла в нижнем регистре без точки или None, если расширение
-        отсутствует.
+        Расширение файла в нижнем регистре без точки или ``None``, если
+        расширение отсутствует или непохоже на настоящее.
     """
 
     suffix = PurePath(filename).suffix.strip(".").lower()
-    return suffix or None
+    if not suffix:
+        return None
+    if len(suffix) > _MAX_EXTENSION_LENGTH or any(ch.isspace() for ch in suffix):
+        return None
+    return suffix
 
 
 def _normalize_optional_text(value: str | None) -> str | None:

@@ -99,6 +99,43 @@ class TestComputeInvariants:
     def test_render_concurrency_at_least_one(self) -> None:
         assert int(_config(1, 1024, 20).values["PREVIEW_RENDER_CONCURRENCY"]) >= 1
 
+    def test_worker_concurrency_scales_with_cpu(self) -> None:
+        small = _config(1, 1024, 20).values
+        large = _config(8, 16384, 2000).values
+        assert int(large["WORKER_MAX_CONCURRENT_TASKS"]) > int(
+            small["WORKER_MAX_CONCURRENT_TASKS"]
+        )
+        assert int(large["WORKER_INTEGRITY_CONCURRENCY"]) > int(
+            small["WORKER_INTEGRITY_CONCURRENCY"]
+        )
+
+    def test_integrity_concurrency_bounded_by_storage_pool(self) -> None:
+        cfg = _config(8, 16384, 2000).values
+        assert int(cfg["WORKER_INTEGRITY_CONCURRENCY"]) <= int(
+            cfg["STORAGE_EXECUTOR_MAX_WORKERS"]
+        )
+
+    def test_emits_new_blocks_keys(self) -> None:
+        # Защита от случайного удаления добавленных в блоках A–E настроек
+        # (на чистом хосте без backend; полная сверка — в backend drift-тесте).
+        v = _config(2, 4096, 100).values
+        for key in (
+            "WORKER_ENABLED",
+            "WORKER_INTEGRITY_CONCURRENCY",
+            "WORKER_SCHEDULER_ENABLED",
+            "RATE_LIMIT_AUTH_ATTEMPTS",
+            "PUBLIC_LINK_PASSWORD_MAX_ATTEMPTS",
+            "MINIO_READ_TIMEOUT_SECONDS",
+            "STORAGE_STARTUP_TIMEOUT_SECONDS",
+            "INCOMPLETE_MULTIPART_EXPIRY_DAYS",
+        ):
+            assert key in v, f"генератор перестал эмитить {key}"
+
+    def test_secret_placeholder_contains_change_me_marker(self) -> None:
+        # Плейсхолдер SECRET_KEY (без --gen-secrets) должен ловиться валидатором
+        # секретов на старте — иначе дефолтный .env проходил бы в production.
+        assert "change-me" in _config(2, 4096, 100).values["SECRET_KEY"].lower()
+
 
 class TestFeatureToggles:
     def test_disabled_previews_propagate(self) -> None:
@@ -127,6 +164,45 @@ class TestSecrets:
         gen.apply_generated_secrets(values)
         assert "$" not in values["ADMIN_PASSWORD"]
         assert "$" not in values["SECRET_KEY"]
+
+    def test_preserves_existing_secrets(self) -> None:
+        # Повторная генерация над рабочим .env НЕ должна менять пароль БД.
+        existing = {
+            "POSTGRES_PASSWORD": "real-db-pass-xyz",
+            "SECRET_KEY": "real-secret-key-abc",
+            "MINIO_SECRET_KEY": "real-minio-xyz",
+            "ADMIN_PASSWORD": "Real@Admin99",
+        }
+        values: dict[str, str] = {}
+        generated, reused = gen.apply_generated_secrets(values, existing=existing)
+        assert values["POSTGRES_PASSWORD"] == "real-db-pass-xyz"
+        assert set(reused) == set(existing)
+        assert generated == {}
+
+    def test_rotate_forces_new_secrets(self) -> None:
+        existing = {"POSTGRES_PASSWORD": "real-db-pass-xyz"}
+        values: dict[str, str] = {}
+        generated, reused = gen.apply_generated_secrets(
+            values, existing=existing, rotate=True
+        )
+        assert values["POSTGRES_PASSWORD"] != "real-db-pass-xyz"
+        assert "POSTGRES_PASSWORD" in generated
+        assert reused == {}
+
+    def test_placeholder_secrets_not_reused(self, tmp_path) -> None:
+        env = tmp_path / ".env"
+        env.write_text(
+            "POSTGRES_PASSWORD=localcloud_change_me_in_production\n"
+            "SECRET_KEY=change-me-to-a-long-random-string-before-production\n"
+            "MINIO_SECRET_KEY=localcloud_password\n"
+            "ADMIN_PASSWORD=Admin@LocalCloud123\n",
+            encoding="utf-8",
+        )
+        # Плейсхолдеры не читаются как «рабочие» → будут перегенерированы.
+        assert gen.read_existing_secrets(env) == {}
+
+    def test_read_existing_secrets_missing_file(self, tmp_path) -> None:
+        assert gen.read_existing_secrets(tmp_path / "nope.env") == {}
 
 
 class TestRendering:

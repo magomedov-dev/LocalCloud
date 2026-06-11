@@ -28,6 +28,20 @@ from workers.types import WorkerTaskExecutionResult
 # Вспомогательные функции / фикстуры
 # ---------------------------------------------------------------------------
 
+
+@pytest.fixture(autouse=True)
+def _force_preview_generation_enabled(monkeypatch):
+    """Форсирует включённую генерацию превью независимо от локального .env.
+
+    ``workers.previews`` читает мастер-флаг на импорте модуля, поэтому без этого
+    тесты подхватывали бы PREVIEW_GENERATION_ENABLED разработчика (например,
+    false на слабом хосте) и падали бы вхолостую. Тест выключенной генерации
+    переопределяет флаг у себя.
+    """
+
+    monkeypatch.setattr(previews, "_PREVIEW_GENERATION_ENABLED", True)
+
+
 def make_file_row(
     *,
     file_id=None,

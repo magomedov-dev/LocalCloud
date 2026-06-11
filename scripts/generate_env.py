@@ -391,6 +391,13 @@ def compute_config(budget: HostBudget, features: FeatureToggles,
     max_concurrent = 32 * cpu
     storage_executor = max(4, 2 * cpu)
 
+    # ── Worker: параллелизм задач масштабируем по CPU ────────────────────────
+    # Большинство задач worker — I/O (storage), но рендеры превью CPU-затратны
+    # (отдельно ограничены render_concurrency). 2 задачи на ядро — разумный
+    # баланс, не ниже 2. Проверка целостности ограничена пулом storage-потоков.
+    worker_max_concurrent = max(2, 2 * cpu)
+    integrity_concurrency = max(2, min(storage_executor, 2 * cpu))
+
     # ── Архивы / ёмкость хранилища ───────────────────────────────────────────
     archive_total_mb = max(512, int(disk * 1024 / 8))
     archive_max_files = 10000 if disk < 64 else 50000
@@ -410,6 +417,7 @@ def compute_config(budget: HostBudget, features: FeatureToggles,
         "LOG_LEVEL": "INFO",
         "LOG_JSON": "true",
         "LOG_FILE_ENABLED": "false",
+        "LOG_FILE_PATH": "logs/app.log",
         # Database pool
         "POSTGRES_USER": "localcloud",
         "POSTGRES_PASSWORD": "localcloud_change_me_in_production",
@@ -429,14 +437,31 @@ def compute_config(budget: HostBudget, features: FeatureToggles,
         "MINIO_PUBLIC_PORT": str(public_port),
         "STORAGE_CAPACITY_BYTES": str(capacity_bytes),
         "STORAGE_EXECUTOR_MAX_WORKERS": str(storage_executor),
+        # Socket-таймауты MinIO и готовность хранилища на старте. Статичны:
+        # зависят от сети/диска, а не от размера хоста. read — на каждое чтение,
+        # большие файлы не рвутся.
+        "MINIO_CONNECT_TIMEOUT_SECONDS": "5",
+        "MINIO_READ_TIMEOUT_SECONDS": "60",
+        "STORAGE_STARTUP_TIMEOUT_SECONDS": "30",
+        # Авто-аборт незавершённых multipart-загрузок (дни). 0 — выключить.
+        "INCOMPLETE_MULTIPART_EXPIRY_DAYS": "7",
         # Security
-        "SECRET_KEY": "localcloud-secret-key-in-production-with-a-long-random-string",
+        "SECRET_KEY": "change-me-to-a-long-random-string-before-production",
         "JWT_ALGORITHM": "HS256",
         "JWT_ISSUER": "localcloud",
         "JWT_AUDIENCE": "localcloud",
         "ACCESS_TOKEN_EXPIRE_MINUTES": "30",
         "REFRESH_TOKEN_EXPIRE_DAYS": "30",
         "PASSWORD_HASH_SCHEME": "bcrypt",
+        # Защита от перебора пароля публичных ссылок (БД-блокировка).
+        "PUBLIC_LINK_PASSWORD_MAX_ATTEMPTS": "5",
+        "PUBLIC_LINK_PASSWORD_LOCKOUT_SECONDS": "900",
+        # Rate-limit чувствительных точек по IP (скользящее окно на процесс).
+        # Статичны: зависят от политики, а не от железа.
+        "RATE_LIMIT_AUTH_ATTEMPTS": "10",
+        "RATE_LIMIT_AUTH_WINDOW_SECONDS": "300",
+        "RATE_LIMIT_PUBLIC_ACCESS_ATTEMPTS": "30",
+        "RATE_LIMIT_PUBLIC_ACCESS_WINDOW_SECONDS": "300",
         # Cookies
         "ACCESS_COOKIE_NAME": "access_token",
         "REFRESH_COOKIE_NAME": "refresh_token",
@@ -454,6 +479,30 @@ def compute_config(budget: HostBudget, features: FeatureToggles,
         # Backpressure
         "MAX_CONCURRENT_REQUESTS": str(max_concurrent),
         "REQUEST_TIMEOUT_SECONDS": "90",
+        # Worker (фоновый обработчик задач). Параллелизм масштабируется по CPU;
+        # интервалы/лимиты/backoff статичны (зависят от политики, не от железа).
+        "WORKER_ENABLED": "true",
+        "WORKER_NAME": "localcloud-worker",
+        "WORKER_POLL_INTERVAL_SECONDS": "5",
+        "WORKER_IDLE_SLEEP_SECONDS": "2",
+        "WORKER_BATCH_SIZE": "10",
+        "WORKER_MAX_CONCURRENT_TASKS": str(worker_max_concurrent),
+        "WORKER_SHUTDOWN_TIMEOUT_SECONDS": "30",
+        "WORKER_TASK_LOCK_TTL_SECONDS": "300",
+        "WORKER_STALE_TASK_LOCK_SECONDS": "900",
+        "WORKER_RETRY_DELAY_SECONDS": "60",
+        "WORKER_MAX_RETRY_DELAY_SECONDS": "3600",
+        "WORKER_CLEANUP_BATCH_SIZE": "100",
+        "WORKER_INTEGRITY_BATCH_SIZE": "100",
+        "WORKER_INTEGRITY_CONCURRENCY": str(integrity_concurrency),
+        "WORKER_QUOTA_BATCH_SIZE": "100",
+        # Worker scheduler (периодические системные задачи).
+        "WORKER_SCHEDULER_ENABLED": "true",
+        "WORKER_CLEAN_TRASH_INTERVAL_SECONDS": "3600",
+        "WORKER_CLEAN_EXPIRED_UPLOADS_INTERVAL_SECONDS": "1800",
+        "WORKER_CLEAN_EXPIRED_PUBLIC_LINKS_INTERVAL_SECONDS": "3600",
+        "WORKER_RECALCULATE_QUOTAS_INTERVAL_SECONDS": "86400",
+        "WORKER_STORAGE_INTEGRITY_INTERVAL_SECONDS": "86400",
         # Preview
         "PREVIEW_GENERATION_ENABLED": _b(features.preview_generation),
         "PREVIEW_IMAGE_MAX_SOURCE_MB": str(pv["image_mb"]),
@@ -539,24 +588,94 @@ def generate_strong_password(length: int = 20) -> str:
             return candidate
 
 
-def apply_generated_secrets(values: dict[str, str]) -> dict[str, str]:
-    """Заполняет секреты случайными значениями.
+_SECRET_KEYS = ("SECRET_KEY", "POSTGRES_PASSWORD", "MINIO_SECRET_KEY", "ADMIN_PASSWORD")
+
+# Подстроки-маркеры незаменённого/дефолтного секрета (совпадает с проверкой на
+# старте backend — core.secret_validation). Точные дефолты добавлены отдельно.
+_PLACEHOLDER_MARKERS = ("change-me", "change_me", "changeme", "development-secret",
+                        "localcloud_password")
+_PLACEHOLDER_EXACT = ("localcloud", "admin@localcloud123")
+
+
+def _is_placeholder_secret(value: str) -> bool:
+    """Проверяет, является ли значение секрета дефолтным/плейсхолдером."""
+
+    low = value.strip().lower()
+    if not low or low in _PLACEHOLDER_EXACT:
+        return True
+    return any(marker in low for marker in _PLACEHOLDER_MARKERS)
+
+
+def read_existing_secrets(path: Path) -> dict[str, str]:
+    """Читает «настоящие» секреты из существующего `.env`.
+
+    Возвращает только непустые, не-плейсхолдерные значения секретных ключей —
+    именно их нужно сохранить при повторной генерации, чтобы не сломать уже
+    инициализированную БД (Postgres задаёт пароль только при первом создании
+    тома) и не разлогинить пользователей (смена SECRET_KEY).
 
     Args:
-        values: Словарь значений конфигурации.
+        path: Путь к существующему файлу `.env`.
 
     Returns:
-        Словарь сгенерированных секретов (имя → значение) для показа пользователю.
+        Словарь `имя_секрета -> значение` для пригодных к переиспользованию.
     """
 
-    generated = {
-        "SECRET_KEY": secrets.token_urlsafe(48),
-        "POSTGRES_PASSWORD": secrets.token_urlsafe(24),
-        "MINIO_SECRET_KEY": secrets.token_urlsafe(24),
-        "ADMIN_PASSWORD": generate_strong_password(20),
+    if not path.exists():
+        return {}
+    found: dict[str, str] = {}
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key, val = key.strip(), val.strip()
+        if key in _SECRET_KEYS and val and not _is_placeholder_secret(val):
+            found[key] = val
+    return found
+
+
+def apply_generated_secrets(
+    values: dict[str, str],
+    *,
+    existing: dict[str, str] | None = None,
+    rotate: bool = False,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Заполняет секреты: сохраняет существующие, генерирует недостающие.
+
+    По умолчанию переиспользует пригодные секреты из ``existing`` (чтобы
+    повторная генерация под новые ресурсы НЕ меняла пароль БД и не ломала уже
+    инициализированный том Postgres). Недостающие или плейсхолдерные значения
+    генерируются случайно. При ``rotate=True`` все секреты генерируются заново.
+
+    Args:
+        values: Словарь значений конфигурации (изменяется на месте).
+        existing: Секреты из существующего `.env` (см. ``read_existing_secrets``).
+        rotate: Принудительно сгенерировать новые секреты, игнорируя existing.
+
+    Returns:
+        Кортеж ``(generated, reused)``: сгенерированные и переиспользованные
+        секреты (имя → значение) для показа пользователю.
+    """
+
+    existing = existing or {}
+    factory = {
+        "SECRET_KEY": lambda: secrets.token_urlsafe(48),
+        "POSTGRES_PASSWORD": lambda: secrets.token_urlsafe(24),
+        "MINIO_SECRET_KEY": lambda: secrets.token_urlsafe(24),
+        "ADMIN_PASSWORD": lambda: generate_strong_password(20),
     }
-    values.update(generated)
-    return generated
+    generated: dict[str, str] = {}
+    reused: dict[str, str] = {}
+    for key, make in factory.items():
+        prev = existing.get(key)
+        if not rotate and prev:
+            values[key] = prev
+            reused[key] = prev
+        else:
+            values[key] = make()
+            generated[key] = values[key]
+    return generated, reused
 
 
 # ── Рендеринг файла ──────────────────────────────────────────────────────────
@@ -602,7 +721,7 @@ def render_env(config: GeneratedConfig) -> str:
             lines.append(f"{key}={v[key]}")
 
     block("App", ["APP_NAME", "APP_VERSION", "APP_DESCRIPTION", "DEBUG"])
-    block("Logging", ["LOG_LEVEL", "LOG_JSON", "LOG_FILE_ENABLED"])
+    block("Logging", ["LOG_LEVEL", "LOG_JSON", "LOG_FILE_ENABLED", "LOG_FILE_PATH"])
     block("Database (пул подключений приложения)", [
         "POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB", "POSTGRES_ECHO",
         "POSTGRES_POOL_SIZE", "POSTGRES_MAX_OVERFLOW", "POSTGRES_POOL_TIMEOUT",
@@ -611,12 +730,17 @@ def render_env(config: GeneratedConfig) -> str:
     block("MinIO / S3", [
         "MINIO_ACCESS_KEY", "MINIO_SECRET_KEY", "MINIO_SECURE", "MINIO_REGION",
         "MINIO_PUBLIC_HOST", "MINIO_PUBLIC_PORT", "STORAGE_CAPACITY_BYTES",
-        "STORAGE_EXECUTOR_MAX_WORKERS",
+        "STORAGE_EXECUTOR_MAX_WORKERS", "MINIO_CONNECT_TIMEOUT_SECONDS",
+        "MINIO_READ_TIMEOUT_SECONDS", "STORAGE_STARTUP_TIMEOUT_SECONDS",
+        "INCOMPLETE_MULTIPART_EXPIRY_DAYS",
     ])
     block("Security", [
         "SECRET_KEY", "JWT_ALGORITHM", "JWT_ISSUER", "JWT_AUDIENCE",
         "ACCESS_TOKEN_EXPIRE_MINUTES", "REFRESH_TOKEN_EXPIRE_DAYS",
-        "PASSWORD_HASH_SCHEME",
+        "PASSWORD_HASH_SCHEME", "PUBLIC_LINK_PASSWORD_MAX_ATTEMPTS",
+        "PUBLIC_LINK_PASSWORD_LOCKOUT_SECONDS", "RATE_LIMIT_AUTH_ATTEMPTS",
+        "RATE_LIMIT_AUTH_WINDOW_SECONDS", "RATE_LIMIT_PUBLIC_ACCESS_ATTEMPTS",
+        "RATE_LIMIT_PUBLIC_ACCESS_WINDOW_SECONDS",
     ])
     block("Cookies", [
         "ACCESS_COOKIE_NAME", "REFRESH_COOKIE_NAME", "COOKIE_SECURE",
@@ -626,6 +750,22 @@ def render_env(config: GeneratedConfig) -> str:
     block("Uvicorn (API-сервер)", ["UVICORN_WORKERS"])
     block("Backpressure (защита API от перегрузки)", [
         "MAX_CONCURRENT_REQUESTS", "REQUEST_TIMEOUT_SECONDS",
+    ])
+    block("Worker (фоновый обработчик задач)", [
+        "WORKER_ENABLED", "WORKER_NAME", "WORKER_POLL_INTERVAL_SECONDS",
+        "WORKER_IDLE_SLEEP_SECONDS", "WORKER_BATCH_SIZE",
+        "WORKER_MAX_CONCURRENT_TASKS", "WORKER_SHUTDOWN_TIMEOUT_SECONDS",
+        "WORKER_TASK_LOCK_TTL_SECONDS", "WORKER_STALE_TASK_LOCK_SECONDS",
+        "WORKER_RETRY_DELAY_SECONDS", "WORKER_MAX_RETRY_DELAY_SECONDS",
+        "WORKER_CLEANUP_BATCH_SIZE", "WORKER_INTEGRITY_BATCH_SIZE",
+        "WORKER_INTEGRITY_CONCURRENCY", "WORKER_QUOTA_BATCH_SIZE",
+    ])
+    block("Worker scheduler (периодические системные задачи)", [
+        "WORKER_SCHEDULER_ENABLED", "WORKER_CLEAN_TRASH_INTERVAL_SECONDS",
+        "WORKER_CLEAN_EXPIRED_UPLOADS_INTERVAL_SECONDS",
+        "WORKER_CLEAN_EXPIRED_PUBLIC_LINKS_INTERVAL_SECONDS",
+        "WORKER_RECALCULATE_QUOTAS_INTERVAL_SECONDS",
+        "WORKER_STORAGE_INTEGRITY_INTERVAL_SECONDS",
     ])
     block("Preview generation (фоновый рендер миниатюр)", [
         "PREVIEW_GENERATION_ENABLED", "PREVIEW_IMAGE_MAX_SOURCE_MB",
@@ -725,6 +865,10 @@ def build_parser() -> argparse.ArgumentParser:
                      help="напечатать в stdout, не записывать файл")
     out.add_argument("--no-gen-secrets", action="store_true",
                      help="не генерировать секреты (оставить плейсхолдеры)")
+    out.add_argument("--rotate-secrets", action="store_true",
+                     help="сгенерировать НОВЫЕ секреты, даже если в существующем "
+                          ".env есть рабочие (ВНИМАНИЕ: сменит пароль БД — на уже "
+                          "инициализированном томе Postgres контейнер не поднимется)")
 
     return parser
 
@@ -789,12 +933,20 @@ def main(argv: list[str] | None = None) -> int:
         public_host=args.public_host, public_port=args.public_port,
     )
 
+    output_path = Path(args.output)
+
     generated_secrets: dict[str, str] = {}
+    reused_secrets: dict[str, str] = {}
     if not args.no_gen_secrets:
-        generated_secrets = apply_generated_secrets(config.values)
+        # Сохраняем рабочие секреты из существующего .env — иначе повторная
+        # генерация под новые ресурсы сменила бы POSTGRES_PASSWORD и api не
+        # смог бы подключиться к уже инициализированному тому Postgres.
+        existing = read_existing_secrets(output_path)
+        generated_secrets, reused_secrets = apply_generated_secrets(
+            config.values, existing=existing, rotate=args.rotate_secrets,
+        )
 
     content = render_env(config)
-    output_path = Path(args.output)
 
     # ── Печать сводки в stderr (чтобы stdout содержал чистый .env при --dry-run)
     summary = [
@@ -836,20 +988,28 @@ def main(argv: list[str] | None = None) -> int:
         pass
 
     print(f"\n✓ Записан {output_path}", file=sys.stderr)
-    if generated_secrets:
-        print("\nСгенерированы секреты (сохраните пароль администратора):",
+    if reused_secrets:
+        print(
+            f"\n🔒 Сохранены секреты из существующего .env "
+            f"({', '.join(sorted(reused_secrets))}) — пароль БД не изменён, "
+            "стек поднимется на текущем томе Postgres.",
+            file=sys.stderr,
+        )
+    if generated_secrets and "ADMIN_PASSWORD" in generated_secrets:
+        print("\nСгенерированы новые секреты (сохраните пароль администратора):",
               file=sys.stderr)
         print(f"  ADMIN_USERNAME = {config.values['ADMIN_USERNAME']}",
               file=sys.stderr)
         print(f"  ADMIN_PASSWORD = {generated_secrets['ADMIN_PASSWORD']}",
               file=sys.stderr)
+    if generated_secrets and "POSTGRES_PASSWORD" in generated_secrets:
         print(
-            "  (SECRET_KEY, POSTGRES_PASSWORD, MINIO_SECRET_KEY тоже случайны.)\n"
-            "  ⚠ Не запускайте генерацию повторно над уже инициализированной БД: "
-            "сменится POSTGRES_PASSWORD и контейнер не поднимется.",
+            "  ⚠ Сгенерирован НОВЫЙ POSTGRES_PASSWORD. Если том Postgres уже был "
+            "инициализирован старым паролем, синхронизируйте его (см. README, "
+            "раздел восстановления) или контейнер api не поднимется.",
             file=sys.stderr,
         )
-    else:
+    if args.no_gen_secrets:
         print(
             "\n⚠ Секреты НЕ сгенерированы (--no-gen-secrets): смените "
             "POSTGRES_PASSWORD / MINIO_SECRET_KEY / SECRET_KEY / ADMIN_PASSWORD "

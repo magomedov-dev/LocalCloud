@@ -1670,6 +1670,30 @@ def test_filename_extension_branches():
 
     assert _filename_extension("a.TXT") == "txt"
     assert _filename_extension("noext") is None
+    # Реальные расширения (в т.ч. многосоставные) извлекаются корректно.
+    assert _filename_extension("report.final.v2.pdf") == "pdf"
+    assert _filename_extension("archive.tar.gz") == "gz"
+    assert _filename_extension("Книга. Том 2.epub") == "epub"
+
+
+def test_filename_extension_ignores_dotted_titles():
+    """Точка внутри названия не должна давать «расширение» (регрессия загрузки)."""
+    from services.uploads import _filename_extension
+
+    # Имя без настоящего расширения, но с точками внутри: хвост с пробелами и
+    # длиннее лимита колонки — не расширение, загрузка не должна падать.
+    assert (
+        _filename_extension(
+            "Head First. Паттерны проектирования. 2-е издание - Эрик Фримен"
+        )
+        is None
+    )
+    # Короткий, но с пробелом — тоже не расширение.
+    assert _filename_extension("Документ. v2 финал") is None
+    # Слишком длинный хвост без пробелов — тоже отбрасывается.
+    assert _filename_extension("file." + "a" * 33) is None
+    # Граница: ровно 32 символа без пробелов — допустимо.
+    assert _filename_extension("file." + "a" * 32) == "a" * 32
 
 
 def test_normalize_optional_text_branches():
