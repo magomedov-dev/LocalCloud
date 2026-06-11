@@ -17,6 +17,12 @@ ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@localcloud.dev")
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "Admin@LocalCloud123")
 
+# Дефолтный пароль администратора опубликован в репозитории и .env.example,
+# поэтому в production он недопустим. Вне DEBUG отказываемся создавать админа
+# с известным паролем — иначе первый же деплой «из коробки» уже скомпрометирован.
+_DEBUG = os.getenv("DEBUG", "false").strip().lower() in ("1", "true", "yes", "on")
+_DEFAULT_ADMIN_PASSWORD = "Admin@LocalCloud123"
+
 ctx = CryptContext(schemes=["bcrypt"], bcrypt__rounds=12)
 
 
@@ -30,6 +36,14 @@ async def main() -> None:
         asyncpg.PostgresError: Если запрос к PostgreSQL завершился ошибкой.
         OSError: Если не удалось установить сетевое подключение к базе данных.
     """
+
+    if not _DEBUG and ADMIN_PASSWORD == _DEFAULT_ADMIN_PASSWORD:
+        raise SystemExit(
+            "Отказ создания администратора: используется дефолтный пароль "
+            "ADMIN_PASSWORD. Задайте надёжный ADMIN_PASSWORD через переменные "
+            "окружения (.env) перед production-развёртыванием или включите DEBUG "
+            "для локальной разработки."
+        )
 
     conn = await asyncpg.connect(DB_DSN)
     try:

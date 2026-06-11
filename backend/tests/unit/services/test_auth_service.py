@@ -576,6 +576,8 @@ async def test_refresh_session_success_rotates(audit_service, settings):
     tokens_repo.rotate_token.assert_awaited_once()
     response.set_cookie.assert_called()
     audit_service.log_user_event.assert_awaited()
+    # Токен загружается с блокировкой строки — защита от гонки двойной ротации.
+    assert tokens_repo.get_by_hash.await_args.kwargs.get("for_update") is True
 
 
 @pytest.mark.asyncio

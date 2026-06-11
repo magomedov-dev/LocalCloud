@@ -3,6 +3,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Path, status
 
 from api.dependencies import get_registration_service_dependency
+from app.dependencies import rate_limit_dependency
+from core.config import get_settings
 from schemas.common import PageResponse
 from schemas.registration import (
     RegistrationApproveRequest,
@@ -20,11 +22,20 @@ from services import RegistrationService
 # Маршрутизатор эндпоинтов для работы с заявками на регистрацию.
 router = APIRouter(prefix="/registration", tags=["registration"])
 
+# Лимит частоты подачи заявок с одного IP: эндпоинт не требует авторизации и
+# без лимита позволяет заспамить очередь заявок.
+_registration_rate_limit = rate_limit_dependency(
+    "registration",
+    limit=get_settings().security.rate_limit_auth_attempts,
+    window_seconds=get_settings().security.rate_limit_auth_window_seconds,
+)
+
 
 @router.post(
     "/requests",
     response_model=RegistrationRequestRead,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(_registration_rate_limit)],
 )
 async def create_registration_request(
     data: RegistrationRequestCreate,

@@ -130,6 +130,8 @@ def make_link_mock(
     link.description = None
     link.created_at = datetime.now(UTC)
     link.password_hash = password_hash
+    link.failed_password_attempts = 0
+    link.password_locked_until = None
     link.is_download_limit_reached = False
     link.is_revoked = status == PublicLinkStatus.REVOKED
     link.node = node
@@ -862,6 +864,30 @@ async def test_get_public_link_success():
 
     result = await service.get_public_link("tok")
     assert result.node_id == node.id
+    # Ссылка без пароля раскрывает узел в карточке.
+    assert result.node is not None
+
+
+@pytest.mark.asyncio
+async def test_get_public_link_password_protected_redacts_content():
+    """Карточка запароленной ссылки не раскрывает узел и описание до пароля."""
+    node = make_node_mock(name="secret-report.pdf")
+    link = make_link_mock(
+        node=node, node_id=node.id, password_hash="hashed"
+    )
+    link.description = "Секретное описание"
+    links_repo = AsyncMock()
+    links_repo.get_required_available_link_by_token = AsyncMock(return_value=link)
+    uow = make_uow(links=links_repo)
+    service = make_service(uow)
+
+    result = await service.get_public_link("tok")
+
+    # Поля-приглашения остаются, содержимое скрыто.
+    assert result.has_password is True
+    assert result.node_id == node.id
+    assert result.node is None
+    assert result.description is None
 
 
 @pytest.mark.asyncio
@@ -997,6 +1023,7 @@ async def test_create_public_download_url_wrong_password_raises_permission():
     link = make_link_mock(password_hash=hash_password("secret"))
     links_repo = AsyncMock()
     links_repo.get_required_available_link_by_token = AsyncMock(return_value=link)
+    links_repo.register_password_failure = AsyncMock(return_value=None)
     uow = make_uow(links=links_repo, nodes=AsyncMock(), files=AsyncMock())
     service = make_service(uow)
 
@@ -1193,6 +1220,7 @@ async def test_create_public_thumbnail_url_wrong_password_raises_permission():
 
     links_repo = AsyncMock()
     links_repo.get_required_available_link_by_token = AsyncMock(return_value=link)
+    links_repo.register_password_failure = AsyncMock(return_value=None)
     uow = make_uow(links=links_repo, nodes=AsyncMock(), files=AsyncMock())
     service = make_service(uow)
 
@@ -1269,6 +1297,7 @@ async def test_create_public_folder_archive_wrong_password_raises():
     link = make_link_mock(password_hash=hash_password("secret"))
     links_repo = AsyncMock()
     links_repo.get_required_available_link_by_token = AsyncMock(return_value=link)
+    links_repo.register_password_failure = AsyncMock(return_value=None)
     uow = make_uow(links=links_repo, nodes=AsyncMock(), tasks=AsyncMock())
     service = make_service(uow)
 
@@ -1681,3 +1710,116 @@ async def test_create_public_download_url_naive_presigned_expiry():
     data = PublicLinkAccessRequest(token="tok")
     result = await service.create_public_download_url(data)
     assert result.expires_at.tzinfo == UTC
+
+
+# ---------------------------------------------------------------------------
+# Тесты: блокировка перебора пароля публичной ссылки
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_validate_access_locked_returns_denied_without_password_check():
+    """При активной блокировке пароль не проверяется вовсе."""
+    link = make_link_mock(password_hash=hash_password("secret"))
+    link.password_locked_until = datetime.now(UTC) + timedelta(minutes=10)
+    links_repo = AsyncMock()
+    links_repo.get_required_available_link_by_token = AsyncMock(return_value=link)
+    uow = make_uow(links=links_repo)
+    service = make_service(uow)
+
+    result = await service.validate_access(
+        PublicLinkAccessRequest(token="tok", password="secret")
+    )
+
+    assert result.allowed is False
+    assert result.requires_password is True
+    assert "попыток" in (result.message or "")
+    links_repo.register_view.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_validate_access_wrong_password_registers_failure():
+    """Неверный пароль фиксируется атомарным инкрементом и коммитится."""
+    link = make_link_mock(password_hash=hash_password("secret"))
+    links_repo = AsyncMock()
+    links_repo.get_required_available_link_by_token = AsyncMock(return_value=link)
+    links_repo.register_password_failure = AsyncMock(return_value=None)
+    uow = make_uow(links=links_repo)
+    service = make_service(uow)
+
+    result = await service.validate_access(
+        PublicLinkAccessRequest(token="tok", password="wrong")
+    )
+
+    assert result.allowed is False
+    links_repo.register_password_failure.assert_awaited_once()
+    uow.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_validate_access_correct_password_resets_failures():
+    """Верный пароль сбрасывает счётчик прошлых неудач."""
+    link = make_link_mock(password_hash=hash_password("secret"))
+    link.failed_password_attempts = 3
+    links_repo = AsyncMock()
+    links_repo.get_required_available_link_by_token = AsyncMock(return_value=link)
+    links_repo.reset_password_failures = AsyncMock()
+    uow = make_uow(links=links_repo)
+    service = make_service(uow)
+
+    result = await service.validate_access(
+        PublicLinkAccessRequest(token="tok", password="secret")
+    )
+
+    assert result.allowed is True
+    links_repo.reset_password_failures.assert_awaited_once_with(link_id=link.id)
+
+
+@pytest.mark.asyncio
+async def test_expired_lock_does_not_block_validation():
+    """Истёкшая блокировка не мешает проверке пароля."""
+    link = make_link_mock(password_hash=hash_password("secret"))
+    link.password_locked_until = datetime.now(UTC) - timedelta(minutes=1)
+    links_repo = AsyncMock()
+    links_repo.get_required_available_link_by_token = AsyncMock(return_value=link)
+    links_repo.reset_password_failures = AsyncMock()
+    uow = make_uow(links=links_repo)
+    service = make_service(uow)
+
+    result = await service.validate_access(
+        PublicLinkAccessRequest(token="tok", password="secret")
+    )
+
+    assert result.allowed is True
+
+
+@pytest.mark.asyncio
+async def test_create_public_download_url_locked_raises_permission():
+    """Заблокированная ссылка не пускает к скачиванию даже с верным паролем."""
+    link = make_link_mock(password_hash=hash_password("secret"))
+    link.password_locked_until = datetime.now(UTC) + timedelta(minutes=10)
+    links_repo = AsyncMock()
+    links_repo.get_required_available_link_by_token = AsyncMock(return_value=link)
+    uow = make_uow(links=links_repo, nodes=AsyncMock(), files=AsyncMock())
+    service = make_service(uow)
+
+    data = PublicLinkAccessRequest(token="tok", password="secret")
+    with pytest.raises(PermissionServiceError) as excinfo:
+        await service.create_public_download_url(data)
+    assert excinfo.value.details.get("reason") == "too_many_password_attempts"
+
+
+@pytest.mark.asyncio
+async def test_create_public_download_url_wrong_password_registers_failure():
+    """Неверный пароль в throwing-пути фиксируется до выброса ошибки."""
+    link = make_link_mock(password_hash=hash_password("secret"))
+    links_repo = AsyncMock()
+    links_repo.get_required_available_link_by_token = AsyncMock(return_value=link)
+    links_repo.register_password_failure = AsyncMock(return_value=None)
+    uow = make_uow(links=links_repo, nodes=AsyncMock(), files=AsyncMock())
+    service = make_service(uow)
+
+    data = PublicLinkAccessRequest(token="tok", password="wrong")
+    with pytest.raises(PermissionServiceError):
+        await service.create_public_download_url(data)
+    links_repo.register_password_failure.assert_awaited_once()

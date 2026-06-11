@@ -1447,3 +1447,60 @@ async def test_create_integrity_error_remapped():
             await repo.create(link)
     finally:
         base_mod.BaseRepository.create = orig  # type: ignore
+
+
+# ---------------------------------------------------------------------------
+# Тесты: register_password_failure / reset_password_failures
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_register_password_failure_returns_locked_until():
+    repo, session, result = make_repo()
+    from datetime import UTC, datetime, timedelta
+
+    locked = datetime.now(UTC) + timedelta(minutes=15)
+    result.scalar_one_or_none = MagicMock(return_value=locked)
+
+    returned = await repo.register_password_failure(
+        link_id=uuid.uuid4(), max_attempts=5, lockout_seconds=900
+    )
+
+    assert returned == locked
+    session.execute.assert_awaited_once()
+    session.flush.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_register_password_failure_no_lock_returns_none():
+    repo, session, result = make_repo()
+    result.scalar_one_or_none = MagicMock(return_value=None)
+
+    returned = await repo.register_password_failure(
+        link_id=uuid.uuid4(), max_attempts=5, lockout_seconds=900
+    )
+
+    assert returned is None
+
+
+@pytest.mark.asyncio
+async def test_register_password_failure_wraps_sqlalchemy_error():
+    repo, session, result = make_repo()
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from database.exceptions import RepositoryError
+
+    session.execute = AsyncMock(side_effect=SQLAlchemyError("boom"))
+    with pytest.raises(RepositoryError):
+        await repo.register_password_failure(
+            link_id=uuid.uuid4(), max_attempts=5, lockout_seconds=900
+        )
+
+
+@pytest.mark.asyncio
+async def test_reset_password_failures_executes_update():
+    repo, session, result = make_repo()
+
+    await repo.reset_password_failures(link_id=uuid.uuid4())
+
+    session.execute.assert_awaited_once()
+    session.flush.assert_awaited_once()

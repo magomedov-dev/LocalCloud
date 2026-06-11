@@ -74,6 +74,10 @@ def _import_seed_admin(connection: AsyncMock) -> Any:
             "passlib.context.CryptContext.__init__", return_value=None
         ),
         patch("passlib.context.CryptContext.hash", return_value="hashed-password"),
+        # DEBUG=true: тесты проверяют логику сидинга, а не guard дефолтного
+        # пароля (он покрыт отдельным тестом ниже). Без этого скрипт отказался
+        # бы создавать админа с дефолтным ADMIN_PASSWORD вне debug.
+        patch.dict("os.environ", {"DEBUG": "true"}),
     ):
         module = importlib.import_module(MODULE_NAME)
         module._connect_mock = connect_mock  # type: ignore[attr-defined]
@@ -253,3 +257,46 @@ def test_idempotent_second_run_is_a_pure_skip(
     _import_seed_admin(second_conn)
 
     assert _executed_sql(second_conn) == []
+
+
+def test_default_admin_password_refused_in_production() -> None:
+    """Вне DEBUG скрипт отказывается сидить админа с дефолтным паролем."""
+    router = FetchvalRouter()
+    conn = make_connection(router)
+
+    sys.modules.pop(MODULE_NAME, None)
+    with (
+        patch("asyncpg.connect", new=AsyncMock(return_value=conn)),
+        patch("passlib.context.CryptContext.__init__", return_value=None),
+        patch("passlib.context.CryptContext.hash", return_value="hashed-password"),
+        patch.dict(
+            "os.environ",
+            {"DEBUG": "false", "ADMIN_PASSWORD": "Admin@LocalCloud123"},
+        ),
+        pytest.raises(SystemExit),
+    ):
+        importlib.import_module(MODULE_NAME)
+
+    # Ни одного INSERT не выполнено — отказ произошёл до обращения к БД.
+    conn.execute.assert_not_called()
+
+
+def test_custom_admin_password_allowed_in_production() -> None:
+    """С заданным надёжным паролем сидинг вне DEBUG проходит штатно."""
+    router = FetchvalRouter()
+    conn = make_connection(router)
+
+    sys.modules.pop(MODULE_NAME, None)
+    with (
+        patch("asyncpg.connect", new=AsyncMock(return_value=conn)),
+        patch("passlib.context.CryptContext.__init__", return_value=None),
+        patch("passlib.context.CryptContext.hash", return_value="hashed-password"),
+        patch.dict(
+            "os.environ",
+            {"DEBUG": "false", "ADMIN_PASSWORD": "a-strong-custom-password-123"},
+        ),
+    ):
+        importlib.import_module(MODULE_NAME)
+
+    # INSERT'ы выполнены: guard пропустил надёжный пароль.
+    assert conn.execute.await_count >= 1

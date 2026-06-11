@@ -3,6 +3,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Path, status
 
 from api.dependencies import get_public_links_service_dependency
+from app.dependencies import rate_limit_dependency
+from core.config import get_settings
 from schemas.common import PageResponse
 from schemas.public_links import (
     PublicLinkAccessRequest,
@@ -22,6 +24,15 @@ from services import PublicLinksService
 
 # Маршрутизатор эндпоинтов для управления публичными ссылками.
 router = APIRouter(prefix="/public-links", tags=["public-links"])
+
+# Лимит частоты анонимных проверок публичных ссылок с одного IP: защита от
+# перебора токенов и паролей по множеству ссылок. Перебор пароля конкретной
+# ссылки дополнительно блокируется на уровне БД (см. PublicLinksService).
+_public_access_rate_limit = rate_limit_dependency(
+    "public-link-access",
+    limit=get_settings().security.rate_limit_public_access_attempts,
+    window_seconds=get_settings().security.rate_limit_public_access_window_seconds,
+)
 
 
 @router.post(
@@ -246,6 +257,7 @@ async def revoke_public_link(
     "/public/{token}",
     response_model=PublicLinkPublicRead,
     status_code=status.HTTP_200_OK,
+    dependencies=[Depends(_public_access_rate_limit)],
 )
 async def get_public_link_by_token(
     token: str = Path(..., min_length=1, max_length=128),
@@ -279,6 +291,7 @@ async def get_public_link_by_token(
     "/public/{token}/access",
     response_model=PublicLinkAccessResponse,
     status_code=status.HTTP_200_OK,
+    dependencies=[Depends(_public_access_rate_limit)],
 )
 async def check_public_link_access(
     data: PublicLinkAccessRequest,

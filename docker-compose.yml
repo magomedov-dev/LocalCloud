@@ -12,7 +12,8 @@
 # Postgres и MinIO НЕ публикуются на host,
 # они доступны только во внутренней сети.
 # Поэтому стек не конфликтует с локальными dev Postgres/MinIO.
-# Консоль MinIO доступна на :9090 для отладки.
+# Консоль MinIO привязана к 127.0.0.1:9090 — доступна только с самого хоста
+# (для отладки через SSH-туннель), но не из внешней сети.
 
 name: localcloud
 
@@ -34,7 +35,9 @@ services:
     image: postgres:16
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-localcloud}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-localcloud}
+      # Без fallback: пустой/незаданный POSTGRES_PASSWORD должен ронять запуск,
+      # а не молча поднимать БД со слабым паролем «localcloud».
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD не задан в .env}
       POSTGRES_DB: ${POSTGRES_DB:-localcloud}
     # Тюнинг под малую RAM: ограниченное число подключений (пул приложения мал),
     # умеренный shared_buffers, минимальный параллелизм.
@@ -79,14 +82,18 @@ services:
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-localcloud}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-localcloud}
+      # Без fallback: незаданный MINIO_SECRET_KEY ронит запуск, а не поднимает
+      # хранилище со слабым секретом по умолчанию.
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY не задан в .env}
     mem_limit: ${MINIO_MEM_LIMIT:-256m}
     memswap_limit: ${MINIO_MEM_LIMIT:-256m}
     cpu_shares: ${MINIO_CPU_SHARES:-768}
     volumes:
       - minio_data:/data
     ports:
-      - "9090:9001" # web-консоль: host 9090 → container 9001
+      # Привязка к loopback: консоль доступна только с хоста (SSH-туннель),
+      # а не из внешней сети. Раньше "9090:9001" слушал на всех интерфейсах.
+      - "127.0.0.1:9090:9001"
     restart: unless-stopped
 
   api:

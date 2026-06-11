@@ -1,0 +1,115 @@
+# ── Gateway LocalCloud — TLS-вариант (пример) ────────────────────────────────
+# Образец конфигурации с HTTPS для production-развёртывания.
+#
+# Как использовать:
+#   1. Получите сертификат (например, Let's Encrypt через certbot) и положите
+#      fullchain.pem и privkey.pem в каталог, смонтированный в контейнер nginx
+#      (например, /etc/nginx/certs). Пример монтирования см. ниже.
+#   2. Подставьте свой домен вместо example.com в server_name и пути к сертификатам.
+#   3. Замените содержимое nginx/nginx.conf этим файлом (или скопируйте поверх)
+#      и пересоберите gateway: docker compose up -d --build nginx.
+#   4. В .env выставьте COOKIE_SECURE=true (cookie только по HTTPS) и
+#      публичные параметры под HTTPS (см. MINIO_PUBLIC_* / public host).
+#
+# Пример монтирования сертификатов в docker-compose.override.yml:
+#   services:
+#     nginx:
+#       ports:
+#         - "80:80"
+#         - "443:443"
+#       volumes:
+#         - /etc/letsencrypt/live/example.com:/etc/nginx/certs:ro
+#
+# Всё раздаётся с одного origin, поэтому CORS не нужен.
+
+upstream localcloud_api      { server api:8000; }
+upstream localcloud_frontend { server frontend:80; }
+upstream localcloud_minio    { server minio:9000; }
+
+# ── HTTP → HTTPS: безусловный редирект ───────────────────────────────────────
+# Единственное назначение порта 80 — перенаправление на HTTPS (плюс ACME-челлендж
+# Let's Encrypt, если используете webroot-режим certbot).
+server {
+    listen 80;
+    server_name example.com;
+
+    # ACME http-01 challenge (если обновляете сертификат через webroot).
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 308 https://$host$request_uri;
+    }
+}
+
+# ── HTTPS ────────────────────────────────────────────────────────────────────
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name example.com;
+
+    ssl_certificate     /etc/nginx/certs/fullchain.pem;
+    ssl_certificate_key /etc/nginx/certs/privkey.pem;
+
+    # Современный, безопасный профиль TLS: только TLS 1.2/1.3.
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache   shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    client_max_body_size 50m;
+
+    # ── Заголовки безопасности ─────────────────────────────────────────────
+    # Те же, что в HTTP-конфиге, плюс HSTS (имеет смысл только под HTTPS):
+    # браузер запоминает, что сюда ходят только по HTTPS.
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Permissions-Policy "geolocation=(), camera=(), microphone=(), payment=(), usb=()" always;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    # CSP синхронизирована с nginx/nginx.conf (хэш инлайн-скрипта темы из
+    # frontend/index.html проверяет тест frontend/tests/security/csp.test.ts).
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-YRFH/qEY7XZSpK0YuNyxQgheggnnHnSRkrmCyEloL0c='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; media-src 'self' blob:; frame-src 'self' blob:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+
+    # ── REST API ─────────────────────────────────────────────────────────────
+    location /api/ {
+        proxy_pass http://localcloud_api;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+    }
+
+    # ── Объектное хранилище: presigned GET/PUT в MinIO ──────────────────────
+    # Host должен совпадать с MINIO_HOST:MINIO_PORT backend'а, иначе MinIO вернёт
+    # SignatureDoesNotMatch (SigV4 учитывает Host).
+    location ~ ^/(localcloud-files|localcloud-temp|localcloud-archives)/ {
+        proxy_pass http://localcloud_minio;
+        proxy_http_version 1.1;
+        proxy_set_header Host              minio:9000;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        client_max_body_size      0;
+        proxy_request_buffering   off;
+        proxy_buffering           off;
+        proxy_connect_timeout     300s;
+        proxy_send_timeout        300s;
+        proxy_read_timeout        300s;
+    }
+
+    # ── SPA: статический frontend с fallback для History API ────────────────
+    location / {
+        proxy_pass http://localcloud_frontend;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}

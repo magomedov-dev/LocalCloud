@@ -143,6 +143,17 @@ class SecuritySettings(BaseSettings):
         access_token_expire_minutes: Время жизни access-токена в минутах.
         refresh_token_expire_days: Время жизни refresh-токена в днях.
         password_hash_scheme: Схема хеширования паролей.
+        public_link_password_max_attempts: Число неверных паролей публичной
+            ссылки до временной блокировки проверок пароля.
+        public_link_password_lockout_seconds: Длительность блокировки проверок
+            пароля публичной ссылки после исчерпания попыток.
+        rate_limit_auth_attempts: Число запросов к чувствительным auth-точкам
+            с одного IP за окно.
+        rate_limit_auth_window_seconds: Размер окна лимита auth-запросов.
+        rate_limit_public_access_attempts: Число проверок доступа к публичным
+            ссылкам с одного IP за окно.
+        rate_limit_public_access_window_seconds: Размер окна лимита проверок
+            публичных ссылок.
     """
 
     model_config = SettingsConfigDict(
@@ -168,6 +179,37 @@ class SecuritySettings(BaseSettings):
     password_hash_scheme: str = Field(
         default=SCC.PASSWORD_HASH_SCHEME,
         alias="PASSWORD_HASH_SCHEME",
+    )
+    public_link_password_max_attempts: int = Field(
+        default=SCC.PUBLIC_LINK_PASSWORD_MAX_ATTEMPTS,
+        ge=1,
+        le=100,
+        alias="PUBLIC_LINK_PASSWORD_MAX_ATTEMPTS",
+    )
+    public_link_password_lockout_seconds: int = Field(
+        default=SCC.PUBLIC_LINK_PASSWORD_LOCKOUT_SECONDS,
+        ge=1,
+        alias="PUBLIC_LINK_PASSWORD_LOCKOUT_SECONDS",
+    )
+    rate_limit_auth_attempts: int = Field(
+        default=SCC.RATE_LIMIT_AUTH_ATTEMPTS,
+        ge=1,
+        alias="RATE_LIMIT_AUTH_ATTEMPTS",
+    )
+    rate_limit_auth_window_seconds: int = Field(
+        default=SCC.RATE_LIMIT_AUTH_WINDOW_SECONDS,
+        ge=1,
+        alias="RATE_LIMIT_AUTH_WINDOW_SECONDS",
+    )
+    rate_limit_public_access_attempts: int = Field(
+        default=SCC.RATE_LIMIT_PUBLIC_ACCESS_ATTEMPTS,
+        ge=1,
+        alias="RATE_LIMIT_PUBLIC_ACCESS_ATTEMPTS",
+    )
+    rate_limit_public_access_window_seconds: int = Field(
+        default=SCC.RATE_LIMIT_PUBLIC_ACCESS_WINDOW_SECONDS,
+        ge=1,
+        alias="RATE_LIMIT_PUBLIC_ACCESS_WINDOW_SECONDS",
     )
 
 

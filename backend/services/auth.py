@@ -372,7 +372,14 @@ class AuthService:
             old_token_hash = hash_token(refresh_token, settings=self.settings)
 
             async with self.uow_factory() as uow:
-                existing_token = await uow.refresh_tokens.get_by_hash(old_token_hash)
+                # for_update блокирует строку токена до конца транзакции:
+                # конкурентные ротации с одним refresh-токеном сериализуются —
+                # второй запрос дождётся коммита первого, перечитает уже
+                # отозванный токен и попадёт в ветку детекции повторного
+                # использования вместо успешной двойной ротации.
+                existing_token = await uow.refresh_tokens.get_by_hash(
+                    old_token_hash, for_update=True
+                )
                 if existing_token is None:
                     raise AuthenticationServiceError(
                         "Refresh token не найден или уже недействителен.",

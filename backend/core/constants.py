@@ -98,6 +98,17 @@ class SecurityConstants:
         ACCESS_TOKEN_EXPIRE_MINUTES: Время жизни access-токена в минутах.
         REFRESH_TOKEN_EXPIRE_DAYS: Время жизни refresh-токена в днях.
         PASSWORD_HASH_SCHEME: Схема хеширования паролей.
+        PUBLIC_LINK_PASSWORD_MAX_ATTEMPTS: Число неверных паролей публичной
+            ссылки до временной блокировки проверок пароля.
+        PUBLIC_LINK_PASSWORD_LOCKOUT_SECONDS: Длительность блокировки проверок
+            пароля публичной ссылки после исчерпания попыток.
+        RATE_LIMIT_AUTH_ATTEMPTS: Число запросов к чувствительным auth-точкам
+            (логин, заявка на регистрацию) с одного IP за окно.
+        RATE_LIMIT_AUTH_WINDOW_SECONDS: Размер окна лимита auth-запросов.
+        RATE_LIMIT_PUBLIC_ACCESS_ATTEMPTS: Число проверок доступа к публичным
+            ссылкам с одного IP за окно (защита от перебора токенов).
+        RATE_LIMIT_PUBLIC_ACCESS_WINDOW_SECONDS: Размер окна лимита проверок
+            публичных ссылок.
     """
 
     SECRET_KEY: Final[str] = "localcloud-development-secret-key-change-me"
@@ -107,6 +118,12 @@ class SecurityConstants:
     ACCESS_TOKEN_EXPIRE_MINUTES: Final[int] = 15
     REFRESH_TOKEN_EXPIRE_DAYS: Final[int] = 30
     PASSWORD_HASH_SCHEME: Final[str] = "bcrypt"
+    PUBLIC_LINK_PASSWORD_MAX_ATTEMPTS: Final[int] = 5
+    PUBLIC_LINK_PASSWORD_LOCKOUT_SECONDS: Final[int] = 15 * 60
+    RATE_LIMIT_AUTH_ATTEMPTS: Final[int] = 10
+    RATE_LIMIT_AUTH_WINDOW_SECONDS: Final[int] = 5 * 60
+    RATE_LIMIT_PUBLIC_ACCESS_ATTEMPTS: Final[int] = 30
+    RATE_LIMIT_PUBLIC_ACCESS_WINDOW_SECONDS: Final[int] = 5 * 60
 
 
 class CookieConstants:

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Final, Literal, cast
 
-from sqlalchemy import Select, and_, or_, select, update
+from sqlalchemy import Select, and_, case, or_, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -1540,6 +1540,101 @@ class PublicLinksRepository(BaseRepository[PublicLink]):
             flush=flush,
             refresh=refresh,
         )
+
+    async def register_password_failure(
+        self,
+        *,
+        link_id: uuid.UUID,
+        max_attempts: int,
+        lockout_seconds: int,
+        now: datetime | None = None,
+    ) -> datetime | None:
+        """Атомарно фиксирует неверный пароль публичной ссылки.
+
+        Увеличивает счётчик подряд идущих неудач одним UPDATE (без гонок при
+        параллельных попытках). При достижении ``max_attempts`` устанавливает
+        блокировку проверок пароля на ``lockout_seconds`` и обнуляет счётчик —
+        после окончания блокировки отсчёт начинается заново.
+
+        Args:
+            link_id: Идентификатор публичной ссылки.
+            max_attempts: Число неудач до блокировки.
+            lockout_seconds: Длительность блокировки в секундах.
+            now: Текущий момент (по умолчанию — UTC now); нужен для тестов.
+
+        Returns:
+            Момент окончания блокировки, если она наступила (сейчас или
+            ранее и ещё действует), иначе ``None``.
+
+        Raises:
+            RepositoryError: Если запрос завершился ошибкой.
+        """
+
+        moment = now or self._now()
+        locked_until = moment + timedelta(seconds=lockout_seconds)
+        lock_triggered = PublicLink.failed_password_attempts + 1 >= max_attempts
+
+        statement = (
+            update(PublicLink)
+            .where(PublicLink.id == link_id)
+            .values(
+                failed_password_attempts=case(
+                    (lock_triggered, 0),
+                    else_=PublicLink.failed_password_attempts + 1,
+                ),
+                password_locked_until=case(
+                    (lock_triggered, locked_until),
+                    else_=PublicLink.password_locked_until,
+                ),
+            )
+            .returning(PublicLink.password_locked_until)
+        )
+
+        try:
+            result = await self.session.execute(statement)
+            await self.session.flush()
+            return result.scalar_one_or_none()
+        except SQLAlchemyError as exc:
+            raise self._repository_error(
+                operation="register_password_failure",
+                reason=str(exc),
+                cause=exc,
+            ) from exc
+
+    async def reset_password_failures(self, *, link_id: uuid.UUID) -> None:
+        """Сбрасывает счётчик неудачных паролей и блокировку ссылки.
+
+        Вызывается после успешной проверки пароля, чтобы прошлые неудачи не
+        накапливались между сессиями легитимного пользователя.
+
+        Args:
+            link_id: Идентификатор публичной ссылки.
+
+        Raises:
+            RepositoryError: Если запрос завершился ошибкой.
+        """
+
+        statement = (
+            update(PublicLink)
+            .where(
+                PublicLink.id == link_id,
+                or_(
+                    PublicLink.failed_password_attempts != 0,
+                    PublicLink.password_locked_until.is_not(None),
+                ),
+            )
+            .values(failed_password_attempts=0, password_locked_until=None)
+        )
+
+        try:
+            await self.session.execute(statement)
+            await self.session.flush()
+        except SQLAlchemyError as exc:
+            raise self._repository_error(
+                operation="reset_password_failures",
+                reason=str(exc),
+                cause=exc,
+            ) from exc
 
     async def register_download(
         self,

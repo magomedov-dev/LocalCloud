@@ -150,6 +150,32 @@ async def test_get_by_hash_empty_returns_none():
     assert result is None
 
 
+@pytest.mark.asyncio
+async def test_get_by_hash_for_update_locks_row():
+    """for_update=True добавляет FOR UPDATE — блокировка строки на время tx."""
+    from sqlalchemy.dialects import postgresql
+
+    repo, session, result = make_repo()
+    await repo.get_by_hash("somehash", for_update=True)
+
+    statement = session.execute.await_args.args[0]
+    sql = str(statement.compile(dialect=postgresql.dialect()))
+    assert "FOR UPDATE" in sql
+
+
+@pytest.mark.asyncio
+async def test_get_by_hash_without_for_update_does_not_lock():
+    """По умолчанию строка не блокируется (FOR UPDATE отсутствует)."""
+    from sqlalchemy.dialects import postgresql
+
+    repo, session, result = make_repo()
+    await repo.get_by_hash("somehash")
+
+    statement = session.execute.await_args.args[0]
+    sql = str(statement.compile(dialect=postgresql.dialect()))
+    assert "FOR UPDATE" not in sql
+
+
 # ---------------------------------------------------------------------------
 # get_required_by_hash
 # ---------------------------------------------------------------------------

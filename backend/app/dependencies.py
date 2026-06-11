@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import math
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from ipaddress import ip_address
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import Depends, Request
+from fastapi import Depends, HTTPException, Request, status
+
+from core.rate_limit import SlidingWindowRateLimiter
 
 REQUEST_ID_HEADER = "X-Request-ID"
 CORRELATION_ID_HEADER = "X-Correlation-ID"
@@ -110,6 +114,45 @@ def get_request_id(
 
 RequestContextDependency = Annotated[RequestContext, Depends(get_request_context)]
 RequestIdDependency = Annotated[str, Depends(get_request_id)]
+
+
+def rate_limit_dependency(
+    scope: str,
+    *,
+    limit: int,
+    window_seconds: float,
+) -> Callable[[Request], Awaitable[None]]:
+    """Создаёт FastAPI-зависимость, ограничивающую частоту запросов по IP.
+
+    Лимит считается скользящим окном на процесс (см. ``core.rate_limit``).
+    Клиенты без определимого IP попадают в общий ключ ``"unknown"`` — для
+    self-hosted развёртывания за nginx с ``X-Forwarded-For`` это краевой
+    случай, и общий лимит на них приемлем.
+
+    Args:
+        scope: Имя области лимита (например, ``"auth"``) — изолирует ключи
+            разных endpoint-групп друг от друга.
+        limit: Максимальное число запросов в окне с одного IP.
+        window_seconds: Размер окна в секундах.
+
+    Returns:
+        Асинхронная зависимость, выбрасывающая ``HTTPException 429`` с
+        заголовком ``Retry-After`` при превышении лимита.
+    """
+
+    limiter = SlidingWindowRateLimiter(limit=limit, window_seconds=window_seconds)
+
+    async def dependency(request: Request) -> None:
+        client_ip = build_request_context(request).client_ip or "unknown"
+        retry_after = limiter.acquire(f"{scope}:{client_ip}")
+        if retry_after is not None:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Слишком много запросов. Повторите попытку позже.",
+                headers={"Retry-After": str(max(1, math.ceil(retry_after)))},
+            )
+
+    return dependency
 
 
 def _extract_client_ip(request: Request) -> str | None:

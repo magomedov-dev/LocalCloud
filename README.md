@@ -297,7 +297,9 @@ email:   admin@localcloud.dev
 
 - смените `SECRET_KEY`, `POSTGRES_PASSWORD`, `MINIO_SECRET_KEY`, `ADMIN_PASSWORD`
   (генератор `.env` делает это автоматически — сохраните напечатанный пароль);
-- за HTTPS выставьте `COOKIE_SECURE=true`;
+- включите HTTPS: возьмите за основу [`nginx/nginx-tls.conf.example`](./nginx/nginx-tls.conf.example)
+  (TLS 1.2/1.3, HSTS, редирект HTTP→HTTPS) и выставьте `COOKIE_SECURE=true`
+  (без этого backend вне `DEBUG` громко предупредит в логах);
 - задайте `MINIO_PUBLIC_HOST` / `MINIO_PUBLIC_PORT` под ваш домен;
 - не запускайте генератор `.env` повторно над уже инициализированной БД — иначе
   сменится `POSTGRES_PASSWORD` и контейнер не поднимется.

@@ -135,6 +135,23 @@ class PublicLink(Base, UUIDPrimaryKeyMixin, CreatedAtMixin):
         comment="Хэш пароля публичной ссылки. Открытый пароль не хранится.",
     )
 
+    failed_password_attempts: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+        comment="Число подряд идущих неверных паролей публичной ссылки.",
+    )
+
+    password_locked_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment=(
+            "Момент, до которого проверки пароля ссылки заблокированы "
+            "после исчерпания попыток."
+        ),
+    )
+
     permission_type: Mapped[PublicLinkPermissionType] = mapped_column(
         Enum(
             PublicLinkPermissionType,

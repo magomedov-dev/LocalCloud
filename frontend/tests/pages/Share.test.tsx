@@ -111,9 +111,27 @@ describe("SharePage", () => {
     expect(screen.getByText("Ссылка защищена паролем")).toBeInTheDocument();
   });
 
+  it("hides file metadata until the password is entered", async () => {
+    // Бэкенд для запароленной ссылки не отдаёт node/description в карточке.
+    getPublic.mockResolvedValue(
+      makeLink({ has_password: true, node: null, description: null }) as never,
+    );
+    renderShare();
+
+    expect(await screen.findByText("Ссылка защищена паролем")).toBeInTheDocument();
+    // Имя файла не раскрывается до ввода пароля.
+    expect(screen.queryByText("report.pdf")).not.toBeInTheDocument();
+  });
+
   it("unlocks with the correct password and reveals the file", async () => {
-    getPublic.mockResolvedValue(makeLink({ has_password: true }) as never);
-    validateAccess.mockResolvedValue({ allowed: true } as never);
+    // Карточка приходит без содержимого; полные данные — из validate_access.
+    getPublic.mockResolvedValue(
+      makeLink({ has_password: true, node: null, description: null }) as never,
+    );
+    validateAccess.mockResolvedValue({
+      allowed: true,
+      link: makeLink({ has_password: true }),
+    } as never);
     download.mockResolvedValue({
       presigned_url: "https://x/file",
       filename: "report.pdf",
@@ -123,9 +141,12 @@ describe("SharePage", () => {
     renderShare();
 
     await screen.findByText("Ссылка защищена паролем");
+    // До разблокировки имени нет.
+    expect(screen.queryByText("report.pdf")).not.toBeInTheDocument();
     await user.type(screen.getByPlaceholderText("Пароль"), "right");
     await user.click(screen.getByRole("button", { name: "Открыть" }));
 
+    // Имя появляется только после успешной проверки пароля.
     expect(await screen.findByText("report.pdf")).toBeInTheDocument();
     await waitFor(() => expect(download).toHaveBeenCalledWith("tok123", "right"));
   });

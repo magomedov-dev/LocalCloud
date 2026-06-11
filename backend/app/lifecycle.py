@@ -12,6 +12,10 @@ from core.logging import (
     setup_logging,
     silence_noisy_loggers,
 )
+from core.secret_validation import (
+    validate_secrets_or_raise,
+    warn_if_cookies_insecure,
+)
 from database import (
     close_db_client,
     init_db_client,
@@ -57,6 +61,11 @@ async def startup_backend(app: FastAPI) -> None:
     try:
         app.state.settings = settings
         app.state.started_at = datetime.now(UTC)
+
+        # Падаем сразу, если в production остались дефолтные секреты — лучше
+        # явный отказ на старте, чем тихая компрометация.
+        validate_secrets_or_raise(settings)
+        warn_if_cookies_insecure(settings)
 
         if not is_db_client_initialized():
             init_db_client(settings.database)

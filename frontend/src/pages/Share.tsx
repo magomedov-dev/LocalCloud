@@ -32,7 +32,7 @@ export function SharePage() {
   const { token } = useParams<{ token: string }>();
 
   const {
-    data: link,
+    data: cardLink,
     isLoading,
     isError,
   } = useQuery({
@@ -42,17 +42,10 @@ export function SharePage() {
     retry: false,
   });
 
-  const node = link?.node;
-  const isFolder = node?.node_type === "folder";
-  const isImage = !isFolder && isImageFile(node?.name, node?.file_mime_type);
-  // Не-изображения (PDF/видео) показываем через сгенерированную webp-миниатюру.
-  const hasThumbnail = !isFolder && !isImage && thumbnailSupported(node?.file_mime_type);
-
   // Пароль публичной ссылки: вводится на шлюзе и подтверждается через /access.
   // До разблокировки скачивание не запускаем, иначе сервер вернёт 403.
   const [password, setPassword] = useState("");
   const [unlockedPassword, setUnlockedPassword] = useState<string | null>(null);
-  const needsUnlock = !!link && link.has_password && unlockedPassword === null;
 
   const access = useMutation({
     mutationFn: (pwd: string) => publicLinksApi.validateAccess(token!, pwd),
@@ -65,6 +58,20 @@ export function SharePage() {
     },
     onError: () => toast.error("Не удалось проверить пароль"),
   });
+
+  // Для запароленной ссылки карточка (getPublic) приходит без node/description —
+  // содержимое не раскрывается до ввода пароля. После успешной проверки полные
+  // данные берём из ответа validate_access.
+  const unlocked = access.data?.allowed ? access.data.link : null;
+  const link = unlocked ?? cardLink;
+
+  const node = link?.node;
+  const isFolder = node?.node_type === "folder";
+  const isImage = !isFolder && isImageFile(node?.name, node?.file_mime_type);
+  // Не-изображения (PDF/видео) показываем через сгенерированную webp-миниатюру.
+  const hasThumbnail = !isFolder && !isImage && thumbnailSupported(node?.file_mime_type);
+
+  const needsUnlock = !!cardLink && cardLink.has_password && unlockedPassword === null;
 
   // Pre-fetch the presigned URL — used for both image preview and download.
   const { data: fileData, isLoading: fileLoading } = useQuery({

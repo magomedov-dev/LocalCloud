@@ -82,6 +82,8 @@ class RefreshTokensRepository(BaseRepository[RefreshToken]):
     async def get_by_hash(
         self,
         token_hash: str,
+        *,
+        for_update: bool = False,
     ) -> RefreshToken | None:
         """Возвращает refresh-токен по хэшу.
 
@@ -90,6 +92,11 @@ class RefreshTokensRepository(BaseRepository[RefreshToken]):
 
         Args:
             token_hash: Хэш refresh-токена.
+            for_update: Если ``True``, блокирует строку токена (``SELECT ...
+                FOR UPDATE``) до конца транзакции. Используется при ротации,
+                чтобы сериализовать конкурентные запросы с одним токеном:
+                второй запрос дождётся первого и увидит уже отозванный токен
+                (срабатывает детекция повторного использования).
 
         Returns:
             Refresh-токен, если он найден, иначе ``None``.
@@ -103,6 +110,8 @@ class RefreshTokensRepository(BaseRepository[RefreshToken]):
         statement = select(RefreshToken).where(
             RefreshToken.token_hash == normalized_token_hash,
         )
+        if for_update:
+            statement = statement.with_for_update()
 
         return await self.scalar_one_or_none(
             statement,

@@ -574,6 +574,18 @@ class PublicLinksService:
                 _ensure_public_access_allowed(link, operation=operation)
 
                 if link.password_hash:
+                    # Блокировка перебора: после серии неверных паролей проверки
+                    # временно не выполняются вовсе (даже для верного пароля).
+                    if _password_lock_active(link):
+                        return PublicLinkAccessResponse(
+                            allowed=False,
+                            link=None,
+                            requires_password=True,
+                            message=(
+                                "Слишком много неудачных попыток. "
+                                "Повторите попытку позже."
+                            ),
+                        )
                     if data.password is None:
                         return PublicLinkAccessResponse(
                             allowed=False,
@@ -582,15 +594,29 @@ class PublicLinksService:
                             message="Требуется пароль.",
                         )
                     if not verify_password(data.password, link.password_hash):
+                        # Неудача фиксируется атомарно и коммитится сразу:
+                        # выход из uow без commit откатил бы счётчик.
+                        await uow.links.register_password_failure(
+                            link_id=link.id,
+                            max_attempts=(
+                                self.settings.security.public_link_password_max_attempts
+                            ),
+                            lockout_seconds=(
+                                self.settings.security.public_link_password_lockout_seconds
+                            ),
+                        )
                         await self._safe_log_security_password_failed(
                             link=link, operation=operation
                         )
+                        await uow.commit()
                         return PublicLinkAccessResponse(
                             allowed=False,
                             link=None,
                             requires_password=True,
                             message="Неверный пароль.",
                         )
+                    # Верный пароль: прошлые неудачи не должны накапливаться.
+                    await uow.links.reset_password_failures(link_id=link.id)
 
                 await uow.links.register_view(link, flush=True, refresh=True)
                 snapshot = _link_snapshot(link)
@@ -670,6 +696,13 @@ class PublicLinksService:
                 link = await uow.links.get_required_available_link_by_token(token)
                 _ensure_public_access_allowed(link, operation=operation)
                 snapshot = _link_snapshot(link)
+                # Карточка до ввода пароля не должна раскрывать содержимое
+                # запароленной ссылки: имя/размер/тип узла и описание скрываем,
+                # оставляя только поля для приглашения ввести пароль. Полные
+                # данные отдаёт validate_access после успешной проверки.
+                if link.password_hash:
+                    snapshot["node"] = None
+                    snapshot["description"] = None
             if snapshot is None:
                 raise _empty_result_error(operation)
             return PublicLinkPublicRead.model_validate(snapshot)
@@ -723,7 +756,9 @@ class PublicLinksService:
             async with self.uow_factory() as uow:
                 link = await uow.links.get_required_available_link_by_token(data.token)
                 _ensure_public_download_allowed(link, operation=operation)
-                _validate_public_link_password(link, data.password, operation=operation)
+                await self._enforce_link_password(
+                    link, data.password, operation=operation
+                )
 
                 node = await uow.nodes.get_required_by_id(link.node_id)
                 if node.node_type != NodeType.FILE:
@@ -832,7 +867,9 @@ class PublicLinksService:
             async with self.uow_factory() as uow:
                 link = await uow.links.get_required_available_link_by_token(data.token)
                 _ensure_public_access_allowed(link, operation=operation)
-                _validate_public_link_password(link, data.password, operation=operation)
+                await self._enforce_link_password(
+                    link, data.password, operation=operation
+                )
 
                 node = await uow.nodes.get_required_by_id(link.node_id)
                 if node.node_type != NodeType.FILE:
@@ -921,7 +958,9 @@ class PublicLinksService:
             async with self.uow_factory() as uow:
                 link = await uow.links.get_required_available_link_by_token(data.token)
                 _ensure_public_download_allowed(link, operation=operation)
-                _validate_public_link_password(link, data.password, operation=operation)
+                await self._enforce_link_password(
+                    link, data.password, operation=operation
+                )
 
                 node = await uow.nodes.get_required_by_id(link.node_id)
                 if node.node_type != NodeType.FOLDER:
@@ -1207,6 +1246,129 @@ class PublicLinksService:
                 },
             )
 
+    async def _enforce_link_password(
+        self,
+        link: PublicLink,
+        password: str | None,
+        *,
+        operation: str,
+    ) -> None:
+        """Проверяет пароль ссылки с учётом блокировки перебора.
+
+        Используется в путях, где неверный пароль означает отказ операции
+        (скачивание, превью, загрузка). При активной блокировке проверка
+        пароля не выполняется вовсе. Неверный пароль фиксируется в отдельной
+        транзакции — он должен сохраниться, даже когда транзакция вызывающей
+        операции откатывается из-за выброшенной ошибки.
+
+        Args:
+            link: Публичная ссылка для проверки.
+            password: Пароль, переданный пользователем.
+            operation: Название операции для контекста ошибок.
+
+        Raises:
+            PermissionServiceError: Если проверки пароля заблокированы, пароль
+                отсутствует или указан неверно.
+        """
+
+        if not link.password_hash:
+            return
+
+        if _password_lock_active(link):
+            raise PermissionServiceError(
+                "Слишком много неудачных попыток ввода пароля. "
+                "Повторите попытку позже.",
+                action="public_link_access",
+                reason="too_many_password_attempts",
+                resource_type="public_link",
+                resource_id=link.id,
+                details={"service": SERVICE_NAME, "operation": operation},
+            )
+
+        if password is None:
+            raise PermissionServiceError(
+                "Для этой общедоступной ссылки требуется пароль.",
+                action="public_link_access",
+                reason="missing_password",
+                resource_type="public_link",
+                resource_id=link.id,
+                details={"service": SERVICE_NAME, "operation": operation},
+            )
+
+        if not verify_password(password, link.password_hash):
+            await self._register_link_password_failure(link, operation=operation)
+            raise PermissionServiceError(
+                "Неверный пароль для публичной ссылки.",
+                action="public_link_access",
+                reason="invalid_password",
+                resource_type="public_link",
+                resource_id=link.id,
+                details={"service": SERVICE_NAME, "operation": operation},
+            )
+
+        if link.failed_password_attempts or link.password_locked_until is not None:
+            await self._reset_link_password_failures(link)
+
+    async def _register_link_password_failure(
+        self, link: PublicLink, *, operation: str
+    ) -> None:
+        """Фиксирует неверный пароль ссылки в отдельной транзакции.
+
+        Инкремент счётчика и возможная блокировка коммитятся независимо от
+        транзакции вызывающей операции, которая откатится из-за выброшенной
+        следом ошибки. Сбои фиксации не пробрасываются: отказ в доступе
+        важнее учёта попытки.
+
+        Args:
+            link: Публичная ссылка с неверным паролем.
+            operation: Название операции для аудита.
+        """
+
+        try:
+            async with self.uow_factory() as failure_uow:
+                locked_until = await failure_uow.links.register_password_failure(
+                    link_id=link.id,
+                    max_attempts=(
+                        self.settings.security.public_link_password_max_attempts
+                    ),
+                    lockout_seconds=(
+                        self.settings.security.public_link_password_lockout_seconds
+                    ),
+                )
+                await failure_uow.commit()
+        except Exception:
+            locked_until = None
+            logger.warning(
+                "Не удалось зафиксировать неудачную попытку пароля публичной ссылки.",
+                exc_info=True,
+            )
+        await self._safe_log_security_password_failed(link=link, operation=operation)
+        if locked_until is not None and locked_until > datetime.now(UTC):
+            logger.warning(
+                "Проверки пароля публичной ссылки заблокированы после серии неудач.",
+                extra={
+                    "link_id": str(link.id),
+                    "locked_until": locked_until.isoformat(),
+                },
+            )
+
+    async def _reset_link_password_failures(self, link: PublicLink) -> None:
+        """Сбрасывает счётчик неудачных паролей ссылки в отдельной транзакции.
+
+        Args:
+            link: Публичная ссылка с успешно подтверждённым паролем.
+        """
+
+        try:
+            async with self.uow_factory() as reset_uow:
+                await reset_uow.links.reset_password_failures(link_id=link.id)
+                await reset_uow.commit()
+        except Exception:
+            logger.warning(
+                "Не удалось сбросить счётчик неудачных паролей публичной ссылки.",
+                exc_info=True,
+            )
+
     async def _safe_log_security_password_failed(
         self, *, link: PublicLink, operation: str
     ) -> None:
@@ -1317,47 +1479,27 @@ def _ensure_public_download_allowed(link: PublicLink, *, operation: str) -> None
         )
 
 
-def _validate_public_link_password(
+def _password_lock_active(
     link: PublicLink,
-    password: str | None,
     *,
-    operation: str,
-) -> None:
-    """Проверяет пароль публичной ссылки.
-
-    Если ссылка не защищена паролем, проверка завершается успешно. Если пароль
-    требуется, но не передан или неверен, выбрасывается ошибка доступа.
+    now: datetime | None = None,
+) -> bool:
+    """Проверяет, заблокированы ли сейчас проверки пароля ссылки.
 
     Args:
-        link: Публичная ссылка для проверки.
-        password: Пароль, переданный пользователем.
-        operation: Название операции для контекста ошибок.
+        link: Публичная ссылка.
+        now: Текущий момент (по умолчанию — UTC now); нужен для тестов.
 
-    Raises:
-        PermissionServiceError: Если пароль требуется, но отсутствует или
-            указан неверно.
+    Returns:
+        ``True``, если блокировка после серии неверных паролей ещё действует.
     """
 
-    if not link.password_hash:
-        return
-    if password is None:
-        raise PermissionServiceError(
-            "Для этой общедоступной ссылки требуется пароль.",
-            action="public_link_access",
-            reason="missing_password",
-            resource_type="public_link",
-            resource_id=link.id,
-            details={"service": SERVICE_NAME, "operation": operation},
-        )
-    if not verify_password(password, link.password_hash):
-        raise PermissionServiceError(
-            "Неверный пароль для публичной ссылки.",
-            action="public_link_access",
-            reason="invalid_password",
-            resource_type="public_link",
-            resource_id=link.id,
-            details={"service": SERVICE_NAME, "operation": operation},
-        )
+    locked_until = link.password_locked_until
+    if locked_until is None:
+        return False
+    if locked_until.tzinfo is None:
+        locked_until = locked_until.replace(tzinfo=UTC)
+    return locked_until > (now or datetime.now(UTC))
 
 
 def _ensure_file_downloadable(file: File, *, operation: str) -> None:

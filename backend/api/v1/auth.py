@@ -3,7 +3,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Path, Query, Request, Response, status
 
 from api.dependencies import get_auth_service_dependency, get_users_service_dependency
-from app.dependencies import build_request_context
+from app.dependencies import build_request_context, rate_limit_dependency
+from core.config import get_settings
 from schemas.auth import (
     AuthSessionRead,
     LoginRequest,
@@ -23,6 +24,14 @@ from services import AuthService, UsersService
 
 # Маршрутизатор эндпоинтов аутентификации.
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+# Лимит частоты входа с одного IP: защита от перебора паролей. Скользящее окно
+# на процесс; значения настраиваются через RATE_LIMIT_AUTH_* (.env).
+_login_rate_limit = rate_limit_dependency(
+    "auth-login",
+    limit=get_settings().security.rate_limit_auth_attempts,
+    window_seconds=get_settings().security.rate_limit_auth_window_seconds,
+)
 
 
 def _client_ip(request: Request) -> str | None:
@@ -85,6 +94,7 @@ def _refresh_token_from_request(request: Request) -> str:
     "/login",
     response_model=LoginResponse,
     status_code=status.HTTP_200_OK,
+    dependencies=[Depends(_login_rate_limit)],
 )
 async def login(
     data: LoginRequest,
