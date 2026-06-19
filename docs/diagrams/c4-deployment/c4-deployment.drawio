@@ -1,0 +1,201 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="Страница-1" id="PY3nPB2nWN0OcD1YU4SD">
+    <mxGraphModel dx="1196" dy="834" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-233" parent="1" style="shape=cube;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;darkOpacity=0.05;darkOpacity2=0.1;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;fontColor=default;fillColor=default;size=10;" value="" vertex="1">
+          <mxGeometry height="540" width="590" x="20" y="150" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-185" connectable="0" parent="1" style="group" value="" vertex="1">
+          <mxGeometry height="100" width="170" x="230" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-180" parent="uQdGTPxLVmM_z3gMLbVb-185" style="shape=cube;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;darkOpacity=0.05;darkOpacity2=0.1;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;fontColor=default;fillColor=default;size=10;" value="" vertex="1">
+          <mxGeometry height="100" width="170" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-179" parent="uQdGTPxLVmM_z3gMLbVb-185" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;fontFamily=Helvetica;fontSize=12;fontColor=default;" value="Устройство пользователя" vertex="1">
+          <mxGeometry height="20" width="160" x="10" y="10" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-184" connectable="0" parent="uQdGTPxLVmM_z3gMLbVb-185" style="group" value="" vertex="1">
+          <mxGeometry height="60" width="120" x="30" y="30" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-181" parent="uQdGTPxLVmM_z3gMLbVb-184" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;fontColor=default;fillColor=default;" value="" vertex="1">
+          <mxGeometry height="60" width="120" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-183" parent="uQdGTPxLVmM_z3gMLbVb-184" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;fontFamily=Helvetica;fontSize=12;fontColor=default;" value="Веб-браузер&lt;br&gt;(SPA LocalCloud)" vertex="1">
+          <mxGeometry height="40" width="120" y="10" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-186" parent="1" style="shape=cube;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;darkOpacity=0.05;darkOpacity2=0.1;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;fontColor=default;fillColor=default;size=10;" value="" vertex="1">
+          <mxGeometry height="480" width="560" x="40" y="200" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-189" connectable="0" parent="1" style="group" value="" vertex="1">
+          <mxGeometry height="60" width="80" x="160" y="320" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-187" parent="uQdGTPxLVmM_z3gMLbVb-189" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;fontColor=default;fillColor=default;" value="" vertex="1">
+          <mxGeometry height="60" width="80" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-188" parent="uQdGTPxLVmM_z3gMLbVb-189" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;fontFamily=Helvetica;fontSize=12;fontColor=default;" value="&lt;div&gt;nginx&lt;/div&gt;&lt;div&gt;(шлюз)&lt;/div&gt;&lt;div&gt;:80 / :433&lt;/div&gt;" vertex="1">
+          <mxGeometry height="40" width="80" y="10" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-192" connectable="0" parent="1" style="group" value="" vertex="1">
+          <mxGeometry height="50" width="80" x="280" y="240" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-191" parent="uQdGTPxLVmM_z3gMLbVb-192" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;fontColor=default;fillColor=default;" value="" vertex="1">
+          <mxGeometry height="50" width="80" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-190" parent="uQdGTPxLVmM_z3gMLbVb-192" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;fontFamily=Helvetica;fontSize=12;fontColor=default;" value="&lt;div&gt;nginx&lt;/div&gt;&lt;div&gt;(статика SPA)&lt;/div&gt;" vertex="1">
+          <mxGeometry height="33.333333333333336" width="80" y="8.333333333333334" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-195" connectable="0" parent="1" style="group" value="" vertex="1">
+          <mxGeometry height="70" width="120" x="400" y="320" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-193" parent="uQdGTPxLVmM_z3gMLbVb-195" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;fontColor=default;fillColor=default;" value="" vertex="1">
+          <mxGeometry height="70" width="120" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-194" parent="uQdGTPxLVmM_z3gMLbVb-195" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;fontFamily=Helvetica;fontSize=12;fontColor=default;" value="&lt;div&gt;API&lt;/div&gt;(uvicorn, FastAPI)&lt;br&gt;:8000" vertex="1">
+          <mxGeometry height="50" width="120" y="10" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-198" connectable="0" parent="1" style="group" value="" vertex="1">
+          <mxGeometry height="80" width="140" x="140" y="430" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-196" parent="uQdGTPxLVmM_z3gMLbVb-198" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;fontColor=default;fillColor=default;" value="" vertex="1">
+          <mxGeometry height="80" width="140" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-197" parent="uQdGTPxLVmM_z3gMLbVb-198" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;fontFamily=Helvetica;fontSize=12;fontColor=default;" value="&lt;div&gt;MinIO&lt;/div&gt;&lt;div&gt;(объектное хранилище)&lt;/div&gt;" vertex="1">
+          <mxGeometry height="40" width="140" y="30" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-199" connectable="0" parent="1" style="group" value="" vertex="1">
+          <mxGeometry height="80" width="140" x="360" y="430" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-200" parent="uQdGTPxLVmM_z3gMLbVb-199" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;fontColor=default;fillColor=default;" value="" vertex="1">
+          <mxGeometry height="80" width="140" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-201" parent="uQdGTPxLVmM_z3gMLbVb-199" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;fontFamily=Helvetica;fontSize=12;fontColor=default;" value="PostgreSQL 16" vertex="1">
+          <mxGeometry height="40" width="140" y="30" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-206" connectable="0" parent="1" style="group" value="" vertex="1">
+          <mxGeometry height="60" width="100" x="480" y="550" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-204" parent="uQdGTPxLVmM_z3gMLbVb-206" style="shape=folder;fontStyle=1;spacingTop=10;tabWidth=50;tabHeight=10;tabPosition=left;html=1;whiteSpace=wrap;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;fontColor=default;fillColor=default;" value="" vertex="1">
+          <mxGeometry height="60" width="100" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-205" parent="uQdGTPxLVmM_z3gMLbVb-206" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;fontFamily=Helvetica;fontSize=12;fontColor=default;" value="Том pg_data" vertex="1">
+          <mxGeometry height="30" width="100" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-207" connectable="0" parent="1" style="group" value="" vertex="1">
+          <mxGeometry height="60" width="100" x="60" y="550" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-202" parent="uQdGTPxLVmM_z3gMLbVb-207" style="shape=folder;fontStyle=1;spacingTop=10;tabWidth=50;tabHeight=10;tabPosition=left;html=1;whiteSpace=wrap;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;fontColor=default;fillColor=default;" value="" vertex="1">
+          <mxGeometry height="60" width="100" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-203" parent="uQdGTPxLVmM_z3gMLbVb-207" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;fontFamily=Helvetica;fontSize=12;fontColor=default;" value="Том minio_data" vertex="1">
+          <mxGeometry height="30" width="100" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-209" edge="1" parent="1" source="uQdGTPxLVmM_z3gMLbVb-190" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontFamily=Helvetica;fontSize=12;fontColor=default;curved=1;endArrow=block;endFill=1;dashed=1;dashPattern=12 12;" target="uQdGTPxLVmM_z3gMLbVb-187">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-210" connectable="0" parent="uQdGTPxLVmM_z3gMLbVb-209" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];strokeColor=default;fontFamily=Helvetica;fontSize=12;fontColor=default;fillColor=default;" value="HTTP (статика)" vertex="1">
+          <mxGeometry relative="1" x="0.4637" y="14" as="geometry">
+            <mxPoint x="-24" y="-24" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-211" edge="1" parent="1" source="uQdGTPxLVmM_z3gMLbVb-190" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontFamily=Helvetica;fontSize=12;fontColor=default;endArrow=block;endFill=1;curved=1;dashed=1;dashPattern=8 8;" target="uQdGTPxLVmM_z3gMLbVb-193">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-212" connectable="0" parent="uQdGTPxLVmM_z3gMLbVb-211" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];strokeColor=default;fontFamily=Helvetica;fontSize=12;fontColor=default;fillColor=default;" value="HTTP API" vertex="1">
+          <mxGeometry relative="1" x="-0.0394" y="-14" as="geometry">
+            <mxPoint x="36" y="-9" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-213" edge="1" parent="1" source="uQdGTPxLVmM_z3gMLbVb-191" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;entryPerimeter=0;fontFamily=Helvetica;fontSize=12;fontColor=default;endArrow=block;endFill=1;dashed=1;dashPattern=12 12;curved=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" target="uQdGTPxLVmM_z3gMLbVb-196">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="320" y="390" />
+              <mxPoint x="210" y="390" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-214" connectable="0" parent="uQdGTPxLVmM_z3gMLbVb-213" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];strokeColor=default;fontFamily=Helvetica;fontSize=12;fontColor=default;fillColor=default;" value="HTTP (пути бакетов)" vertex="1">
+          <mxGeometry relative="1" x="-0.455" y="-10" as="geometry">
+            <mxPoint x="-160" y="42" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-216" edge="1" parent="1" source="uQdGTPxLVmM_z3gMLbVb-193" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;entryPerimeter=0;fontFamily=Helvetica;fontSize=12;fontColor=default;endArrow=block;endFill=1;dashed=1;dashPattern=8 8;curved=1;" target="uQdGTPxLVmM_z3gMLbVb-200">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="460" y="410" />
+              <mxPoint x="430" y="410" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-217" connectable="0" parent="uQdGTPxLVmM_z3gMLbVb-216" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];strokeColor=default;fontFamily=Helvetica;fontSize=12;fontColor=default;fillColor=default;" value="TCP 5432 (asyncpg)" vertex="1">
+          <mxGeometry relative="1" x="-0.2297" y="-3" as="geometry">
+            <mxPoint x="67" y="3" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-218" edge="1" parent="1" source="uQdGTPxLVmM_z3gMLbVb-194" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=1;entryY=0.25;entryDx=0;entryDy=0;fontFamily=Helvetica;fontSize=12;fontColor=default;endArrow=block;endFill=1;dashed=1;dashPattern=8 8;curved=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;" target="uQdGTPxLVmM_z3gMLbVb-197">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="330" y="355" />
+              <mxPoint x="330" y="470" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-219" connectable="0" parent="uQdGTPxLVmM_z3gMLbVb-218" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];strokeColor=default;fontFamily=Helvetica;fontSize=12;fontColor=default;fillColor=default;" value="HTTP (S3 API)" vertex="1">
+          <mxGeometry relative="1" x="0.0193" y="-4" as="geometry">
+            <mxPoint x="-41" y="15" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-221" edge="1" parent="1" source="uQdGTPxLVmM_z3gMLbVb-200" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0;entryDx=75;entryDy=10;entryPerimeter=0;fontFamily=Helvetica;fontSize=12;fontColor=default;endArrow=block;endFill=1;dashed=1;dashPattern=8 8;curved=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;exitPerimeter=0;" target="uQdGTPxLVmM_z3gMLbVb-204">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-222" connectable="0" parent="uQdGTPxLVmM_z3gMLbVb-221" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];strokeColor=default;fontFamily=Helvetica;fontSize=12;fontColor=default;fillColor=default;" value="Хранит данные" vertex="1">
+          <mxGeometry relative="1" x="-0.0503" y="-2" as="geometry">
+            <mxPoint x="37" y="-15" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-224" edge="1" parent="1" source="uQdGTPxLVmM_z3gMLbVb-196" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0;entryDx=75;entryDy=10;entryPerimeter=0;fontFamily=Helvetica;fontSize=12;fontColor=default;dashed=1;dashPattern=8 8;endArrow=block;endFill=1;curved=1;" target="uQdGTPxLVmM_z3gMLbVb-202">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-225" connectable="0" parent="uQdGTPxLVmM_z3gMLbVb-224" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];strokeColor=default;fontFamily=Helvetica;fontSize=12;fontColor=default;fillColor=default;" value="Хранит объекты" vertex="1">
+          <mxGeometry relative="1" x="-0.1095" as="geometry">
+            <mxPoint x="-49" y="-10" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-226" parent="1" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;fontColor=default;fillColor=default;" value="Worker&lt;br&gt;(python -m workers.app)" vertex="1">
+          <mxGeometry height="60" width="160" x="240" y="590" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-227" edge="1" parent="1" source="uQdGTPxLVmM_z3gMLbVb-226" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.25;exitY=0;exitDx=0;exitDy=0;entryX=0.855;entryY=1;entryDx=0;entryDy=-4.35;entryPerimeter=0;fontFamily=Helvetica;fontSize=12;fontColor=default;endArrow=block;endFill=1;curved=1;dashed=1;dashPattern=8 8;" target="uQdGTPxLVmM_z3gMLbVb-196">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-228" connectable="0" parent="uQdGTPxLVmM_z3gMLbVb-227" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];strokeColor=default;fontFamily=Helvetica;fontSize=12;fontColor=default;fillColor=default;" value="HTTP (S3 API)" vertex="1">
+          <mxGeometry relative="1" x="-0.0327" y="1" as="geometry">
+            <mxPoint x="-34" y="29" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-230" edge="1" parent="1" source="uQdGTPxLVmM_z3gMLbVb-226" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.75;exitY=0;exitDx=0;exitDy=0;entryX=0.145;entryY=1;entryDx=0;entryDy=-4.35;entryPerimeter=0;fontFamily=Helvetica;fontSize=12;fontColor=default;endArrow=block;endFill=1;dashed=1;dashPattern=8 8;curved=1;" target="uQdGTPxLVmM_z3gMLbVb-200">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-231" connectable="0" parent="uQdGTPxLVmM_z3gMLbVb-230" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];strokeColor=default;fontFamily=Helvetica;fontSize=12;fontColor=default;fillColor=default;" value="TCP 5432 (asyncpg)" vertex="1">
+          <mxGeometry relative="1" x="-0.0928" as="geometry">
+            <mxPoint x="52" y="30" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-232" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;fontFamily=Helvetica;fontSize=12;fontColor=default;" value="Docker Compose" vertex="1">
+          <mxGeometry height="30" width="120" x="50" y="210" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-234" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;fontFamily=Helvetica;fontSize=12;fontColor=default;" value="Сервер владельца (OC Linux, Docker Engine)" vertex="1">
+          <mxGeometry height="30" width="270" x="30" y="160" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-235" edge="1" parent="1" source="uQdGTPxLVmM_z3gMLbVb-181" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontFamily=Helvetica;fontSize=12;fontColor=default;endArrow=block;endFill=1;dashed=1;dashPattern=8 8;" target="uQdGTPxLVmM_z3gMLbVb-191">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-236" connectable="0" parent="uQdGTPxLVmM_z3gMLbVb-235" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];strokeColor=default;fontFamily=Helvetica;fontSize=12;fontColor=default;fillColor=default;" value="HTTPS (публичный доступ)" vertex="1">
+          <mxGeometry relative="1" x="-0.3756" y="1" as="geometry">
+            <mxPoint x="79" y="-16" as="offset" />
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
