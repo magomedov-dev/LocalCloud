@@ -1,0 +1,109 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="Страница-1" id="PY3nPB2nWN0OcD1YU4SD">
+    <mxGraphModel dx="1038" dy="695" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-8" connectable="0" parent="1" style="group" value="" vertex="1">
+          <mxGeometry height="180" width="160" x="40" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-2" parent="uQdGTPxLVmM_z3gMLbVb-8" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;fontColor=default;fillColor=default;" value="" vertex="1">
+          <mxGeometry height="120" width="160" y="60" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-3" parent="uQdGTPxLVmM_z3gMLbVb-8" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;fontColor=default;fillColor=default;" value="" vertex="1">
+          <mxGeometry height="80" width="80" x="40" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-4" edge="1" parent="uQdGTPxLVmM_z3gMLbVb-8" style="endArrow=none;html=1;rounded=0;fontFamily=Helvetica;fontSize=12;fontColor=default;opacity=20;" value="">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <mxPoint x="120" y="180" as="sourcePoint" />
+            <mxPoint x="120" y="100" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-5" edge="1" parent="uQdGTPxLVmM_z3gMLbVb-8" style="endArrow=none;html=1;rounded=0;fontFamily=Helvetica;fontSize=12;fontColor=default;opacity=20;" value="">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <mxPoint x="40" y="180" as="sourcePoint" />
+            <mxPoint x="40" y="100" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-7" parent="uQdGTPxLVmM_z3gMLbVb-8" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;fontFamily=Helvetica;fontSize=12;fontColor=default;" value="&lt;div style=&quot;line-height: 200%;&quot;&gt;&lt;b&gt;&lt;font style=&quot;font-size: 16px;&quot;&gt;Гость&lt;/font&gt;&lt;/b&gt;&lt;/div&gt;&lt;div style=&quot;line-height: 200%;&quot;&gt;[человек]&lt;/div&gt;&lt;div&gt;Лицо без учетной записи;&lt;/div&gt;&lt;div&gt;получает доступ по публичной ссылке&lt;/div&gt;" vertex="1">
+          <mxGeometry height="110" width="160" y="70" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-9" connectable="0" parent="1" style="group" value="" vertex="1">
+          <mxGeometry height="180" width="160" x="40" y="250" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-10" parent="uQdGTPxLVmM_z3gMLbVb-9" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;fontColor=default;fillColor=default;" value="" vertex="1">
+          <mxGeometry height="120" width="160" y="60" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-11" parent="uQdGTPxLVmM_z3gMLbVb-9" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;fontColor=default;fillColor=default;" value="" vertex="1">
+          <mxGeometry height="80" width="80" x="40" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-12" edge="1" parent="uQdGTPxLVmM_z3gMLbVb-9" style="endArrow=none;html=1;rounded=0;fontFamily=Helvetica;fontSize=12;fontColor=default;opacity=20;" value="">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <mxPoint x="120" y="180" as="sourcePoint" />
+            <mxPoint x="120" y="100" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-13" edge="1" parent="uQdGTPxLVmM_z3gMLbVb-9" style="endArrow=none;html=1;rounded=0;fontFamily=Helvetica;fontSize=12;fontColor=default;opacity=20;" value="">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <mxPoint x="40" y="180" as="sourcePoint" />
+            <mxPoint x="40" y="100" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-14" parent="uQdGTPxLVmM_z3gMLbVb-9" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;fontFamily=Helvetica;fontSize=12;fontColor=default;" value="&lt;div style=&quot;line-height: 200%;&quot;&gt;&lt;b&gt;&lt;font style=&quot;font-size: 16px;&quot;&gt;Пользователь&lt;/font&gt;&lt;/b&gt;&lt;/div&gt;&lt;div style=&quot;line-height: 200%;&quot;&gt;[человек]&lt;/div&gt;&lt;div&gt;Владелец учетной записи и файлового архива&lt;/div&gt;" vertex="1">
+          <mxGeometry height="110" width="160" y="70" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-15" connectable="0" parent="1" style="group" value="" vertex="1">
+          <mxGeometry height="180" width="160" x="40" y="460" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-16" parent="uQdGTPxLVmM_z3gMLbVb-15" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;fontColor=default;fillColor=default;" value="" vertex="1">
+          <mxGeometry height="120" width="160" y="60" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-17" parent="uQdGTPxLVmM_z3gMLbVb-15" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;fontColor=default;fillColor=default;" value="" vertex="1">
+          <mxGeometry height="80" width="80" x="40" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-18" edge="1" parent="uQdGTPxLVmM_z3gMLbVb-15" style="endArrow=none;html=1;rounded=0;fontFamily=Helvetica;fontSize=12;fontColor=default;opacity=20;" value="">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <mxPoint x="120" y="180" as="sourcePoint" />
+            <mxPoint x="120" y="100" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-19" edge="1" parent="uQdGTPxLVmM_z3gMLbVb-15" style="endArrow=none;html=1;rounded=0;fontFamily=Helvetica;fontSize=12;fontColor=default;opacity=20;" value="">
+          <mxGeometry height="50" relative="1" width="50" as="geometry">
+            <mxPoint x="40" y="180" as="sourcePoint" />
+            <mxPoint x="40" y="100" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-20" parent="uQdGTPxLVmM_z3gMLbVb-15" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;fontFamily=Helvetica;fontSize=12;fontColor=default;" value="&lt;div style=&quot;line-height: 200%;&quot;&gt;&lt;b&gt;&lt;font style=&quot;font-size: 16px;&quot;&gt;Администратор&lt;/font&gt;&lt;/b&gt;&lt;/div&gt;&lt;div style=&quot;line-height: 200%;&quot;&gt;[человек]&lt;/div&gt;&lt;div&gt;Управляет пользователями, квотами и системой&lt;/div&gt;" vertex="1">
+          <mxGeometry height="110" width="160" y="70" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-21" parent="1" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=12;fontColor=default;fillColor=default;" value="&lt;div&gt;&lt;font style=&quot;font-size: 16px;&quot;&gt;&lt;b style=&quot;line-height: 200%;&quot;&gt;LocalCloud&lt;/b&gt;&lt;/font&gt;&lt;/div&gt;&lt;div style=&quot;line-height: 200%;&quot;&gt;[Программная система]&lt;/div&gt;&lt;div&gt;Self-hosted веб-приложение личного файлового хранилища: файлы и папки, совместный доступ, публичные ссылки, корзина, превью, квота, администрирование&lt;/div&gt;" vertex="1">
+          <mxGeometry height="180" width="280" x="440" y="250" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-22" edge="1" parent="1" source="uQdGTPxLVmM_z3gMLbVb-7" style="rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=1;exitDx=0;exitDy=0;entryX=0;entryY=0.25;entryDx=0;entryDy=0;fontFamily=Helvetica;fontSize=12;fontColor=default;dashed=1;dashPattern=8 8;endArrow=block;endFill=1;" target="uQdGTPxLVmM_z3gMLbVb-21">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-23" edge="1" parent="1" source="uQdGTPxLVmM_z3gMLbVb-14" style="rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;fontFamily=Helvetica;fontSize=12;fontColor=default;dashed=1;dashPattern=8 8;endArrow=block;endFill=1;" target="uQdGTPxLVmM_z3gMLbVb-21">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="330" y="290" as="sourcePoint" />
+            <mxPoint x="530" y="365" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-24" edge="1" parent="1" source="uQdGTPxLVmM_z3gMLbVb-16" style="rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0;exitDx=0;exitDy=0;entryX=0;entryY=0.75;entryDx=0;entryDy=0;fontFamily=Helvetica;fontSize=12;fontColor=default;dashed=1;dashPattern=8 8;endArrow=block;endFill=1;" target="uQdGTPxLVmM_z3gMLbVb-21">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="350" y="475" as="sourcePoint" />
+            <mxPoint x="550" y="440" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-25" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;fontFamily=Helvetica;fontSize=12;fontColor=default;rotation=19;" value="Открывает публичные ссылки,&lt;br&gt;подаёт заявку на регистрацию&lt;br&gt;[HTTPS, браузер]" vertex="1">
+          <mxGeometry height="50" width="180" x="230" y="203" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-26" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;fontFamily=Helvetica;fontSize=12;fontColor=default;rotation=-9;" value="Хранит файлы и управляет ими,&lt;br&gt;делится доступом&lt;br&gt;[HTTPS, браузер]" vertex="1">
+          <mxGeometry height="50" width="190" x="210" y="305" as="geometry" />
+        </mxCell>
+        <mxCell id="uQdGTPxLVmM_z3gMLbVb-31" parent="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;fontFamily=Helvetica;fontSize=12;fontColor=default;rotation=-29;" value="&lt;div&gt;Администрирует пользователей,&lt;/div&gt;&lt;div&gt;квоты, задачи, аудит&lt;/div&gt;&lt;div&gt;[HTTPS, браузер]&lt;/div&gt;" vertex="1">
+          <mxGeometry height="50" width="190" x="199.00125398254386" y="411.0034826937004" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
