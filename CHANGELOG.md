@@ -2,6 +2,15 @@
 
 Все значимые изменения проекта документируются в этом файле.
 
+Формат основан на [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/),
+проект придерживается [Semantic Versioning](https://semver.org/lang/ru/).
+
+## [Unreleased]
+
+### Documentation
+- Добавлены реальные скриншоты интерфейса (вход, файловый браузер, просмотр файла,
+  общий доступ, админ-панель, мобильная вёрстка) в `docs/screenshots/` и README.
+
 ## [0.1.1] — 2026-06-13
 
 ### Fixed
@@ -45,10 +54,15 @@
 - Конфигурация окружения (`.env.example`), документация (README, README backend/frontend).
 
 **Качество**
-- Полный набор автоматических тестов backend (модульные и интеграционные).
+- Полный набор автоматических тестов backend (модульные и интеграционные, pytest).
+- Тесты frontend (Vitest + Testing Library): компоненты, хуки, страницы, API-слой.
 
 ### Security
 - Хранение паролей и refresh-токенов только в виде хэшей.
 - Защита от типовых веб-уязвимостей (SQL-инъекции — параметризованные запросы;
   XSS — httpOnly-cookie и экранирование; CSRF — SameSite-cookie и единый origin).
 - Журнал аудита действий пользователей и системных событий.
+
+[Unreleased]: https://github.com/magomedov-dev/LocalCloud/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/magomedov-dev/LocalCloud/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/magomedov-dev/LocalCloud/releases/tag/v0.1.0
